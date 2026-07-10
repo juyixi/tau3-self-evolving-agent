@@ -54,12 +54,18 @@ class Tau2Runtime:
 
 
 def _git_commit(repo_path: Path) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise RuntimeError(
+            f"Unable to run Git for Tau2 checkout at {repo_path}. "
+            "Install Git or fix PATH and the execution environment."
+        ) from error
     if result.returncode != 0:
         raise RuntimeError(
             f"Tau2 path {repo_path} is not a usable Git checkout. "

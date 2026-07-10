@@ -133,3 +133,23 @@ def test_runtime_probe_missing_checkout_names_path_and_recovery_action(
 
     assert str(missing_checkout.resolve()) in str(error.value)
     assert "Clone" in str(error.value)
+
+
+def test_runtime_probe_wraps_missing_git_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = tmp_path / "tau2-bench"
+    checkout.mkdir()
+
+    def raise_missing_git(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("git executable not found")
+
+    monkeypatch.setattr(subprocess, "run", raise_missing_git)
+
+    with pytest.raises(RuntimeError) as error:
+        Tau2Runtime.inspect(checkout)
+
+    message = str(error.value)
+    assert str(checkout.resolve()) in message
+    assert "Install Git" in message
+    assert "PATH" in message
