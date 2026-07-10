@@ -1,0 +1,24 @@
+tau2:
+  repo_path: external/tau2-bench
+  domain: retail
+  train_split: train
+  eval_split: test
+  user_llm: Qwen/Qwen3.5-9B
+  user_llm_args: {}
+  solo_mode: true
+model:
+  base_model: Qwen/Qwen3.5-9B
+lora:
+  use_peft: true
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+rollout:
+  temperature: 1.0
+  top_p: 0.95
+  max_episode_steps: 40
+memory:
+  enabled: true
+  max_entries: 1000
+training:
+  seed: 42
