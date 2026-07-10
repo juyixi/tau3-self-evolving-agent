@@ -1,588 +1,588 @@
-# Tau3 Retail OPD-Evolver Staged Implementation Plan
+# Tau3 Retail OPD-Evolver 分阶段实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **供智能体实施者使用：** 必须使用子技能 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans，逐任务实施本计划。各步骤使用 checkbox（`- [ ]`）跟踪状态。
 
-**Goal:** Build and validate a tau3 retail training system in eight independently testable stages, from the official tau2-bench environment through OPD-Evolver fast-loop memory, shared-policy LoRA slow-loop training, and held-out retail evaluation.
+**目标：** 分八个可独立测试的阶段构建并验证 tau3 retail 训练系统，覆盖官方 tau2-bench 环境接入、OPD-Evolver 快循环记忆、共享策略 LoRA 慢循环训练，以及留出 retail 任务评测。
 
-**Architecture:** The official `sierra-research/tau2-bench` retail Gym environment is wrapped behind a strict adapter and split guard. Train-only on-policy rollouts drive a transactional four-tier memory fast loop and the OPD-Evolver attribution/data pipeline; one Qwen3.5-9B plus one current LoRA adapter performs both student and privileged stop-gradient teacher forwards. Evaluation is a separate read-only/quarantined pipeline that cannot feed test information into memory attribution, datasets, checkpoints, or checkpoint selection.
+**架构：** 使用严格的适配器和 split guard 封装官方 `sierra-research/tau2-bench` retail Gym 环境。仅由 train 同策略 rollout 驱动事务化四层记忆快循环和 OPD-Evolver 归因/数据管线；一个 Qwen3.5-9B 和一个当前 LoRA 适配器同时执行学生 forward 与特权 stop-gradient 教师 forward。评测使用独立的只读或隔离管线，test 信息不能进入记忆归因、数据集、checkpoint 或 checkpoint 选择。
 
-**Tech Stack:** Python 3.12, uv, pytest, Pydantic, PyYAML, Gymnasium/tau2, SQLite plus JSONL exports, PyTorch, the latest Qwen3.5-compatible Transformers revision locked by uv, PEFT, Accelerate, and an OpenAI-compatible vLLM or SGLang endpoint for rollout inference.
+**技术栈：** Python 3.12、uv、pytest、Pydantic、PyYAML、Gymnasium/tau2、SQLite 加 JSONL 导出、PyTorch、由 uv 锁定的最新版 Qwen3.5-compatible Transformers revision、PEFT、Accelerate，以及用于 rollout 推理的 OpenAI-compatible vLLM 或 SGLang endpoint。
 
-## Global Constraints
+## 全局约束
 
-- Algorithm references: `C:\Users\huang\Downloads\2606.17628v1.pdf`, https://arxiv.org/abs/2606.17628v1, and https://github.com/bingreeky/opd-evolver.
-- Environment reference: https://github.com/sierra-research/tau2-bench and its `tau2.gym.gym_agent.AgentGymEnv`.
-- The external tau2-bench checkout lives at `external/tau2-bench/` by default, is ignored by git, and is pinned by commit in every run manifest.
-- `train` is the only learning split. `test` is evaluation-only. `base` is optional official aggregate reproduction and is never accepted by a training command.
-- No internal dev split is created by default.
-- Base model is exactly `Qwen/Qwen3.5-9B` unless an explicit local mirror is configured.
-- Student and teacher are two conditioning paths through the same model object and the same active LoRA adapter. The teacher path is stop-gradient; it is not a separately trained teacher checkpoint.
-- LoRA defaults are `use_peft=true`, `lora_r=32`, `lora_alpha=64`, and `lora_dropout=0.05`. Full-parameter fine-tuning is rejected.
-- OPD generation defaults are `temperature=1.0`, `top_p=0.95`, and `max_episode_steps=40`.
-- Memory defaults are tiers `trajectory`, `tip`, `skill`, `tool`; retrieval 50; teacher cap 20; score threshold 0.01; maintenance period `Q=30`.
-- Unit tests do not require network, API credentials, Qwen weights, a GPU, or a tau2 checkout.
-- Real environment, model, and GPU tests use explicit pytest markers and never run as part of the default unit suite.
-- Every phase ends with a passing test gate and a commit. A later phase must not begin while its predecessor gate is red.
+- 算法参考资料：`C:\Users\huang\Downloads\2606.17628v1.pdf`、https://arxiv.org/abs/2606.17628v1 和 https://github.com/bingreeky/opd-evolver。
+- 环境参考资料：https://github.com/sierra-research/tau2-bench 及其 `tau2.gym.gym_agent.AgentGymEnv`。
+- 外部 tau2-bench checkout 默认位于 `external/tau2-bench/`，由 git 忽略，并在每个 run manifest 中记录固定 commit。
+- `train` 是唯一学习 split。`test` 仅用于评测。`base` 仅用于可选的官方聚合复现，训练命令不得接受它。
+- 默认不创建内部 dev split。
+- 除非显式配置本地镜像，否则基础模型必须是 `Qwen/Qwen3.5-9B`。
+- 学生和教师是同一个模型对象、同一个当前 LoRA 适配器上的两条条件输入路径。教师路径为 stop-gradient，而不是单独训练的教师 checkpoint。
+- LoRA 默认值为 `use_peft=true`、`lora_r=32`、`lora_alpha=64` 和 `lora_dropout=0.05`。必须拒绝全参数微调。
+- OPD 生成默认值为 `temperature=1.0`、`top_p=0.95` 和 `max_episode_steps=40`。
+- Memory 默认值：层级为 `trajectory`、`tip`、`skill`、`tool`；检索 50 条；教师上限 20 条；分数阈值 0.01；维护周期 `Q=30`。
+- 单元测试不依赖网络、API 凭证、Qwen 权重、GPU 或 tau2 checkout。
+- 真实环境、模型和 GPU 测试使用显式 pytest marker，绝不进入默认单元测试套件。
+- 每个阶段都以测试 gate 通过和一次 commit 结束。前一阶段 gate 为红色时，不得开始后一阶段。
 
-## Fixed Decisions
+## 已确定决策
 
-- The project integrates the current official environment package named `tau2` even though the task is called tau3 retail in project-facing documentation.
-- The official split file for the pinned revision is the source of task IDs. Compatibility checks currently expect 74 train, 40 test, and 114 base IDs.
-- Training task grouping for attribution uses a privileged, offline signature derived from the task's required non-read-only evaluator action names. The signature is never exposed in student prompts.
-- SQLite is the authoritative mutable memory store. Versioned JSONL snapshots are exported for inspection, training provenance, and checkpoint packaging.
-- Real retrieval uses a pluggable embedding retriever with `Qwen/Qwen3-Embedding-0.6B` as the paper-aligned default. Unit tests use deterministic fake embeddings.
-- A slow-loop batch is generated by the current student checkpoint and is consumed only by that iteration. It is not reused after the LoRA checkpoint advances.
-- Ordinary causal SFT on `public_input + privileged_input` is forbidden. OPD loss is full-vocabulary `KL(teacher || student)` on aligned student-sampled response tokens only.
+- 虽然项目面对用户的文档将任务称为 tau3 retail，但集成的是当前官方环境包 `tau2`。
+- 固定 revision 下的官方 split 文件是任务 ID 的唯一来源。当前兼容性检查预期 74 个 train、40 个 test 和 114 个 base ID。
+- 用于归因的训练任务分组使用特权离线签名，该签名由任务要求的非只读 evaluator action 名称生成，绝不暴露给学生 prompt。
+- SQLite 是可变 memory 的权威存储。版本化 JSONL snapshot 用于检查、训练溯源和 checkpoint 打包。
+- 真实检索使用可插拔 embedding retriever，并以 `Qwen/Qwen3-Embedding-0.6B` 作为与论文对齐的默认值。单元测试使用确定性的 fake embedding。
+- 慢循环 batch 由当前学生 checkpoint 生成，并且只在当前 iteration 中消费。LoRA checkpoint 更新后不得重复使用该 batch。
+- 禁止在 `public_input + privileged_input` 上执行普通 causal SFT。OPD loss 只能是对齐后的学生采样 response token 上的全词表 `KL(teacher || student)`。
 
-## Stage Dependency Graph
+## 阶段依赖关系
 
-1. Environment integration
-2. No-memory baseline rollout
-3. Four-tier memory foundation
-4. Complete fast loop
-5. Attribution and OPD dataset
-6. Shared-model slow-loop LoRA training
-7. Iterative fast/slow orchestration
-8. Held-out evaluation and reporting
+1. 环境接入
+2. 无 memory baseline rollout
+3. 四层 memory 基础
+4. 完整快循环
+5. 归因与 OPD 数据集
+6. 共享模型慢循环 LoRA 训练
+7. 快/慢循环迭代编排
+8. 留出集评测与报告
 
-Stages are sequential at their acceptance gates. Within a stage, pure unit-test tasks may be implemented independently when their file ownership does not overlap.
+各阶段按验收 gate 顺序执行。同一阶段内，写入文件范围不重叠的纯单元测试任务可以独立实施。
 
-## Runtime Artifact Contract
+## 运行时产物约定
 
-Each `runs/<run_id>/` contains:
+每个 `runs/<run_id>/` 包含：
 
-- `manifest.json`: model and adapter revisions, tau2 commit, split hash, task IDs, seeds, user simulator, environment options, memory snapshot, parent checkpoint, and command.
-- `rollouts/events.jsonl`: append-only decision and environment events.
-- `memory/memory.sqlite3` and `memory/snapshots/<snapshot_id>.jsonl`.
-- `attribution/scores.jsonl`.
-- `opd_examples/{sel,act,write,maint}.jsonl`.
-- `checkpoints/iteration-<n>/adapter/`.
-- `eval/<protocol>/episodes.jsonl` and `eval/<protocol>/summary.json`.
+- `manifest.json`：模型和适配器 revision、tau2 commit、split hash、任务 ID、seed、用户模拟器、环境选项、memory snapshot、parent checkpoint 和运行命令。
+- `rollouts/events.jsonl`：只追加的决策与环境事件。
+- `memory/memory.sqlite3` 和 `memory/snapshots/<snapshot_id>.jsonl`。
+- `attribution/scores.jsonl`。
+- `opd_examples/{sel,act,write,maint}.jsonl`。
+- `checkpoints/iteration-<n>/adapter/`。
+- `eval/<protocol>/episodes.jsonl` 和 `eval/<protocol>/summary.json`。
 
-All records carry `run_id`, `iteration`, `split`, `task_id`, `task_group`, `model_revision`, `adapter_revision`, `memory_snapshot_id`, and `seed`.
-
----
-
-## Stage 1: Official Tau2 Retail Environment Integration
-
-**Outcome:** A real train-task episode can be reset, stepped, evaluated, and closed through the project adapter, while split misuse fails before environment creation.
-
-### Task 1.1: Minimal Project And Environment Configuration
-
-**Files:**
-- Create: `pyproject.toml`
-- Create: `.gitignore`
-- Create: `configs/default.yaml`
-- Create: `src/tau3_retail_evolver/config.py`
-- Test: `tests/unit/test_config.py`
-
-**Interfaces:**
-- Produces: `load_config(path: Path, overrides: Sequence[str] = ()) -> ProjectConfig`
-- Produces: `Tau2Config(repo_path, domain, train_split, eval_split, user_llm, user_llm_args, solo_mode)`
-- Produces: `ModelConfig`, `LoraConfig`, `RolloutConfig`, `MemoryConfig`, and `TrainingConfig`
-
-- [ ] Write a failing test asserting Python 3.12, `domain="retail"`, `train_split="train"`, `eval_split="test"`, no `dev` field, Qwen3.5-9B, and the exact LoRA defaults.
-- [ ] Run `pytest tests/unit/test_config.py -v` and confirm import/config failure.
-- [ ] Implement the typed loader and validation. Reject `use_peft=false` and reject a training split other than `train`.
-- [ ] Add `external/`, `runs/`, model artifacts, caches, and local secrets to `.gitignore`.
-- [ ] Run the test and confirm PASS.
-- [ ] Commit as `chore: bootstrap tau3 retail environment config`.
-
-### Task 1.2: Tau2 Runtime Probe, Task Catalog, And Split Guard
-
-**Files:**
-- Create: `src/tau3_retail_evolver/envs/runtime.py`
-- Create: `src/tau3_retail_evolver/envs/task_catalog.py`
-- Create: `src/tau3_retail_evolver/envs/split_guard.py`
-- Test: `tests/unit/envs/test_task_catalog.py`
-- Test fixture: `tests/fixtures/tau2_retail/split_tasks.json`
-
-**Interfaces:**
-- Produces: `Tau2Runtime.inspect(repo_path: Path) -> RuntimeFingerprint`
-- Produces: `RetailTaskCatalog.from_files(tasks_path, split_path) -> RetailTaskCatalog`
-- Produces: `task_ids(split: Literal["train", "test", "base"]) -> tuple[str, ...]`
-- Produces: `require_learning_split(split: str) -> None`
-
-- [ ] Write failing tests for train/test disjointness, `base == train union test`, the 74/40/114 compatibility counts, stable split SHA-256, and rejection of `test`/`base` by `require_learning_split`.
-- [ ] Run `pytest tests/unit/envs/test_task_catalog.py -v` and confirm failure.
-- [ ] Parse the official JSON structurally; do not duplicate task IDs in source code.
-- [ ] Implement the runtime probe so it reports repository path, Git commit, package version, data paths, and Gym availability with one actionable error message.
-- [ ] Run the tests and confirm PASS.
-- [ ] Commit as `feat: add tau2 retail task catalog and split guard`.
-
-### Task 1.3: Gymnasium Adapter
-
-**Files:**
-- Create: `src/tau3_retail_evolver/envs/base.py`
-- Create: `src/tau3_retail_evolver/envs/tau2_retail.py`
-- Create: `src/tau3_retail_evolver/envs/factory.py`
-- Test: `tests/unit/envs/test_tau2_retail_adapter.py`
-
-**Interfaces:**
-- Produces: `Tau2RetailEnv(task_id, config, gym_factory=None)`
-- Produces: `reset(seed: int) -> ResetResult`
-- Produces: `step(action: str) -> StepResult`
-- Produces: `close() -> None` and context-manager support
-- Normalizes: `terminated or truncated` into `done` while retaining both original flags
-
-- [ ] Write a fake Gym environment and failing tests for constructor arguments, reset info (`task`, `tools`, `policy`), five-value step normalization, parse-error preservation, official `reward_info` retention, max-step truncation, and idempotent close.
-- [ ] Run `pytest tests/unit/envs/test_tau2_retail_adapter.py -v` and confirm failure.
-- [ ] Implement lazy `tau2` imports and dependency injection; no unit test may import the real package.
-- [ ] Ensure every exception includes split, task ID, episode step, and the original cause.
-- [ ] Run the tests and confirm PASS.
-- [ ] Commit as `feat: integrate tau2 retail gym adapter`.
-
-### Task 1.4: Real Environment Smoke Gate
-
-**Files:**
-- Create: `scripts/check_tau2_retail.py`
-- Create: `tests/integration/test_real_tau2_retail.py`
-- Modify: `pytest.ini` or `pyproject.toml` markers
-
-- [ ] Add a `tau2_integration` marker skipped unless `RUN_TAU2_INTEGRATION=1`.
-- [ ] Make the script print the tau2 commit, split hash, selected train task ID, tool count, policy hash, initial observation length, and resolved user-simulator settings.
-- [ ] Install the pinned checkout with `uv pip install -e "external/tau2-bench[gym]"`.
-- [ ] Run `python -m scripts.check_tau2_retail --split train --task-id 0` with valid user-simulator credentials/configuration.
-- [ ] Run `pytest -m tau2_integration tests/integration/test_real_tau2_retail.py -v` and confirm a real reset/close cycle passes.
-- [ ] Save the pin in `external/tau2-bench.commit` and commit only that text pin, never the external checkout.
-- [ ] Commit as `test: verify real tau2 retail environment`.
-
-**Stage 1 gate:** default unit tests pass; the opt-in real reset/close smoke passes; training commands reject test/base before creating an environment.
+所有记录都包含 `run_id`、`iteration`、`split`、`task_id`、`task_group`、`model_revision`、`adapter_revision`、`memory_snapshot_id` 和 `seed`。
 
 ---
 
-## Stage 2: No-Memory Qwen Baseline And Canonical Rollout Data
+## 阶段 1：接入官方 Tau2 Retail 环境
 
-**Outcome:** The current Qwen3.5-9B checkpoint can run official train tasks without memory, and every turn is reproducibly logged.
+**产出：** 能够通过项目适配器对真实 train 任务执行 reset、step、evaluate 和 close；错误使用 split 时，在创建环境前立即失败。
 
-### Task 2.1: Policy, Prompt, And Action Boundaries
+### 任务 1.1：最小项目与环境配置
 
-**Files:**
-- Create: `src/tau3_retail_evolver/models/policy.py`
-- Create: `src/tau3_retail_evolver/models/openai_compatible.py`
-- Create: `src/tau3_retail_evolver/fast_loop/action_codec.py`
-- Create: `src/tau3_retail_evolver/fast_loop/baseline_prompt.py`
-- Test: `tests/unit/models/test_policy.py`
-- Test: `tests/unit/fast_loop/test_action_codec.py`
+**文件：**
+- 创建：`pyproject.toml`
+- 创建：`.gitignore`
+- 创建：`configs/default.yaml`
+- 创建：`src/tau3_retail_evolver/config.py`
+- 测试：`tests/unit/test_config.py`
 
-**Interfaces:**
-- Produces: `Policy.generate(request: DecisionRequest) -> DecisionResponse`
-- Produces: `Tau2ActionCodec.decode(model_output: str, tool_names: set[str]) -> str`
-- Consumes official tau2 policy and tools from reset info
+**接口：**
+- 产出：`load_config(path: Path, overrides: Sequence[str] = ()) -> ProjectConfig`
+- 产出：`Tau2Config(repo_path, domain, train_split, eval_split, user_llm, user_llm_args, solo_mode)`
+- 产出：`ModelConfig`、`LoraConfig`、`RolloutConfig`、`MemoryConfig` 和 `TrainingConfig`
 
-- [ ] Write failing tests for plain user messages, JSON tool calls, functional tool calls, unknown tools, malformed arguments, stop action, and thinking-block stripping that does not discard the final answer.
-- [ ] Run the focused tests and confirm failure.
-- [ ] Implement a fake policy plus an OpenAI-compatible Qwen endpoint client. Record raw output, parsed action, sampling parameters, and latency.
-- [ ] Use the official Qwen tool-call parser at the serving layer; keep the project codec defensive because tau2 accepts both JSON and functional strings.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add qwen policy and tau2 action boundary`.
+- [ ] 编写失败测试，断言 Python 3.12、`domain="retail"`、`train_split="train"`、`eval_split="test"`、不存在 `dev` 字段、使用 Qwen3.5-9B，并且 LoRA 默认值完全正确。
+- [ ] 运行 `pytest tests/unit/test_config.py -v`，确认因 import 或配置缺失而失败。
+- [ ] 实现带类型的配置加载和验证。拒绝 `use_peft=false`，并拒绝 `train` 以外的训练 split。
+- [ ] 将 `external/`、`runs/`、模型产物、cache 和本地 secret 加入 `.gitignore`。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `chore: bootstrap tau3 retail environment config`。
 
-### Task 2.2: Episode Schema, Manifest, And Baseline Runner
+### 任务 1.2：Tau2 Runtime 探测、任务目录与 Split Guard
 
-**Files:**
-- Create: `src/tau3_retail_evolver/io/jsonl.py`
-- Create: `src/tau3_retail_evolver/runs/manifest.py`
-- Create: `src/tau3_retail_evolver/fast_loop/events.py`
-- Create: `src/tau3_retail_evolver/fast_loop/baseline_runner.py`
-- Create: `scripts/run_baseline.py`
-- Test: `tests/unit/fast_loop/test_baseline_runner.py`
+**文件：**
+- 创建：`src/tau3_retail_evolver/envs/runtime.py`
+- 创建：`src/tau3_retail_evolver/envs/task_catalog.py`
+- 创建：`src/tau3_retail_evolver/envs/split_guard.py`
+- 测试：`tests/unit/envs/test_task_catalog.py`
+- 测试 fixture：`tests/fixtures/tau2_retail/split_tasks.json`
 
-**Interfaces:**
-- Produces: `run_baseline(tasks, env_factory, policy, run_context) -> RolloutSummary`
-- Produces append-only `EpisodeStarted`, `DecisionMade`, `EnvironmentStepped`, and `EpisodeFinished` events
+**接口：**
+- 产出：`Tau2Runtime.inspect(repo_path: Path) -> RuntimeFingerprint`
+- 产出：`RetailTaskCatalog.from_files(tasks_path, split_path) -> RetailTaskCatalog`
+- 产出：`task_ids(split: Literal["train", "test", "base"]) -> tuple[str, ...]`
+- 产出：`require_learning_split(split: str) -> None`
 
-- [ ] Write a failing deterministic two-task test that asserts event ordering, final reward, official evaluator details, seed, task group, model revision, and environment close.
-- [ ] Run the focused test and confirm failure.
-- [ ] Implement atomic manifest creation and append-only JSONL writes with schema version `1`.
-- [ ] Add `--split train` and enforce `require_learning_split`. The baseline command must not accept `test` or `base`.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add canonical no-memory rollout pipeline`.
+- [ ] 编写失败测试，覆盖 train/test 不相交、`base == train union test`、74/40/114 兼容性数量、稳定的 split SHA-256，以及 `require_learning_split` 对 `test`/`base` 的拒绝行为。
+- [ ] 运行 `pytest tests/unit/envs/test_task_catalog.py -v`，确认失败。
+- [ ] 使用结构化方式解析官方 JSON；禁止在源码中复制任务 ID。
+- [ ] 实现 runtime probe，在一个可操作的错误信息中报告仓库路径、Git commit、package version、数据路径和 Gym 可用性。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add tau2 retail task catalog and split guard`。
 
-### Task 2.3: Real Three-Task Baseline
+### 任务 1.3：Gymnasium 适配器
 
-- [ ] Start Qwen3.5-9B with language-only serving, Qwen reasoning parsing, and tool-call parsing.
-- [ ] Run three fixed train IDs with `temperature=1.0`, `top_p=0.95`, and `max_episode_steps=40`.
-- [ ] Verify every episode has official reward details, no orphaned environment thread, and a complete manifest.
-- [ ] Store outputs under `runs/baseline-<timestamp>/`; do not commit runtime data.
-- [ ] Commit any integration fixes with focused regression tests.
+**文件：**
+- 创建：`src/tau3_retail_evolver/envs/base.py`
+- 创建：`src/tau3_retail_evolver/envs/tau2_retail.py`
+- 创建：`src/tau3_retail_evolver/envs/factory.py`
+- 测试：`tests/unit/envs/test_tau2_retail_adapter.py`
 
-**Stage 2 gate:** a real three-task train baseline completes and can be replay-audited from its manifest and events.
+**接口：**
+- 产出：`Tau2RetailEnv(task_id, config, gym_factory=None)`
+- 产出：`reset(seed: int) -> ResetResult`
+- 产出：`step(action: str) -> StepResult`
+- 产出：`close() -> None` 和 context-manager 支持
+- 规范化：将 `terminated or truncated` 合并为 `done`，同时保留两个原始 flag
 
----
+- [ ] 编写 fake Gym 环境及失败测试，覆盖构造参数、reset info（`task`、`tools`、`policy`）、五返回值 step 规范化、parse error 保留、官方 `reward_info` 保留、最大步数截断和幂等 close。
+- [ ] 运行 `pytest tests/unit/envs/test_tau2_retail_adapter.py -v`，确认失败。
+- [ ] 实现 lazy `tau2` import 和依赖注入；任何单元测试都不得导入真实 package。
+- [ ] 确保每个异常都包含 split、task ID、episode step 和原始异常原因。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: integrate tau2 retail gym adapter`。
 
-## Stage 3: Four-Tier Memory Foundation
+### 任务 1.4：真实环境 Smoke Gate
 
-**Outcome:** Trajectory, tip, skill, and tool memories can be stored, retrieved, versioned, maintained transactionally, and snapshotted.
+**文件：**
+- 创建：`scripts/check_tau2_retail.py`
+- 创建：`tests/integration/test_real_tau2_retail.py`
+- 修改：`pytest.ini` 或 `pyproject.toml` 中的 marker
 
-### Task 3.1: Memory Types And Transactional Repository
+- [ ] 添加 `tau2_integration` marker；仅当 `RUN_TAU2_INTEGRATION=1` 时运行。
+- [ ] 让脚本输出 tau2 commit、split hash、选中的 train task ID、tool 数量、policy hash、初始 observation 长度和解析后的用户模拟器配置。
+- [ ] 使用 `uv pip install -e "external/tau2-bench[gym]"` 安装固定版本的 checkout。
+- [ ] 在用户模拟器凭证和配置有效时运行 `python -m scripts.check_tau2_retail --split train --task-id 0`。
+- [ ] 运行 `pytest -m tau2_integration tests/integration/test_real_tau2_retail.py -v`，确认真实 reset/close 流程通过。
+- [ ] 将 pin 写入 `external/tau2-bench.commit`；只提交该文本 pin，绝不提交外部 checkout。
+- [ ] 提交为 `test: verify real tau2 retail environment`。
 
-**Files:**
-- Create: `src/tau3_retail_evolver/memory/types.py`
-- Create: `src/tau3_retail_evolver/memory/repository.py`
-- Create: `src/tau3_retail_evolver/memory/schema.sql`
-- Test: `tests/unit/memory/test_repository.py`
-
-**Interfaces:**
-- Produces: `MemoryItem(id, tier, content, version, status, source_task_ids, created_round, updated_round, metadata)`
-- Produces: `MemoryRepository.add/get/list/update_status/snapshot`
-- Enforces tiers `trajectory`, `tip`, `skill`, and `tool`
-
-- [ ] Write failing tests for all tiers, stable IDs, provenance, duplicate rejection, version increments, active/retired filtering, transaction rollback, and deterministic snapshot export.
-- [ ] Run the focused tests and confirm failure.
-- [ ] Implement SQLite schema migrations with a schema-version table and foreign-key enforcement.
-- [ ] Export snapshots in stable `tier,id` order and hash the file to obtain `memory_snapshot_id`.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add four-tier transactional memory repository`.
-
-### Task 3.2: Retrieval And Candidate Logging
-
-**Files:**
-- Create: `src/tau3_retail_evolver/memory/retrieval.py`
-- Create: `src/tau3_retail_evolver/memory/embeddings.py`
-- Test: `tests/unit/memory/test_retrieval.py`
-
-**Interfaces:**
-- Produces: `Retriever.retrieve(query, repository, top_k=50) -> list[MemoryCandidate]`
-- Candidate fields include rank, similarity, tier, memory version, retriever revision, and query hash
-
-- [ ] Write failing tests using fake vectors for deterministic ranking, ties, per-tier diversity, retired-memory exclusion, and exact top-k.
-- [ ] Run the focused tests and confirm failure.
-- [ ] Implement the embedding interface and paper-aligned Qwen3-Embedding configuration without loading it in unit tests.
-- [ ] Log all retrieved candidates, not only selected memories; attribution depends on retrieved-but-not-selected controls.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add memory retrieval and candidate provenance`.
-
-### Task 3.3: Lookup, Merge, Delete, And Snapshot Isolation
-
-**Files:**
-- Create: `src/tau3_retail_evolver/memory/operations.py`
-- Create: `src/tau3_retail_evolver/memory/read_only.py`
-- Test: `tests/unit/memory/test_operations.py`
-
-- [ ] Write failing tests for structured lookup, same-tier merge, cross-tier merge rejection, soft delete, provenance union, rollback on invalid batches, and mutation rejection by a read-only snapshot.
-- [ ] Implement operations as typed commands, never as ad hoc SQL from model output.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add memory lifecycle operations`.
-
-**Stage 3 gate:** a repository survives reopen, exports a stable snapshot, retrieves 50 candidates deterministically, and blocks all writes through a read-only evaluation view.
+**阶段 1 gate：** 默认单元测试通过；可选的真实 reset/close smoke 通过；训练命令在创建环境前拒绝 test/base。
 
 ---
 
-## Stage 4: OPD-Evolver Fast Loop
+## 阶段 2：无 Memory 的 Qwen Baseline 与规范化 Rollout 数据
 
-**Outcome:** Train tasks execute the complete retrieve/select/act/write/maintain lifecycle with current-policy outputs and complete provenance.
+**产出：** 当前 Qwen3.5-9B checkpoint 可以在不使用 memory 的情况下运行官方 train 任务，并且每个 turn 都具有可复现日志。
 
-### Task 4.1: Typed Lifecycle Decisions And Prompts
+### 任务 2.1：Policy、Prompt 与 Action 边界
 
-**Files:**
-- Create: `src/tau3_retail_evolver/fast_loop/decisions.py`
-- Create: `src/tau3_retail_evolver/fast_loop/prompts.py`
-- Test: `tests/unit/fast_loop/test_decisions.py`
-- Test: `tests/unit/fast_loop/test_prompts.py`
+**文件：**
+- 创建：`src/tau3_retail_evolver/models/policy.py`
+- 创建：`src/tau3_retail_evolver/models/openai_compatible.py`
+- 创建：`src/tau3_retail_evolver/fast_loop/action_codec.py`
+- 创建：`src/tau3_retail_evolver/fast_loop/baseline_prompt.py`
+- 测试：`tests/unit/models/test_policy.py`
+- 测试：`tests/unit/fast_loop/test_action_codec.py`
 
-**Interfaces:**
-- Produces Pydantic outputs: `SelectionDecision`, `ActionDecision`, `WriteDecision`, `MaintenanceDecision`
-- Produces prompt builders for `sel`, `act`, `write`, and `maint`
+**接口：**
+- 产出：`Policy.generate(request: DecisionRequest) -> DecisionResponse`
+- 产出：`Tau2ActionCodec.decode(model_output: str, tool_names: set[str]) -> str`
+- 消费 reset info 中的官方 tau2 policy 和 tools
 
-- [ ] Write failing tests that public prompts contain task, official policy/tools, observation/history, and permitted memory content, but never attribution scores, evaluator criteria, test IDs, or privileged hindsight.
-- [ ] Write parser tests for valid JSON, unknown IDs, duplicate selections, invalid tiers, unsafe maintenance operations, and retry exhaustion.
-- [ ] Implement one repair attempt followed by a logged no-op/failure; do not silently coerce invalid lifecycle output.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add typed fast-loop lifecycle decisions`.
+- [ ] 编写失败测试，覆盖普通用户消息、JSON tool call、函数式 tool call、未知 tool、格式错误的参数、stop action，以及不会丢弃 final answer 的 thinking block 移除。
+- [ ] 运行聚焦测试并确认失败。
+- [ ] 实现 fake policy 和 OpenAI-compatible Qwen endpoint client。记录原始输出、解析后的 action、采样参数和 latency。
+- [ ] 在 serving 层使用官方 Qwen tool-call parser；项目 codec 仍需保持防御性，因为 tau2 同时接受 JSON 和函数式字符串。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add qwen policy and tau2 action boundary`。
 
-### Task 4.2: Episode Fast-Loop Runner
+### 任务 2.2：Episode Schema、Manifest 与 Baseline Runner
 
-**Files:**
-- Create: `src/tau3_retail_evolver/fast_loop/runner.py`
-- Modify: `src/tau3_retail_evolver/fast_loop/events.py`
-- Test: `tests/unit/fast_loop/test_runner.py`
+**文件：**
+- 创建：`src/tau3_retail_evolver/io/jsonl.py`
+- 创建：`src/tau3_retail_evolver/runs/manifest.py`
+- 创建：`src/tau3_retail_evolver/fast_loop/events.py`
+- 创建：`src/tau3_retail_evolver/fast_loop/baseline_runner.py`
+- 创建：`scripts/run_baseline.py`
+- 测试：`tests/unit/fast_loop/test_baseline_runner.py`
 
-**Interfaces:**
-- Produces: `run_fast_loop_episode(task, env, policy, memory, config, context) -> EpisodeResult`
-- Event sequence: retrieve, select, action steps, terminal result, write proposal, memory transaction
+**接口：**
+- 产出：`run_baseline(tasks, env_factory, policy, run_context) -> RolloutSummary`
+- 产出只追加事件：`EpisodeStarted`、`DecisionMade`、`EnvironmentStepped` 和 `EpisodeFinished`
 
-- [ ] Write a failing fake-policy episode test that proves the selected set is a subset of candidates, every student action is on-policy, the terminal reward is preserved, and written memories cite the source episode.
-- [ ] Add failure tests for invalid actions, environment exceptions, max-step truncation, policy timeout, and memory transaction rollback.
-- [ ] Implement the learning runner so only `RunMode.LEARN` with split `train` can receive a training-memory mutation capability. Stage 8 may reuse lifecycle logic only with an evaluation-quarantine capability.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add opd evolver fast-loop runner`.
+- [ ] 编写确定性的双任务失败测试，断言事件顺序、最终 reward、官方 evaluator 详情、seed、task group、model revision 和环境 close。
+- [ ] 运行聚焦测试并确认失败。
+- [ ] 实现原子化 manifest 创建和 schema version `1` 的只追加 JSONL 写入。
+- [ ] 添加 `--split train` 并强制执行 `require_learning_split`。baseline 命令不得接受 `test` 或 `base`。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add canonical no-memory rollout pipeline`。
 
-### Task 4.3: Periodic Maintenance
+### 任务 2.3：真实三任务 Baseline
 
-**Files:**
-- Create: `src/tau3_retail_evolver/fast_loop/maintenance.py`
-- Test: `tests/unit/fast_loop/test_maintenance.py`
+- [ ] 使用 language-only serving、Qwen reasoning parser 和 tool-call parser 启动 Qwen3.5-9B。
+- [ ] 使用 `temperature=1.0`、`top_p=0.95` 和 `max_episode_steps=40` 运行三个固定 train ID。
+- [ ] 验证每个 episode 都包含官方 reward 详情，不存在遗留环境线程，并且 manifest 完整。
+- [ ] 将输出存放在 `runs/baseline-<timestamp>/`；不提交运行时数据。
+- [ ] 对所有集成修复添加聚焦回归测试后再提交。
 
-- [ ] Write failing tests proving maintenance runs after each 30 completed train tasks, receives only bounded repository diagnostics, applies lookup/merge/delete atomically, and logs the full maintenance trajectory.
-- [ ] Implement scheduling from completed-round count so resume cannot double-run a maintenance round.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add periodic memory maintenance`.
-
-### Task 4.4: Real Train Fast-Loop Smoke
-
-- [ ] Seed a small four-tier repository.
-- [ ] Run five fixed train tasks with the current Qwen LoRA checkpoint.
-- [ ] Verify candidate and selected sets, environment trajectories, memory writes, official rewards, and snapshot changes.
-- [ ] Run a 30-task scheduler smoke with fake environments to exercise maintenance without external API cost.
-
-**Stage 4 gate:** real train tasks complete with full lifecycle logs; no test/base path can mutate train-derived memory.
+**阶段 2 gate：** 真实三任务 train baseline 完成，并可根据 manifest 和 events 审计重放过程。
 
 ---
 
-## Stage 5: Outcome Attribution And OPD Dataset Construction
+## 阶段 3：四层 Memory 基础
 
-**Outcome:** Fast-loop logs become paper-faithful `sel`, `act`, `write`, and `maint` examples with auditable public/privileged separation.
+**产出：** trajectory、tip、skill 和 tool memory 可以事务化存储、检索、版本化、维护和快照。
 
-### Task 5.1: Retail Task Grouping
+### 任务 3.1：Memory 类型与事务化 Repository
 
-**Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/task_grouping.py`
-- Test: `tests/unit/slow_loop/test_task_grouping.py`
+**文件：**
+- 创建：`src/tau3_retail_evolver/memory/types.py`
+- 创建：`src/tau3_retail_evolver/memory/repository.py`
+- 创建：`src/tau3_retail_evolver/memory/schema.sql`
+- 测试：`tests/unit/memory/test_repository.py`
 
-- [ ] Write failing tests that remove read-only lookup tools, normalize and sort required action names, produce the same group for semantically equivalent action sets, and never include evaluator arguments or expected values.
-- [ ] Implement grouping from privileged task metadata after rollout. Store only the group signature in public event metadata.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add retail attribution task grouping`.
+**接口：**
+- 产出：`MemoryItem(id, tier, content, version, status, source_task_ids, created_round, updated_round, metadata)`
+- 产出：`MemoryRepository.add/get/list/update_status/snapshot`
+- 强制层级：`trajectory`、`tip`、`skill` 和 `tool`
 
-### Task 5.2: Paper-Exact Memory Attribution
+- [ ] 编写失败测试，覆盖所有层级、稳定 ID、provenance、重复项拒绝、version 递增、active/retired 过滤、事务回滚和确定性 snapshot 导出。
+- [ ] 运行聚焦测试并确认失败。
+- [ ] 实现带 schema-version 表和 foreign-key enforcement 的 SQLite schema migration。
+- [ ] 按稳定的 `tier,id` 顺序导出 snapshot，并对文件计算 hash 作为 `memory_snapshot_id`。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add four-tier transactional memory repository`。
 
-**Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/attribution.py`
-- Test: `tests/unit/slow_loop/test_attribution.py`
+### 任务 3.2：检索与候选日志
 
-**Interfaces:**
-- Produces: `compute_memory_scores(events, tier_priors) -> dict[str, MemoryScore]`
-- Implements equations 11-12 from the paper:
+**文件：**
+- 创建：`src/tau3_retail_evolver/memory/retrieval.py`
+- 创建：`src/tau3_retail_evolver/memory/embeddings.py`
+- 测试：`tests/unit/memory/test_retrieval.py`
+
+**接口：**
+- 产出：`Retriever.retrieve(query, repository, top_k=50) -> list[MemoryCandidate]`
+- 候选字段包括 rank、similarity、tier、memory version、retriever revision 和 query hash
+
+- [ ] 使用 fake vector 编写失败测试，覆盖确定性排序、tie、跨层级多样性、排除 retired memory 和精确 top-k。
+- [ ] 运行聚焦测试并确认失败。
+- [ ] 实现 embedding 接口和与论文对齐的 Qwen3-Embedding 配置，单元测试不得加载真实模型。
+- [ ] 记录所有检索候选，而不只是选中的 memory；归因依赖被检索但未被选择的对照项。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add memory retrieval and candidate provenance`。
+
+### 任务 3.3：Lookup、Merge、Delete 与 Snapshot 隔离
+
+**文件：**
+- 创建：`src/tau3_retail_evolver/memory/operations.py`
+- 创建：`src/tau3_retail_evolver/memory/read_only.py`
+- 测试：`tests/unit/memory/test_operations.py`
+
+- [ ] 编写失败测试，覆盖结构化 lookup、同层级 merge、拒绝跨层级 merge、soft delete、provenance 合并、无效批次回滚，以及只读 snapshot 拒绝修改。
+- [ ] 将 operation 实现为带类型的 command，绝不能直接执行模型输出的临时 SQL。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add memory lifecycle operations`。
+
+**阶段 3 gate：** repository 重开后仍可用，能够导出稳定 snapshot、确定性检索 50 条候选，并通过只读评测视图阻止所有写入。
+
+---
+
+## 阶段 4：OPD-Evolver 快循环
+
+**产出：** train 任务使用当前策略输出，执行完整的 retrieve/select/act/write/maintain 生命周期，并保留完整 provenance。
+
+### 任务 4.1：带类型的生命周期决策与 Prompt
+
+**文件：**
+- 创建：`src/tau3_retail_evolver/fast_loop/decisions.py`
+- 创建：`src/tau3_retail_evolver/fast_loop/prompts.py`
+- 测试：`tests/unit/fast_loop/test_decisions.py`
+- 测试：`tests/unit/fast_loop/test_prompts.py`
+
+**接口：**
+- 产出 Pydantic 输出：`SelectionDecision`、`ActionDecision`、`WriteDecision`、`MaintenanceDecision`
+- 产出 `sel`、`act`、`write` 和 `maint` 的 prompt builder
+
+- [ ] 编写失败测试，证明公开 prompt 包含 task、官方 policy/tools、observation/history 和允许使用的 memory 内容，但绝不包含 attribution score、evaluator criteria、test ID 或 privileged hindsight。
+- [ ] 编写 parser 测试，覆盖有效 JSON、未知 ID、重复选择、无效 tier、不安全 maintenance operation 和 retry 耗尽。
+- [ ] 实现一次 repair 尝试；仍失败后记录 no-op/failure，禁止静默强制转换无效生命周期输出。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add typed fast-loop lifecycle decisions`。
+
+### 任务 4.2：Episode 快循环 Runner
+
+**文件：**
+- 创建：`src/tau3_retail_evolver/fast_loop/runner.py`
+- 修改：`src/tau3_retail_evolver/fast_loop/events.py`
+- 测试：`tests/unit/fast_loop/test_runner.py`
+
+**接口：**
+- 产出：`run_fast_loop_episode(task, env, policy, memory, config, context) -> EpisodeResult`
+- 事件顺序：retrieve、select、action step、terminal result、write proposal、memory transaction
+
+- [ ] 编写 fake-policy episode 失败测试，证明 selected set 是 candidate 的子集，每个学生 action 都是 on-policy，terminal reward 被保留，并且写入的 memory 引用源 episode。
+- [ ] 添加失败测试，覆盖无效 action、环境异常、最大步数截断、policy timeout 和 memory transaction rollback。
+- [ ] 实现 learning runner，使得只有 split 为 `train` 的 `RunMode.LEARN` 能获得训练 memory 修改能力。阶段 8 仅可通过 evaluation-quarantine capability 复用生命周期逻辑。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add opd evolver fast-loop runner`。
+
+### 任务 4.3：周期性维护
+
+**文件：**
+- 创建：`src/tau3_retail_evolver/fast_loop/maintenance.py`
+- 测试：`tests/unit/fast_loop/test_maintenance.py`
+
+- [ ] 编写失败测试，证明每完成 30 个 train 任务运行一次 maintenance；其只接收有边界的 repository diagnostics，以原子方式应用 lookup/merge/delete，并记录完整 maintenance 轨迹。
+- [ ] 根据已完成 round 数实现调度，保证 resume 不会重复运行同一个 maintenance round。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add periodic memory maintenance`。
+
+### 任务 4.4：真实 Train 快循环 Smoke
+
+- [ ] 初始化一个小型四层 repository。
+- [ ] 使用当前 Qwen LoRA checkpoint 运行五个固定 train 任务。
+- [ ] 验证 candidate/selected set、环境轨迹、memory 写入、官方 reward 和 snapshot 变化。
+- [ ] 使用 fake 环境运行 30 任务 scheduler smoke，在不产生外部 API 成本的情况下覆盖 maintenance。
+
+**阶段 4 gate：** 真实 train 任务携带完整生命周期日志完成；任何 test/base 路径都无法修改 train-derived memory。
+
+---
+
+## 阶段 5：结果归因与 OPD 数据集构造
+
+**产出：** 将快循环日志转换为符合论文定义、可审计公开/特权信息隔离的 `sel`、`act`、`write` 和 `maint` 样本。
+
+### 任务 5.1：Retail 任务分组
+
+**文件：**
+- 创建：`src/tau3_retail_evolver/slow_loop/task_grouping.py`
+- 测试：`tests/unit/slow_loop/test_task_grouping.py`
+
+- [ ] 编写失败测试，确保移除只读 lookup tool，规范化并排序所需 action 名称，为语义等价的 action set 生成相同 group，并且绝不包含 evaluator 参数或 expected value。
+- [ ] 在 rollout 后根据特权任务元数据实现分组。公开事件元数据中只存储 group signature。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add retail attribution task grouping`。
+
+### 任务 5.2：严格对应论文的 Memory Attribution
+
+**文件：**
+- 创建：`src/tau3_retail_evolver/slow_loop/attribution.py`
+- 测试：`tests/unit/slow_loop/test_attribution.py`
+
+**接口：**
+- 产出：`compute_memory_scores(events, tier_priors) -> dict[str, MemoryScore]`
+- 实现论文公式 11-12：
   - `rho_g = n_selected_g / (n_selected_g + n_retrieved_not_selected_g)`
   - `A_hat = sum_g rho_g * (mean(R_selected_g) - mean(R_not_selected_g))`
   - `gamma = 1 - 1 / sqrt(1 + N_selected)`
   - `V = tier_prior * gamma * A_hat`
 
-- [ ] Write failing synthetic tests for candidate-controlled sets, group weighting, empty-group omission, confidence, tier priors, negative values, and the 0.01 supervision threshold.
-- [ ] Run the focused test and confirm failure.
-- [ ] Implement from retrieved and selected event IDs. Never compare against tasks where the memory was not retrieved.
-- [ ] Export counts and group deltas with every score so it can be audited.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add outcome calibrated memory attribution`.
+- [ ] 编写合成失败测试，覆盖候选集受控集合、group weighting、空 group 忽略、confidence、tier prior、负值和 0.01 监督阈值。
+- [ ] 运行聚焦测试并确认失败。
+- [ ] 根据 retrieved 和 selected event ID 实现。绝不与未检索到该 memory 的任务进行比较。
+- [ ] 随每个 score 导出 count 和 group delta，确保可以审计。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add outcome calibrated memory attribution`。
 
-### Task 5.3: Four Hindsight Builders
+### 任务 5.3：四类 Hindsight Builder
 
-**Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/examples.py`
-- Create: `src/tau3_retail_evolver/slow_loop/leakage.py`
-- Test: `tests/unit/slow_loop/test_examples.py`
+**文件：**
+- 创建：`src/tau3_retail_evolver/slow_loop/examples.py`
+- 创建：`src/tau3_retail_evolver/slow_loop/leakage.py`
+- 测试：`tests/unit/slow_loop/test_examples.py`
 
-**Interfaces:**
-- Produces: `OPDExample(kind, public_input, privileged_hindsight, student_output, response_schema, provenance)`
-- Implements equation 13 for `sel`, `act`, `write`, and `maint`
+**接口：**
+- 产出：`OPDExample(kind, public_input, privileged_hindsight, student_output, response_schema, provenance)`
+- 对 `sel`、`act`、`write` 和 `maint` 实现公式 13
 
-- [ ] Write failing tests for each lifecycle view and assert privileged values never appear in `public_input`.
-- [ ] For `act`, public input excludes memory while teacher hindsight includes positive selected memory and a successful same-group trajectory when available.
-- [ ] For `write`, finalize an example only after the written memory has future retrieved/selected evidence; do not assign value from the episode that created it.
-- [ ] For `maint`, include score, confidence, usage, and redundancy diagnostics only in teacher hindsight.
-- [ ] Add a hard leakage scan that rejects `split != train`, test task IDs, evaluator criteria, and paths under `eval/`.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: build four-view opd hindsight data`.
+- [ ] 为每个生命周期视图编写失败测试，并断言 privileged value 永远不会出现在 `public_input` 中。
+- [ ] 对 `act`，公开输入排除 memory；教师 hindsight 在可用时包含有正价值的 selected memory 和同组成功轨迹。
+- [ ] 对 `write`，只在写入的 memory 具有未来 retrieved/selected 证据后完成样本；不得使用创建它的 episode 为其赋值。
+- [ ] 对 `maint`，仅在教师 hindsight 中包含 score、confidence、usage 和 redundancy diagnostics。
+- [ ] 添加严格 leakage scan，拒绝 `split != train`、test task ID、evaluator criteria 和 `eval/` 下的路径。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: build four-view opd hindsight data`。
 
-### Task 5.4: Dataset CLI And Audit
+### 任务 5.4：数据集 CLI 与审计
 
-**Files:**
-- Create: `scripts/build_opd_dataset.py`
-- Create: `scripts/audit_opd_dataset.py`
-- Test: `tests/unit/slow_loop/test_dataset_cli.py`
+**文件：**
+- 创建：`scripts/build_opd_dataset.py`
+- 创建：`scripts/audit_opd_dataset.py`
+- 测试：`tests/unit/slow_loop/test_dataset_cli.py`
 
-- [ ] Make the builder write one JSONL file per decision kind and a dataset manifest with source run, checkpoint, memory snapshot, counts, and hashes.
-- [ ] Make the audit fail on duplicate example IDs, stale checkpoint provenance, missing student outputs, privileged/public overlap, or non-train source events.
-- [ ] Run unit tests and a synthetic end-to-end build.
-- [ ] Commit as `feat: add auditable opd dataset pipeline`.
+- [ ] 让 builder 为每种决策类型写入独立 JSONL 文件，并生成包含 source run、checkpoint、memory snapshot、count 和 hash 的 dataset manifest。
+- [ ] 当出现重复 example ID、过期 checkpoint provenance、缺失 student output、privileged/public 重叠或非 train source event 时，让 audit 失败。
+- [ ] 运行单元测试和合成端到端 build。
+- [ ] 提交为 `feat: add auditable opd dataset pipeline`。
 
-**Stage 5 gate:** attribution matches hand-calculated fixtures; all four datasets pass leakage and provenance audits.
-
----
-
-## Stage 6: Shared-Policy OPD Slow Loop With LoRA
-
-**Outcome:** One Qwen3.5-9B plus one LoRA adapter computes student and privileged teacher distributions on the same sampled prefixes and updates only LoRA parameters.
-
-### Task 6.1: Qwen3.5 And PEFT Loader
-
-**Files:**
-- Create: `src/tau3_retail_evolver/models/qwen35.py`
-- Create: `src/tau3_retail_evolver/models/lora.py`
-- Test: `tests/unit/models/test_lora_config.py`
-- Integration test: `tests/integration/test_qwen35_loader.py`
-
-- [ ] Write unit tests asserting `use_peft=true`, rank 32, alpha 64, dropout 0.05, zero trainable base parameters, and rejection of full fine-tuning.
-- [ ] Load Qwen3.5 through the current official Transformers multimodal model/processor API using text-only inputs.
-- [ ] Start from the official requirement of a Qwen3.5-compatible latest Transformers revision, then lock the resolved Git commit and all training dependencies in `uv.lock`.
-- [ ] Add a GPU integration assertion that only LoRA parameters require gradients and the saved artifact contains adapter weights/config, not base weights.
-- [ ] Commit as `feat: load qwen35 shared policy with lora`.
-
-### Task 6.2: Prefix Alignment And Token KL
-
-**Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/alignment.py`
-- Create: `src/tau3_retail_evolver/slow_loop/loss.py`
-- Test: `tests/unit/slow_loop/test_alignment.py`
-- Test: `tests/unit/slow_loop/test_loss.py`
-
-**Interfaces:**
-- Produces: `build_aligned_batch(example, processor) -> AlignedOPDBatch`
-- Produces: `token_kl(student_logits, teacher_logits, student_positions, teacher_positions) -> Tensor`
-
-- [ ] Write failing toy-tokenizer tests proving both paths end in the identical student-sampled response, response position arrays have equal length, prompt/padding tokens are masked, and truncation never removes only one side of a prefix.
-- [ ] Write hand-calculated tests for full-vocabulary `KL(teacher || student)`, teacher detach, zero loss for equal logits, and averaging over response tokens only.
-- [ ] Implement student sequence `z + y` and teacher sequence `z + h + y` with explicit response position maps.
-- [ ] Run the focused tests and confirm PASS.
-- [ ] Commit as `feat: add aligned on policy distillation loss`.
-
-### Task 6.3: Shared-Model Teacher/Student Step
-
-**Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/opd_step.py`
-- Test: `tests/unit/slow_loop/test_opd_step.py`
-
-- [ ] Build a tiny instrumented causal model and write a failing test that both forwards use the same Python model object and parameter storage.
-- [ ] Assert teacher forward runs first under `torch.no_grad()` and eval mode, teacher logits are detached, student forward runs with gradients, and the optimizer sees only LoRA parameters.
-- [ ] Assert the teacher is conditioned on `h` but scored on exactly the student's `y_<n` prefixes.
-- [ ] Implement the two-pass step and restore model mode reliably after exceptions.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add shared model opd training step`.
-
-### Task 6.4: Trainer, Checkpoint, And GPU Smoke
-
-**Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/trainer.py`
-- Create: `scripts/train_opd_lora.py`
-- Test: `tests/unit/slow_loop/test_trainer.py`
-- Integration test: `tests/integration/test_opd_gpu_smoke.py`
-
-- [ ] Write a CPU toy-model test for gradient accumulation, four-kind sampling, checkpoint manifest, resume, and adapter-only save.
-- [ ] Implement batch/epoch controls while preserving the paper defaults: learning rate 1e-5, per-device batch 2, accumulation 4, three epochs.
-- [ ] Reject datasets whose `source_adapter_revision` differs from the trainer's starting adapter.
-- [ ] Run one GPU step on a tiny compatible model, then one Qwen3.5-9B batch when hardware is available.
-- [ ] Verify nonzero LoRA gradient norm, zero base-model gradient tensors, finite KL, and reloadable adapter.
-- [ ] Commit as `feat: train qwen35 lora with shared policy opd`.
-
-**Stage 6 gate:** toy and GPU OPD tests pass; the saved artifact is adapter-only; no SFT labels or privileged inference requirement exist.
+**阶段 5 gate：** attribution 与手工计算 fixture 一致；四类数据集全部通过 leakage 和 provenance audit。
 
 ---
 
-## Stage 7: Iterative Fast/Slow Co-Evolution
+## 阶段 6：使用 LoRA 的共享策略 OPD 慢循环
 
-**Outcome:** A resumable iteration runs train rollout, memory attribution, OPD data, LoRA update, and artifact promotion without mixing revisions.
+**产出：** 一个 Qwen3.5-9B 和一个 LoRA 适配器，在相同采样前缀上计算学生与特权教师分布，并且只更新 LoRA 参数。
 
-### Task 7.1: Iteration State Machine
+### 任务 6.1：Qwen3.5 与 PEFT Loader
 
-**Files:**
-- Create: `src/tau3_retail_evolver/pipeline/state.py`
-- Create: `src/tau3_retail_evolver/pipeline/iteration.py`
-- Create: `scripts/run_iteration.py`
-- Test: `tests/unit/pipeline/test_iteration.py`
+**文件：**
+- 创建：`src/tau3_retail_evolver/models/qwen35.py`
+- 创建：`src/tau3_retail_evolver/models/lora.py`
+- 测试：`tests/unit/models/test_lora_config.py`
+- 集成测试：`tests/integration/test_qwen35_loader.py`
 
-**Interfaces:**
-- States: `created -> rollout_complete -> attribution_complete -> dataset_complete -> training_complete -> promoted`
-- Produces: `run_iteration(config, parent_checkpoint, parent_memory_snapshot) -> IterationResult`
+- [ ] 编写单元测试，断言 `use_peft=true`、rank 32、alpha 64、dropout 0.05、可训练基础模型参数数目为零，并拒绝全参数微调。
+- [ ] 使用 text-only 输入，通过当前官方 Transformers multimodal model/processor API 加载 Qwen3.5。
+- [ ] 从官方要求的最新版 Qwen3.5-compatible Transformers revision 开始，然后在 `uv.lock` 中锁定解析出的 Git commit 和全部训练依赖。
+- [ ] 添加 GPU 集成断言，确认只有 LoRA 参数需要 gradient，保存的 artifact 只包含 adapter weights/config，不包含基础模型权重。
+- [ ] 提交为 `feat: load qwen35 shared policy with lora`。
 
-- [ ] Write a failing end-to-end fake test for exact stage order, artifact hashes, parent/child revisions, and promoted outputs.
-- [ ] Write resume tests from every completed state and assert completed stages are hash-verified rather than rerun.
-- [ ] Write failure tests proving partial adapter or memory outputs are never promoted.
-- [ ] Implement atomic state transitions and a lock file scoped to one run ID.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: orchestrate resumable opd iterations`.
+### 任务 6.2：前缀对齐与 Token KL
 
-### Task 7.2: Curriculum And Sampling Controls
+**文件：**
+- 创建：`src/tau3_retail_evolver/slow_loop/alignment.py`
+- 创建：`src/tau3_retail_evolver/slow_loop/loss.py`
+- 测试：`tests/unit/slow_loop/test_alignment.py`
+- 测试：`tests/unit/slow_loop/test_loss.py`
 
-**Files:**
-- Create: `src/tau3_retail_evolver/pipeline/sampling.py`
-- Test: `tests/unit/pipeline/test_sampling.py`
+**接口：**
+- 产出：`build_aligned_batch(example, processor) -> AlignedOPDBatch`
+- 产出：`token_kl(student_logits, teacher_logits, student_positions, teacher_positions) -> Tensor`
 
-- [ ] Implement deterministic train-task ordering/shuffling from a recorded seed.
-- [ ] Prevent a task ID from crossing into test/base through overrides or resume manifests.
-- [ ] Balance `sel/act/write/maint` examples without fabricating missing write/maintenance supervision.
-- [ ] Add configurable iteration task count while keeping the full official train set as the production default.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: add train-only opd iteration sampling`.
+- [ ] 编写 toy-tokenizer 失败测试，证明两条路径都以完全相同的学生采样 response 结尾、response position array 长度相等、prompt/padding token 被 mask，并且 truncation 不会只移除某一侧的 prefix。
+- [ ] 为全词表 `KL(teacher || student)`、teacher detach、相同 logits 时 loss 为零，以及只在 response token 上求平均编写手工计算测试。
+- [ ] 实现学生序列 `z + y` 和教师序列 `z + h + y`，并提供显式 response position map。
+- [ ] 重新运行聚焦测试并确认 PASS。
+- [ ] 提交为 `feat: add aligned on policy distillation loss`。
 
-### Task 7.3: Multi-Iteration Smoke
+### 任务 6.3：共享模型 Teacher/Student Step
 
-- [ ] Run two complete fake iterations and verify checkpoint N+1 consumes only data generated by checkpoint N.
-- [ ] Run one small real iteration on train tasks with dry-run training, then one real LoRA update batch.
-- [ ] Verify memory and adapter lineage from the final manifest back to the initial checkpoint.
+**文件：**
+- 创建：`src/tau3_retail_evolver/slow_loop/opd_step.py`
+- 测试：`tests/unit/slow_loop/test_opd_step.py`
 
-**Stage 7 gate:** interrupted runs resume deterministically; promoted checkpoints have complete lineage; test IDs are absent from every learning artifact.
+- [ ] 构建一个可观测的小型 causal model，并编写失败测试，确认两次 forward 使用同一个 Python model object 和 parameter storage。
+- [ ] 断言 teacher forward 首先在 `torch.no_grad()` 和 eval mode 下执行，teacher logits 已 detach，student forward 保留 gradient，并且 optimizer 只看到 LoRA 参数。
+- [ ] 断言教师以 `h` 为条件，但只在学生的 `y_<n` 前缀上评分。
+- [ ] 实现 two-pass step，并在发生异常时可靠恢复 model mode。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add shared model opd training step`。
 
----
+### 任务 6.4：Trainer、Checkpoint 与 GPU Smoke
 
-## Stage 8: Held-Out Retail Evaluation And Reporting
+**文件：**
+- 创建：`src/tau3_retail_evolver/slow_loop/trainer.py`
+- 创建：`scripts/train_opd_lora.py`
+- 测试：`tests/unit/slow_loop/test_trainer.py`
+- 集成测试：`tests/integration/test_opd_gpu_smoke.py`
 
-**Outcome:** A chosen LoRA checkpoint is measured on official test tasks without parameter updates or accidental reuse of test artifacts.
+- [ ] 编写 CPU toy-model 测试，覆盖 gradient accumulation、四类样本 sampling、checkpoint manifest、resume 和仅保存 adapter。
+- [ ] 实现 batch/epoch 控制，同时保留论文默认值：learning rate 1e-5、per-device batch 2、accumulation 4、训练三轮。
+- [ ] 拒绝 `source_adapter_revision` 与 trainer 起始 adapter 不一致的数据集。
+- [ ] 在小型兼容模型上运行一个 GPU step；硬件可用时再运行一个 Qwen3.5-9B batch。
+- [ ] 验证 LoRA gradient norm 非零、基础模型 gradient tensor 数目为零、KL 有限且 adapter 可重新加载。
+- [ ] 提交为 `feat: train qwen35 lora with shared policy opd`。
 
-### Task 8.1: Evaluation Isolation
-
-**Files:**
-- Create: `src/tau3_retail_evolver/eval/guard.py`
-- Create: `src/tau3_retail_evolver/eval/runner.py`
-- Test: `tests/unit/eval/test_guard.py`
-- Test: `tests/unit/eval/test_runner.py`
-
-**Protocols:**
-- `test_static`: load a frozen train-derived memory snapshot read-only; no test memory writes.
-- `test_streaming`: start from empty quarantined memory and permit fast-loop memory evolution across the test stream to reproduce the paper's evaluation protocol; never export this memory to training.
-
-- [ ] Write failing tests that disable optimizer creation, attribution, dataset writing, checkpoint save, and train-memory mutation in both protocols.
-- [ ] Assert `test_static` rejects every memory operation.
-- [ ] Assert `test_streaming` writes only under `runs/<run_id>/eval/test_streaming/quarantine/` and that training artifact loaders reject that path.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: isolate static and streaming test evaluation`.
-
-### Task 8.2: Official Metrics And Reproducible CLI
-
-**Files:**
-- Create: `src/tau3_retail_evolver/eval/metrics.py`
-- Create: `scripts/evaluate_retail.py`
-- Test: `tests/unit/eval/test_metrics.py`
-
-- [ ] Preserve per-episode tau2 reward and parsed `reward_info` without reimplementing the official evaluator.
-- [ ] Report task count, completed count, mean reward/success, per-task outcomes, failure categories, step count, parse-error rate, and configured repeated trials.
-- [ ] Default to four seeded trials per task for the final report; allow an explicit one-trial smoke run.
-- [ ] Record checkpoint, base model, tau2 commit, split hash, exact 40 test IDs, task order, user simulator, seeds, protocol, and memory snapshot.
-- [ ] Add `--split test` only. A separate `--official-base-reproduction` flag may run `base` but writes to a separately labeled report.
-- [ ] Run tests and confirm PASS.
-- [ ] Commit as `feat: evaluate opd evolver on retail test split`.
-
-### Task 8.3: Baselines, Ablations, And Final Report
-
-**Files:**
-- Create: `scripts/compare_evaluations.py`
-- Create: `docs/evaluation_protocol.md`
-- Modify: `README.md`
-
-- [ ] Evaluate at least: base Qwen no memory, trained LoRA no memory, trained LoRA plus `test_static` memory, and trained LoRA `test_streaming`.
-- [ ] Add ablations for selection, writing, and maintenance only after the main pipeline is stable.
-- [ ] Compare only runs with identical tau2 commit, split hash, user simulator, protocol, task order, and seed set.
-- [ ] Document that test results are never used for hyperparameter tuning or checkpoint selection in this no-dev design.
-- [ ] Run `pytest -v`, all enabled integration tests, dataset audit, and manifest lineage audit.
-- [ ] Commit as `docs: finalize tau3 retail opd evaluation protocol`.
-
-**Stage 8 gate:** the complete official test report is reproducible from recorded revisions and contains no path from test artifacts back into training.
+**阶段 6 gate：** toy 和 GPU OPD 测试通过；保存的 artifact 仅包含 adapter；不存在 SFT label 或推理阶段特权信息依赖。
 
 ---
 
-## Phase-Level Review Checkpoints
+## 阶段 7：迭代式快/慢循环协同演化
 
-After each stage:
+**产出：** 一个可恢复的 iteration 顺序执行 train rollout、memory attribution、OPD 数据、LoRA 更新和 artifact promotion，且不会混用 revision。
 
-- Review only that stage's interfaces, tests, and acceptance gate.
-- Run `pytest tests/unit -v` plus the stage's enabled integration marker.
-- Run `git diff --check` and `git status --short`.
-- Commit before beginning the next stage.
-- Update this plan's checkboxes in the same commit as the completed stage.
+### 任务 7.1：Iteration 状态机
 
-## Self-Review
+**文件：**
+- 创建：`src/tau3_retail_evolver/pipeline/state.py`
+- 创建：`src/tau3_retail_evolver/pipeline/iteration.py`
+- 创建：`scripts/run_iteration.py`
+- 测试：`tests/unit/pipeline/test_iteration.py`
 
-- Spec coverage: environment, split isolation, baseline, four-tier memory, complete fast loop, exact attribution equations, four hindsight views, shared-model OPD token KL, LoRA-only updates, iteration/resume, and held-out evaluation are each assigned to a gated stage.
-- Placeholder scan: the plan contains no implementation placeholders. The user-simulator model is intentionally an explicit runtime config; omission has the exact behavior of delegating to the pinned tau2 default and recording the resolved setting.
-- Type consistency: `ProjectConfig` and `Tau2Config` precede the adapter; canonical events precede memory attribution; `OPDExample` precedes alignment/loss; adapter and memory revisions precede iteration/evaluation manifests.
-- Leakage check: only train can reach learning APIs. Test streaming memory is quarantined and rejected by training loaders. Base cannot reach training.
-- Algorithm check: equations 11-16 are represented as candidate-controlled attribution, privileged same-prefix teacher distributions, stop-gradient full-vocabulary KL, and response-token averaging.
+**接口：**
+- 状态：`created -> rollout_complete -> attribution_complete -> dataset_complete -> training_complete -> promoted`
+- 产出：`run_iteration(config, parent_checkpoint, parent_memory_snapshot) -> IterationResult`
+
+- [ ] 编写端到端 fake 失败测试，覆盖精确阶段顺序、artifact hash、parent/child revision 和 promoted output。
+- [ ] 为每个已完成状态编写 resume 测试，并断言已完成阶段通过 hash 验证，而不是重新运行。
+- [ ] 编写失败测试，证明不完整的 adapter 或 memory 输出永远不会被 promote。
+- [ ] 实现原子状态转换，以及限定在单个 run ID 内的 lock file。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: orchestrate resumable opd iterations`。
+
+### 任务 7.2：Curriculum 与 Sampling 控制
+
+**文件：**
+- 创建：`src/tau3_retail_evolver/pipeline/sampling.py`
+- 测试：`tests/unit/pipeline/test_sampling.py`
+
+- [ ] 根据已记录 seed 实现确定性的 train task 排序/打乱。
+- [ ] 防止 task ID 通过 override 或 resume manifest 跨入 test/base。
+- [ ] 平衡 `sel/act/write/maint` 样本，同时不得伪造缺失的 write/maintenance 监督。
+- [ ] 添加可配置的 iteration task count，生产默认值仍为完整官方 train set。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: add train-only opd iteration sampling`。
+
+### 任务 7.3：多 Iteration Smoke
+
+- [ ] 运行两个完整 fake iteration，并验证 checkpoint N+1 只消费 checkpoint N 生成的数据。
+- [ ] 在 train 任务上运行一个小型真实 iteration 和 dry-run training，然后执行一个真实 LoRA update batch。
+- [ ] 验证从最终 manifest 到初始 checkpoint 的 memory 和 adapter lineage。
+
+**阶段 7 gate：** 中断的 run 能够确定性恢复；promoted checkpoint 具有完整 lineage；所有学习 artifact 中都不存在 test ID。
+
+---
+
+## 阶段 8：留出 Retail 评测与报告
+
+**产出：** 在官方 test 任务上测量指定 LoRA checkpoint，不进行参数更新，也不会意外复用 test artifact。
+
+### 任务 8.1：评测隔离
+
+**文件：**
+- 创建：`src/tau3_retail_evolver/eval/guard.py`
+- 创建：`src/tau3_retail_evolver/eval/runner.py`
+- 测试：`tests/unit/eval/test_guard.py`
+- 测试：`tests/unit/eval/test_runner.py`
+
+**协议：**
+- `test_static`：以只读方式加载由 train 产生的冻结 memory snapshot；不允许 test memory 写入。
+- `test_streaming`：从空的隔离 memory 开始，允许在 test stream 内进行快循环 memory 演化，以复现论文评测协议；绝不将该 memory 导出到训练。
+
+- [ ] 编写失败测试，确保两种协议都禁用 optimizer 创建、attribution、dataset 写入、checkpoint 保存和 train-memory 修改。
+- [ ] 断言 `test_static` 拒绝所有 memory operation。
+- [ ] 断言 `test_streaming` 只写入 `runs/<run_id>/eval/test_streaming/quarantine/`，并且训练 artifact loader 拒绝该路径。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: isolate static and streaming test evaluation`。
+
+### 任务 8.2：官方指标与可复现 CLI
+
+**文件：**
+- 创建：`src/tau3_retail_evolver/eval/metrics.py`
+- 创建：`scripts/evaluate_retail.py`
+- 测试：`tests/unit/eval/test_metrics.py`
+
+- [ ] 保留每个 episode 的 tau2 reward 和解析后的 `reward_info`，不得重新实现官方 evaluator。
+- [ ] 报告 task count、completed count、mean reward/success、逐任务结果、failure category、step count、parse-error rate 和配置的重复 trial。
+- [ ] 最终报告默认每个任务运行四个带 seed 的 trial；允许显式执行单 trial smoke。
+- [ ] 记录 checkpoint、base model、tau2 commit、split hash、精确的 40 个 test ID、task order、用户模拟器、seed、protocol 和 memory snapshot。
+- [ ] 只添加 `--split test`。单独的 `--official-base-reproduction` flag 可以运行 `base`，但必须写入独立标记的报告。
+- [ ] 重新运行测试并确认 PASS。
+- [ ] 提交为 `feat: evaluate opd evolver on retail test split`。
+
+### 任务 8.3：Baseline、Ablation 与最终报告
+
+**文件：**
+- 创建：`scripts/compare_evaluations.py`
+- 创建：`docs/evaluation_protocol.md`
+- 修改：`README.md`
+
+- [ ] 至少评测：无 memory 的 base Qwen、无 memory 的训练后 LoRA、训练后 LoRA 加 `test_static` memory，以及训练后 LoRA `test_streaming`。
+- [ ] 只在主流程稳定后添加 selection、writing 和 maintenance ablation。
+- [ ] 只比较 tau2 commit、split hash、用户模拟器、protocol、task order 和 seed set 完全相同的 run。
+- [ ] 记录：在不使用 dev 的设计中，test 结果绝不用于超参数调整或 checkpoint 选择。
+- [ ] 运行 `pytest -v`、所有已启用 integration test、dataset audit 和 manifest lineage audit。
+- [ ] 提交为 `docs: finalize tau3 retail opd evaluation protocol`。
+
+**阶段 8 gate：** 完整官方 test 报告可根据记录的 revision 复现，并且不存在从 test artifact 返回训练流程的路径。
+
+---
+
+## 阶段级 Review Checkpoint
+
+每个阶段结束后：
+
+- 只 review 当前阶段的接口、测试和验收 gate。
+- 运行 `pytest tests/unit -v` 以及当前阶段已启用的 integration marker。
+- 运行 `git diff --check` 和 `git status --short`。
+- 开始下一阶段前完成 commit。
+- 在当前阶段完成的同一个 commit 中更新本计划的 checkbox。
+
+## 自查
+
+- Spec 覆盖：环境、split 隔离、baseline、四层 memory、完整快循环、精确归因公式、四类 hindsight view、共享模型 OPD token KL、仅 LoRA 更新、iteration/resume 和留出集评测，都分别归入带 gate 的阶段。
+- 占位符检查：计划不包含实现占位符。用户模拟器模型被有意设计为显式运行时配置；省略时会委托给固定 tau2 默认值，并记录解析后的实际配置。
+- 类型一致性：`ProjectConfig` 和 `Tau2Config` 先于适配器定义；规范事件先于 memory attribution；`OPDExample` 先于 alignment/loss；adapter 和 memory revision 先于 iteration/evaluation manifest。
+- 泄漏检查：只有 train 可以调用学习 API。Test streaming memory 被隔离，并由训练 loader 拒绝。Base 无法进入训练。
+- 算法检查：公式 11-16 分别落实为候选集受控归因、特权同前缀教师分布、stop-gradient 全词表 KL，以及 response-token 平均。

@@ -1,10 +1,9 @@
-# Tau3 Retail OPD-Evolver Implementation Plan
+# Tau3 Retail OPD-Evolver 实施计划（历史版本）
 
-> **Status: superseded.** This monolithic draft is retained for history. Use
-> `docs/superpowers/plans/2026-07-10-tau3-retail-opd-evolver-staged.md` for
-> implementation. The staged plan replaces the placeholder environment adapter,
-> corrects the slow loop from SFT-style concatenation to same-prefix OPD KL, and
-> adds explicit train/test/base isolation and evaluation phases.
+> **状态：已被替代。** 此单体计划仅作为历史记录保留。实际实施请使用
+> `docs/superpowers/plans/2026-07-10-tau3-retail-opd-evolver-staged.md`。
+> 分阶段计划替换了占位环境适配器，将慢循环从 SFT 式拼接修正为同前缀
+> OPD KL，并补充了明确的 train/test/base 隔离与评测阶段。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

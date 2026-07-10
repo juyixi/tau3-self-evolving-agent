@@ -1,86 +1,56 @@
-# Tau3 Retail OPD-Evolver Training Project Design
+# Tau3 Retail OPD-Evolver 训练项目设计
 
-## Purpose
+## 目标
 
-Build a training project for tau3-bench retail tasks using Qwen3.5-9B as both
-the privileged teacher and the deployable student. The training method is
-on-policy distillation, following OPD-Evolver rather than offline
-self-distillation. The student is trained with LoRA adapters, not full
-fine-tuning.
+构建一个面向 tau3-bench retail 任务的训练项目，使用 Qwen3.5-9B 同时作为特权教师（privileged teacher）和可部署学生（deployable student）。训练方法采用 OPD-Evolver 的同策略蒸馏（on-policy distillation），而非离线自蒸馏。学生模型使用 LoRA 适配器训练，不进行全参数微调。
 
-The project should make the OPD-Evolver fast loop and slow loop explicit for
-tau3 retail:
+项目需要针对 tau3 retail 明确实现 OPD-Evolver 的快循环（fast loop）和慢循环（slow loop）：
 
-- Fast loop: the agent interacts with retail tasks, retrieves and selects
-  memories, acts, writes new memories, and periodically maintains the memory
-  repository.
-- Slow loop: the same Qwen3.5-9B policy is trained on student-visited states by
-  comparing student distributions against a privileged teacher view on the same
-  student prefixes.
+- 快循环：智能体与 retail 任务交互，检索并选择记忆，执行动作，写入新记忆，并周期性维护记忆库。
+- 慢循环：在学生访问到的状态上训练同一个 Qwen3.5-9B 策略，对比学生分布与教师在相同学生前缀上的特权视角分布。
 
-## Primary References
+## 主要参考资料
 
-The implementation must reference both OPD-Evolver sources:
+实现必须同时参考以下两项 OPD-Evolver 资料：
 
-- Paper: "OPD-Evolver: Cultivating Holistic Agent Evolver via On-Policy
-  Distillation", arXiv 2606.17628v1.
-  - Local copy: `C:\Users\huang\Downloads\2606.17628v1.pdf`
-  - arXiv: https://arxiv.org/abs/2606.17628v1
-- Official code repository:
-  - GitHub: https://github.com/bingreeky/opd-evolver
+- 论文："OPD-Evolver: Cultivating Holistic Agent Evolver via On-Policy Distillation"，arXiv 2606.17628v1。
+  - 本地文件：`C:\Users\huang\Downloads\2606.17628v1.pdf`
+  - arXiv：https://arxiv.org/abs/2606.17628v1
+- 官方代码仓库：
+  - GitHub：https://github.com/bingreeky/opd-evolver
 
-The retail environment is provided by the current official tau benchmark
-repository:
+retail 环境由当前官方 tau benchmark 仓库提供：
 
-- Tau2-bench repository: https://github.com/sierra-research/tau2-bench
-- Gym adapter documentation:
+- Tau2-bench 仓库：https://github.com/sierra-research/tau2-bench
+- Gym 适配器文档：
   https://github.com/sierra-research/tau2-bench/blob/main/src/tau2/gym/README.md
-- Retail task splits:
+- Retail 任务划分：
   https://github.com/sierra-research/tau2-bench/blob/main/data/tau2/domains/retail/split_tasks.json
 
-The paper is the authoritative algorithm source. The repository is the
-engineering reference for executable OPD-Evolver patterns, especially the
-published executor OPD demonstration and project organization. Any tau3 retail
-fast-loop and slow-loop design in this project must cite back to these two
-sources when making algorithmic or structural decisions.
+论文是算法定义的权威来源；官方仓库是可执行 OPD-Evolver 工程模式的参考，尤其用于参考已发布的 executor OPD 示例和项目组织方式。本项目中所有 tau3 retail 快循环和慢循环的算法或结构决策，都必须能够追溯到这两项资料。
 
-## Algorithm Interpretation
+## 算法理解
 
-This project implements OPD-Evolver as on-policy distillation with a shared
-policy model. It must not be described or implemented as offline
-self-distillation:
+本项目将 OPD-Evolver 实现为共享策略模型上的同策略蒸馏。不得将其描述或实现为离线自蒸馏：
 
-- Student: Qwen3.5-9B plus the current LoRA adapter, running only deployment
-  inputs.
-- Teacher: the same Qwen3.5-9B instance with the same current LoRA adapter,
-  given privileged hindsight context and evaluated under `no_grad` on the same
-  prefixes sampled by the student.
-- Training signal: token-level distillation loss on student-visited prefixes.
-- Scope: four lifecycle decisions from the paper:
-  - `sel`: experience selection.
-  - `act`: experience-grounded execution.
-  - `write`: experience writing.
-  - `maint`: repository maintenance.
+- 学生：Qwen3.5-9B 加当前 LoRA 适配器，仅接收部署时可用的输入。
+- 教师：与学生相同的 Qwen3.5-9B 实例和当前 LoRA 适配器，额外接收特权后见信息（privileged hindsight），在 `no_grad` 下对学生采样得到的相同前缀进行评估。
+- 训练信号：学生访问前缀上的 token 级蒸馏损失。
+- 范围：论文定义的四类生命周期决策：
+  - `sel`：经验选择（experience selection）。
+  - `act`：基于经验的执行（experience-grounded execution）。
+  - `write`：经验写入（experience writing）。
+  - `maint`：记忆库维护（repository maintenance）。
 
-The project must not treat OPD as static trajectory self-distillation. Rollouts
-come from the current student policy, and distillation targets are computed
-against those on-policy states.
+项目不得把 OPD 当成静态轨迹自蒸馏。rollout 必须来自当前学生策略，蒸馏目标必须基于这些同策略状态计算。
 
-## Tau3 Retail Environment Boundary
+## Tau3 Retail 环境边界
 
-The current official retail environment is consumed from
-`sierra-research/tau2-bench`. The project continues to use "tau3 retail" as its
-task-facing name, while integration code imports the official `tau2` Python
-package. Tau2-bench is an external pinned dependency, not vendored application
-code. The recommended local layout is `external/tau2-bench/`, ignored by git,
-installed with its `gym` extra in editable mode.
+当前官方 retail 环境来自 `sierra-research/tau2-bench`。项目面向任务的名称仍使用“tau3 retail”，而集成代码导入官方 `tau2` Python 包。Tau2-bench 是固定版本的外部依赖，不复制进本项目源码。建议将本地 checkout 放在 `external/tau2-bench/`，由 git 忽略，并以 editable 模式安装其 `gym` extra。
 
-Every real run records the tau2-bench Git commit, task split name, exact task
-IDs, split file hash, user-simulator settings, seed, and environment options in
-its run manifest. Unit tests use a mock or fake Gym object and do not require
-the external repository.
+每次真实运行都必须在 run manifest 中记录 tau2-bench Git commit、任务 split 名称、精确任务 ID、split 文件哈希、用户模拟器配置、seed 和环境选项。单元测试使用 mock 或 fake Gym 对象，不依赖外部仓库。
 
-The project adapter wraps `tau2.gym.gym_agent.AgentGymEnv` and exposes:
+项目适配器封装 `tau2.gym.gym_agent.AgentGymEnv`，并暴露：
 
 - `reset(task_id | task_spec) -> observation`
 - `step(action) -> observation, reward, done, info`
@@ -88,197 +58,145 @@ The project adapter wraps `tau2.gym.gym_agent.AgentGymEnv` and exposes:
 - `metadata(task_spec) -> dict`
 - `success(info, reward, done) -> bool`
 
-The rest of the project depends only on this adapter interface. The adapter
-normalizes Gymnasium's `(observation, reward, terminated, truncated, info)`
-result, preserves official evaluator output from `info["reward_info"]`, and
-closes each environment after an episode. A mock retail adapter is used for
-unit tests and dry runs; real rollout and evaluation commands must use the
-tau2-backed adapter without changing OPD code.
+项目其余部分只依赖该适配器接口。适配器负责规范化 Gymnasium 返回的 `(observation, reward, terminated, truncated, info)`，保留 `info["reward_info"]` 中的官方评测结果，并在每个 episode 后关闭环境。单元测试和 dry run 使用 mock retail 适配器；真实 rollout 和评测命令必须使用 tau2-backed 适配器，且不需要修改 OPD 代码。
 
-## Task Data And Split Policy
+## 任务数据与划分策略
 
-No internal dev split is created by default. The official retail splits have
-one-way responsibilities:
+默认不创建内部 dev 划分。官方 retail split 的职责严格单向：
 
-- `train`: the only source for fast-loop rollout collection, memory writing and
-  maintenance, outcome-calibrated attribution, privileged teacher hindsight,
-  and LoRA updates.
-- `test`: final or explicitly requested checkpoint evaluation only. Test tasks
-  must never produce training examples, attribution updates, model updates, or
-  mutations to train-derived memory.
-- `base`: optional reproduction of the official all-task aggregate only. It is
-  never a training source because it contains both train and test task IDs.
+- `train`：快循环 rollout 采集、记忆写入与维护、结果校准的归因、教师特权后见信息以及 LoRA 更新的唯一数据来源。
+- `test`：只用于最终评测或显式请求的 checkpoint 评测。test 任务不得生成训练样本、归因更新或模型更新，也不得修改由 train 学得的记忆。
+- `base`：仅用于可选的官方全任务聚合复现。它同时包含 train 和 test 任务 ID，因此绝不能作为训练数据来源。
 
-The task loader must enforce this policy in code rather than relying on CLI
-convention. Training entry points reject `test` and `base`. Evaluation supports
-two separately labeled protocols:
+任务加载器必须在代码中强制执行该策略，不能只依赖 CLI 使用约定。训练入口拒绝 `test` 和 `base`。评测提供两个独立标记的协议：
 
-- `test_static`: opens a read-only snapshot of memory learned from `train`;
-  test episodes cannot mutate it or share newly written memories.
-- `test_streaming`: starts from an empty, evaluation-only memory repository and
-  allows the paper's fast-loop memory evolution across the test stream. That
-  repository is quarantined under the evaluation directory and all training
-  artifact loaders reject it.
+- `test_static`：打开由 `train` 学得的只读记忆快照；test episode 不能修改该快照，也不能在后续 test episode 中共享新写入的记忆。
+- `test_streaming`：从空的评测专用记忆库开始，允许按照论文协议在 test 任务流中运行快循环记忆演化。该记忆库隔离在评测目录下，所有训练 artifact loader 都必须拒绝加载它。
 
-Neither protocol permits parameter updates, attribution dataset production, or
-checkpoint selection from test outcomes.
+两种协议都不允许参数更新、归因数据集生成或基于 test 结果选择 checkpoint。
 
-The current official split file contains 74 train tasks, 40 test tasks, and 114
-base tasks. These counts are compatibility assertions for the pinned
-tau2-bench revision, not hard-coded task data; a revision change requires an
-explicit split review and manifest update.
+当前官方 split 文件包含 74 个 train 任务、40 个 test 任务和 114 个 base 任务。这些数量是针对固定 tau2-bench revision 的兼容性断言，不是硬编码的任务数据；依赖 revision 发生变化时，必须显式复核 split 并更新 manifest。
 
-## Fast Loop Design
+## 快循环设计
 
-The fast loop follows Algorithm 1 in the paper.
+快循环遵循论文 Algorithm 1。
 
-For each retail task:
+对于每个 retail 任务：
 
-1. Form a query from the task, environment metadata, current observation, and
-   optional retail state hints.
-2. Retrieve candidate memories from a four-tier repository:
-   - `trajectory`: full or compressed retail interaction traces.
-   - `tip`: local warnings, constraints, or heuristics.
-   - `skill`: reusable retail task procedures.
-   - `tool`: executable or structured action templates.
-3. Select a compact subset of memories with the current student policy.
-4. Format the selected memories into the execution prompt.
-5. Roll out the current student policy in the retail environment.
-6. Log observations, actions, rewards, selected memories, candidate memories,
-   task group, terminal result, and parse errors.
-7. Ask the current policy to write memory updates from the task, trajectory,
-   result, and selected memories.
-8. Every `maintenance_period` tasks, run repository maintenance using
-   `lookup`, `merge`, and `delete` operations.
+1. 根据任务、环境元数据、当前 observation 和可选的 retail 状态提示构造查询。
+2. 从四层记忆库检索候选记忆：
+   - `trajectory`：完整或压缩后的 retail 交互轨迹。
+   - `tip`：局部警告、约束或启发式规则。
+   - `skill`：可复用的 retail 任务流程。
+   - `tool`：可执行或结构化的动作模板。
+3. 使用当前学生策略选择一个紧凑的记忆子集。
+4. 将选中的记忆格式化到执行 prompt 中。
+5. 使用当前学生策略在 retail 环境中执行 rollout。
+6. 记录 observation、action、reward、选中记忆、候选记忆、任务组、终止结果和解析错误。
+7. 让当前策略根据任务、轨迹、结果和选中记忆生成记忆更新。
+8. 每经过 `maintenance_period` 个任务，使用 `lookup`、`merge` 和 `delete` 操作执行记忆库维护。
 
-Default values from the paper:
+论文默认值：
 
-- Memory tiers: `trajectory`, `tip`, `skill`, `tool`.
-- Teacher-side retrieval candidates: 50.
-- Privileged teacher memory injection cap: 20.
-- Maintenance period: `Q = 30`.
-- Maximum episode length: 40 unless tau3 retail requires a different cap.
+- 记忆层级：`trajectory`、`tip`、`skill`、`tool`。
+- 教师侧检索候选数：50。
+- 特权教师上下文中注入的记忆上限：20。
+- 维护周期：`Q = 30`。
+- 最大 episode 长度：40，除非 tau3 retail 需要不同上限。
 
-## Outcome-Calibrated Attribution
+## 结果校准的记忆归因
 
-The project computes memory value only from tasks where a memory was retrieved.
-For a memory `m` and task group `g`, selected uses are compared against
-retrieved-but-not-selected uses. This follows the paper's candidate-controlled
-attribution idea:
+项目只在某条记忆实际被检索到的任务上估计其价值。对于记忆 `m` 和任务组 `g`，比较“被检索且被选择”的使用情况与“被检索但未被选择”的使用情况。这对应论文的候选集受控归因思想：
 
-- `Omega_plus_g(m)`: tasks in group `g` where `m` was retrieved and selected.
-- `Omega_g(m)`: tasks in group `g` where `m` was retrieved but not selected.
-- Attribution compares average returns between those two sets.
-- A confidence factor downweights memories with little selected evidence.
-- A tier prior allows different weighting for trajectory, tip, skill, and tool
-  memories.
+- `Omega_plus_g(m)`：任务组 `g` 中，`m` 被检索且被选择的任务。
+- `Omega_g(m)`：任务组 `g` 中，`m` 被检索但未被选择的任务。
+- 归因值比较这两组任务的平均 return。
+- 置信度因子降低选择证据不足的记忆权重。
+- 层级先验允许对 trajectory、tip、skill 和 tool 记忆采用不同权重。
 
-The resulting score `V(m)` is used as privileged hindsight for selection,
-execution, writing, and maintenance. Supervision with memory score below
-`0.01` is filtered by default, matching the paper.
+最终得分 `V(m)` 用作选择、执行、写入和维护决策的特权后见信息。默认过滤记忆分数低于 `0.01` 的监督样本，与论文设置一致。
 
-## Slow Loop Design
+## 慢循环设计
 
-The slow loop constructs training examples for the four lifecycle decisions:
+慢循环为四类生命周期决策构造训练样本：
 
-- Selection:
-  - Student input `z_sel`: retail task plus retrieved candidate memories.
-  - Teacher hindsight `h_sel`: each candidate memory with calibrated value
-    `V(m)`.
-- Execution:
-  - Student input `z_act`: retail task and public environment history, without
-    privileged memory values.
-  - Teacher hindsight `h_act`: valuable selected memories and a successful
-    trajectory from the same task group when available.
-- Writing:
-  - Student input `z_write`: task, trajectory, return, and selected memories.
-  - Teacher hindsight `h_write`: generated memory candidates with future
-    calibrated value.
-- Maintenance:
-  - Student input `z_maint`: repository snapshot, logged history, and available
-    maintenance tools.
-  - Teacher hindsight `h_maint`: memory value, confidence, usage statistics,
-    and redundancy diagnostics.
+- 选择：
+  - 学生输入 `z_sel`：retail 任务和检索到的候选记忆。
+  - 教师后见信息 `h_sel`：每条候选记忆及其校准价值 `V(m)`。
+- 执行：
+  - 学生输入 `z_act`：retail 任务和公开环境历史，不包含特权记忆价值。
+  - 教师后见信息 `h_act`：有价值的已选记忆，以及同一任务组中可用的成功轨迹。
+- 写入：
+  - 学生输入 `z_write`：任务、轨迹、return 和选中记忆。
+  - 教师后见信息 `h_write`：生成的记忆候选及其未来校准价值。
+- 维护：
+  - 学生输入 `z_maint`：记忆库快照、日志历史和可用维护工具。
+  - 教师后见信息 `h_maint`：记忆价值、置信度、使用统计和冗余诊断。
 
-For each example, the student first samples an output under deployment
-conditions. The teacher is then evaluated on the same student-generated prefixes
-with the privileged hindsight appended. The training loss is token-level KL from
-the stop-gradient teacher distribution to the student distribution.
+对每个样本，学生首先在部署条件下采样输出；随后教师在加入特权后见信息的条件下，对相同的学生生成前缀进行评估。训练损失是从 stop-gradient 教师分布到学生分布的 token 级 KL。
 
-The implementation must align response-token positions between the public
-student sequence and the longer privileged teacher sequence, and apply KL only
-to the sampled response tokens. Concatenating privileged teacher context into a
-single causal-language-model training string and applying ordinary next-token
-SFT loss is explicitly not an OPD implementation.
+实现必须对齐较短的公开学生序列和较长的特权教师序列中的 response token 位置，并且只在学生采样得到的 response token 上计算 KL。将教师特权上下文拼进单个 causal language model 训练字符串并应用普通 next-token SFT loss，不属于 OPD 实现。
 
-The deployable artifact is only the student-facing LoRA adapter. Privileged
-hindsight contexts are never required at inference time.
+可部署 artifact 仅包含面向学生的 LoRA 适配器。推理时永远不需要特权后见上下文。
 
-## Model And Training Defaults
+## 模型与训练默认值
 
-Base model:
+基础模型：
 
-- `Qwen/Qwen3.5-9B` or the locally available equivalent Qwen3.5-9B checkpoint.
+- `Qwen/Qwen3.5-9B`，或本地可用的等价 Qwen3.5-9B checkpoint。
 
-Precision and context:
+精度与上下文：
 
 - `bf16`
 - `max_prompt_length = 8192`
 
-Rollout and distillation data generation:
+rollout 与蒸馏数据生成：
 
 - `temperature = 1.0`
 - `top_p = 0.95`
 - `max_episode_steps = 40`
 
-LoRA:
+LoRA：
 
 - `use_peft = true`
 - `lora_r = 32`
 - `lora_alpha = 64`
 - `lora_dropout = 0.05`
-- Full-parameter fine-tuning is out of scope for this project.
+- 本项目不支持全参数微调。
 
-Training defaults:
+训练默认值：
 
 - `learning_rate = 1e-5`
 - `per_device_train_batch_size = 2`
 - `gradient_accumulation_steps = 4`
 - `num_train_epochs = 3`
 
-These defaults intentionally match the OPD-Evolver paper where applicable and
-can be overridden from config files or CLI flags.
+这些默认值在适用位置与 OPD-Evolver 论文保持一致，也可以通过配置文件或 CLI flag 覆盖。
 
-## Project Architecture
+## 项目架构
 
-The repository will be organized around small modules with clear boundaries:
+仓库按照职责清晰的小模块组织：
 
 - `configs/`
-  - Model, LoRA, rollout, memory, tau3 retail, and OPD training settings.
+  - 模型、LoRA、rollout、memory、tau3 retail 和 OPD 训练配置。
 - `src/tau3_retail_evolver/envs/`
-  - Tau3 retail adapter interface, mock adapter, and real adapter scaffold.
+  - Tau3 retail 适配器接口、mock 适配器和真实 tau2-backed 适配器。
 - `src/tau3_retail_evolver/memory/`
-  - Four-tier memory store, retrieval, formatting, scoring, and maintenance
-    operations.
+  - 四层记忆存储、检索、格式化、评分和维护操作。
 - `src/tau3_retail_evolver/fast_loop/`
-  - Retail rollout, selection, execution, writing, maintenance orchestration,
-    and logging.
+  - Retail rollout、选择、执行、写入、维护编排和日志。
 - `src/tau3_retail_evolver/slow_loop/`
-  - Attribution, hindsight construction, OPD example building, and token-level
-    distillation training.
+  - 归因、后见信息构造、OPD 样本构建和 token 级蒸馏训练。
 - `src/tau3_retail_evolver/models/`
-  - Qwen model loading, LoRA loading/saving, tokenizer handling, and teacher
-    plus student wrappers.
+  - Qwen 模型加载、LoRA 加载与保存、tokenizer 处理，以及教师和学生调用封装。
 - `scripts/`
-  - One-command entry points for rollout, attribution, OPD training, evaluation,
-    and an end-to-end iteration.
+  - rollout、归因、OPD 训练、评测和端到端 iteration 的单命令入口。
 - `tests/`
-  - Unit tests for memory scoring, adapter behavior, loop logging, and example
-    construction.
+  - memory 评分、适配器行为、循环日志和样本构造的单元测试。
 
-## Data Layout
+## 数据布局
 
-Runtime artifacts are stored under `runs/` and ignored by git:
+运行时 artifact 存放在 `runs/` 下，并由 git 忽略：
 
 - `runs/<run_id>/rollouts/*.jsonl`
 - `runs/<run_id>/memory/*.jsonl`
@@ -287,72 +205,47 @@ Runtime artifacts are stored under `runs/` and ignored by git:
 - `runs/<run_id>/checkpoints/`
 - `runs/<run_id>/eval/`
 
-Each run root also contains `manifest.json`, including the model revision,
-LoRA revision, tau2-bench commit, split hash, task IDs, seeds, user-simulator
-configuration, memory snapshot ID, and parent checkpoint.
+每个 run 根目录还包含 `manifest.json`，其中记录模型 revision、LoRA revision、tau2-bench commit、split hash、任务 ID、seed、用户模拟器配置、memory snapshot ID 和 parent checkpoint。
 
-Each logged event should preserve enough information to reconstruct:
+每条日志事件必须保留足够信息，以便重建：
 
-- Retrieved candidates `C_t`
-- Selected memories `S_t`
-- Episode trajectory `tau_t`
-- Return `R_t`
-- Written memory updates `Delta_t`
-- Maintenance trajectory `eta_q`
-- Task group `g(t)`
+- 检索候选 `C_t`
+- 选中记忆 `S_t`
+- episode 轨迹 `tau_t`
+- return `R_t`
+- 写入的记忆更新 `Delta_t`
+- 维护轨迹 `eta_q`
+- 任务组 `g(t)`
 
-## Testing Strategy
+## 测试策略
 
-The first implementation should be testable without downloading Qwen3.5-9B or
-running tau3-bench:
+首个实现版本必须能够在不下载 Qwen3.5-9B、不运行 tau3-bench 的情况下测试：
 
-- Mock retail tasks validate the adapter and fast-loop control flow.
-- Deterministic fake policies validate selection, writing, and maintenance
-  logs.
-- Synthetic rollouts validate outcome-calibrated attribution.
-- Small toy logits validate token-level KL loss plumbing.
-- CLI smoke tests validate config loading and run-directory creation.
+- Mock retail 任务验证适配器和快循环控制流。
+- 确定性的 fake policy 验证选择、写入和维护日志。
+- 合成 rollout 验证结果校准的归因。
+- 小型 toy logits 验证 token 级 KL loss 链路。
+- CLI smoke test 验证配置加载和 run 目录创建。
 
-GPU-heavy model tests are separate integration tests and should be skipped by
-default unless the required environment variables and model checkpoints are
-available.
+高 GPU 开销的模型测试作为独立 integration test，默认跳过；仅在所需环境变量和模型 checkpoint 可用时运行。
 
-## Open Integration Points
+## 待接入项
 
-The tau2-bench checkout and Qwen3.5-9B weights are external runtime
-dependencies and are not committed to this repository. The user-simulator
-model remains an explicit configuration choice because it affects credentials,
-cost, and reproducibility; omitting it delegates to the default of the pinned
-tau2-bench revision, and the resolved configuration is still recorded in the
-run manifest.
+tau2-bench checkout 和 Qwen3.5-9B 权重是外部运行时依赖，不提交到本仓库。用户模拟器模型保持为显式配置，因为它会影响凭证、成本和可复现性；省略时使用固定 tau2-bench revision 的默认值，但解析后的实际配置仍必须记录到 run manifest。
 
-The official OPD-Evolver repository is treated as an implementation reference.
-If implementation-time inspection shows reusable code that is compatible with
-this project's license and dependency constraints, the implementation plan
-should either vendor that code with attribution or wrap it through a clearly
-documented adapter.
+官方 OPD-Evolver 仓库作为实现参考。如果实施阶段发现其中存在与本项目 license 和依赖约束兼容的可复用代码，实施计划必须选择以下方式之一：附带来源说明后 vendoring，或通过文档清晰的适配器进行封装。
 
-## Acceptance Criteria
+## 验收标准
 
-The project is successful when it provides:
+项目在满足以下条件时视为成功：
 
-- A reproducible Python project with configs and scripts for tau3 retail
-  OPD-Evolver training.
-- A real adapter for the pinned `sierra-research/tau2-bench` retail Gym
-  environment, plus an offline fake for tests.
-- Enforced split isolation: `train` for learning, `test` for evaluation,
-  `base` for optional reproduction, and no default dev split.
-- A fast loop that logs retail on-policy rollouts and four-tier memory lifecycle
-  events.
-- A slow loop that builds selection, execution, writing, and maintenance OPD
-  examples from logged trajectories.
-- A LoRA training entry point with defaults:
-  `use_peft=true`, `lora_r=32`, `lora_alpha=64`.
-- A shared-policy OPD trainer that computes stop-gradient teacher logits on
-  student-sampled prefixes and response-token KL, rather than SFT loss.
-- Test evaluators for frozen-memory `test_static` and quarantined
-  paper-compatible `test_streaming`, both with a frozen checkpoint and official
-  tau2 reward details plus reproducibility metadata.
-- Documentation that explains how the tau3 retail fast loop and slow loop map
-  to the OPD-Evolver paper and official repository.
-- Unit tests that pass without requiring large model downloads.
+- 提供可复现的 Python 项目，包括 tau3 retail OPD-Evolver 训练所需的配置和脚本。
+- 提供固定版本 `sierra-research/tau2-bench` retail Gym 环境的真实适配器，以及用于测试的离线 fake。
+- 强制执行 split 隔离：`train` 用于学习，`test` 用于评测，`base` 仅用于可选复现，并且默认不创建 dev。
+- 快循环能够记录 retail 同策略 rollout 和四层记忆生命周期事件。
+- 慢循环能够从日志轨迹构建选择、执行、写入和维护四类 OPD 样本。
+- 提供 LoRA 训练入口，默认值为 `use_peft=true`、`lora_r=32`、`lora_alpha=64`。
+- 共享策略 OPD trainer 在学生采样前缀上计算 stop-gradient 教师 logits 和 response-token KL，而不是 SFT loss。
+- 提供冻结 memory 的 `test_static` 评测器和与论文兼容、隔离运行的 `test_streaming` 评测器；两者均冻结 checkpoint，并保留官方 tau2 reward 详情和可复现性元数据。
+- 文档清晰说明 tau3 retail 快循环和慢循环如何对应 OPD-Evolver 论文及官方仓库。
+- 单元测试无需下载大模型即可通过。
