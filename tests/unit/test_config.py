@@ -46,6 +46,16 @@ def test_load_config_applies_typed_overrides() -> None:
     assert config.training.seed == 7
 
 
+def test_user_simulator_may_differ_from_agent_model() -> None:
+    config = load_config(
+        PROJECT_ROOT / "configs" / "default.yaml",
+        overrides=("tau2.user_llm=Qwen/Qwen3.5-4B",),
+    )
+
+    assert config.tau2.user_llm == "Qwen/Qwen3.5-4B"
+    assert config.model.base_model == "Qwen/Qwen3.5-9B"
+
+
 @pytest.mark.parametrize(
     ("override", "message"),
     (

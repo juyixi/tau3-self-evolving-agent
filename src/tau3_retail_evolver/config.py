@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class _ConfigModel(BaseModel):
@@ -55,12 +55,6 @@ class ProjectConfig(_ConfigModel):
     rollout: RolloutConfig = Field(default_factory=RolloutConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
-
-    @model_validator(mode="after")
-    def share_the_configured_model(self) -> ProjectConfig:
-        if self.tau2.user_llm != self.model.base_model:
-            raise ValueError("tau2.user_llm must match model.base_model")
-        return self
 
 
 def load_config(path: Path, overrides: Sequence[str] = ()) -> ProjectConfig:
