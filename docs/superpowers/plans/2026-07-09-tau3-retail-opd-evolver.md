@@ -1,5 +1,11 @@
 # Tau3 Retail OPD-Evolver Implementation Plan
 
+> **Status: superseded.** This monolithic draft is retained for history. Use
+> `docs/superpowers/plans/2026-07-10-tau3-retail-opd-evolver-staged.md` for
+> implementation. The staged plan replaces the placeholder environment adapter,
+> corrects the slow loop from SFT-style concatenation to same-prefix OPD KL, and
+> adds explicit train/test/base isolation and evaluation phases.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a testable Python training project for tau3-bench retail OPD-Evolver with Qwen3.5-9B as shared teacher/student and LoRA student updates.

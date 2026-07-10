@@ -29,6 +29,15 @@ The implementation must reference both OPD-Evolver sources:
 - Official code repository:
   - GitHub: https://github.com/bingreeky/opd-evolver
 
+The retail environment is provided by the current official tau benchmark
+repository:
+
+- Tau2-bench repository: https://github.com/sierra-research/tau2-bench
+- Gym adapter documentation:
+  https://github.com/sierra-research/tau2-bench/blob/main/src/tau2/gym/README.md
+- Retail task splits:
+  https://github.com/sierra-research/tau2-bench/blob/main/data/tau2/domains/retail/split_tasks.json
+
 The paper is the authoritative algorithm source. The repository is the
 engineering reference for executable OPD-Evolver patterns, especially the
 published executor OPD demonstration and project organization. Any tau3 retail
@@ -37,13 +46,15 @@ sources when making algorithmic or structural decisions.
 
 ## Algorithm Interpretation
 
-This project implements OPD-Evolver as an on-policy self-distillation system
-with a shared backbone:
+This project implements OPD-Evolver as on-policy distillation with a shared
+policy model. It must not be described or implemented as offline
+self-distillation:
 
 - Student: Qwen3.5-9B plus the current LoRA adapter, running only deployment
   inputs.
-- Teacher: Qwen3.5-9B with privileged hindsight context and stop-gradient
-  parameters, evaluated on the same prefixes sampled by the student.
+- Teacher: the same Qwen3.5-9B instance with the same current LoRA adapter,
+  given privileged hindsight context and evaluated under `no_grad` on the same
+  prefixes sampled by the student.
 - Training signal: token-level distillation loss on student-visited prefixes.
 - Scope: four lifecycle decisions from the paper:
   - `sel`: experience selection.
@@ -57,11 +68,19 @@ against those on-policy states.
 
 ## Tau3 Retail Environment Boundary
 
-Tau3 retail is represented by an environment adapter so the training framework
-can work before and after the exact tau3-bench package or local harness is
-available.
+The current official retail environment is consumed from
+`sierra-research/tau2-bench`. The project continues to use "tau3 retail" as its
+task-facing name, while integration code imports the official `tau2` Python
+package. Tau2-bench is an external pinned dependency, not vendored application
+code. The recommended local layout is `external/tau2-bench/`, ignored by git,
+installed with its `gym` extra in editable mode.
 
-The adapter exposes:
+Every real run records the tau2-bench Git commit, task split name, exact task
+IDs, split file hash, user-simulator settings, seed, and environment options in
+its run manifest. Unit tests use a mock or fake Gym object and do not require
+the external repository.
+
+The project adapter wraps `tau2.gym.gym_agent.AgentGymEnv` and exposes:
 
 - `reset(task_id | task_spec) -> observation`
 - `step(action) -> observation, reward, done, info`
@@ -69,9 +88,45 @@ The adapter exposes:
 - `metadata(task_spec) -> dict`
 - `success(info, reward, done) -> bool`
 
-The rest of the project depends only on this adapter interface. A mock retail
-adapter is acceptable for unit tests and dry runs, but real training scripts
-must be able to swap in a tau3-bench retail adapter without changing OPD code.
+The rest of the project depends only on this adapter interface. The adapter
+normalizes Gymnasium's `(observation, reward, terminated, truncated, info)`
+result, preserves official evaluator output from `info["reward_info"]`, and
+closes each environment after an episode. A mock retail adapter is used for
+unit tests and dry runs; real rollout and evaluation commands must use the
+tau2-backed adapter without changing OPD code.
+
+## Task Data And Split Policy
+
+No internal dev split is created by default. The official retail splits have
+one-way responsibilities:
+
+- `train`: the only source for fast-loop rollout collection, memory writing and
+  maintenance, outcome-calibrated attribution, privileged teacher hindsight,
+  and LoRA updates.
+- `test`: final or explicitly requested checkpoint evaluation only. Test tasks
+  must never produce training examples, attribution updates, model updates, or
+  mutations to train-derived memory.
+- `base`: optional reproduction of the official all-task aggregate only. It is
+  never a training source because it contains both train and test task IDs.
+
+The task loader must enforce this policy in code rather than relying on CLI
+convention. Training entry points reject `test` and `base`. Evaluation supports
+two separately labeled protocols:
+
+- `test_static`: opens a read-only snapshot of memory learned from `train`;
+  test episodes cannot mutate it or share newly written memories.
+- `test_streaming`: starts from an empty, evaluation-only memory repository and
+  allows the paper's fast-loop memory evolution across the test stream. That
+  repository is quarantined under the evaluation directory and all training
+  artifact loaders reject it.
+
+Neither protocol permits parameter updates, attribution dataset production, or
+checkpoint selection from test outcomes.
+
+The current official split file contains 74 train tasks, 40 test tasks, and 114
+base tasks. These counts are compatibility assertions for the pinned
+tau2-bench revision, not hard-coded task data; a revision change requires an
+explicit split review and manifest update.
 
 ## Fast Loop Design
 
@@ -150,6 +205,12 @@ conditions. The teacher is then evaluated on the same student-generated prefixes
 with the privileged hindsight appended. The training loss is token-level KL from
 the stop-gradient teacher distribution to the student distribution.
 
+The implementation must align response-token positions between the public
+student sequence and the longer privileged teacher sequence, and apply KL only
+to the sampled response tokens. Concatenating privileged teacher context into a
+single causal-language-model training string and applying ordinary next-token
+SFT loss is explicitly not an OPD implementation.
+
 The deployable artifact is only the student-facing LoRA adapter. Privileged
 hindsight contexts are never required at inference time.
 
@@ -226,6 +287,10 @@ Runtime artifacts are stored under `runs/` and ignored by git:
 - `runs/<run_id>/checkpoints/`
 - `runs/<run_id>/eval/`
 
+Each run root also contains `manifest.json`, including the model revision,
+LoRA revision, tau2-bench commit, split hash, task IDs, seeds, user-simulator
+configuration, memory snapshot ID, and parent checkpoint.
+
 Each logged event should preserve enough information to reconstruct:
 
 - Retrieved candidates `C_t`
@@ -254,9 +319,12 @@ available.
 
 ## Open Integration Points
 
-The exact tau3-bench retail package and task runner are not assumed to be
-installed in the empty project folder. The real adapter must be implemented
-behind the environment boundary once the local tau3 retail harness is available.
+The tau2-bench checkout and Qwen3.5-9B weights are external runtime
+dependencies and are not committed to this repository. The user-simulator
+model remains an explicit configuration choice because it affects credentials,
+cost, and reproducibility; omitting it delegates to the default of the pinned
+tau2-bench revision, and the resolved configuration is still recorded in the
+run manifest.
 
 The official OPD-Evolver repository is treated as an implementation reference.
 If implementation-time inspection shows reusable code that is compatible with
@@ -270,12 +338,21 @@ The project is successful when it provides:
 
 - A reproducible Python project with configs and scripts for tau3 retail
   OPD-Evolver training.
+- A real adapter for the pinned `sierra-research/tau2-bench` retail Gym
+  environment, plus an offline fake for tests.
+- Enforced split isolation: `train` for learning, `test` for evaluation,
+  `base` for optional reproduction, and no default dev split.
 - A fast loop that logs retail on-policy rollouts and four-tier memory lifecycle
   events.
 - A slow loop that builds selection, execution, writing, and maintenance OPD
   examples from logged trajectories.
 - A LoRA training entry point with defaults:
   `use_peft=true`, `lora_r=32`, `lora_alpha=64`.
+- A shared-policy OPD trainer that computes stop-gradient teacher logits on
+  student-sampled prefixes and response-token KL, rather than SFT loss.
+- Test evaluators for frozen-memory `test_static` and quarantined
+  paper-compatible `test_streaming`, both with a frozen checkpoint and official
+  tau2 reward details plus reproducibility metadata.
 - Documentation that explains how the tau3 retail fast loop and slow loop map
   to the OPD-Evolver paper and official repository.
 - Unit tests that pass without requiring large model downloads.
