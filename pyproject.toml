@@ -10,11 +10,15 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "pydantic>=2.10,<3",
     "PyYAML>=6.0,<7",
+    "audioop-lts>=0.2.2,<1; python_version >= '3.13'",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+    "tau2_integration: runs the real Tau2 retail checkout when RUN_TAU2_INTEGRATION=1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
