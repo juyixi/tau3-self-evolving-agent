@@ -25,6 +25,20 @@ class Tau2Runtime:
 
     @staticmethod
     def inspect(repo_path: Path) -> RuntimeFingerprint:
+        fingerprint = Tau2Runtime.inspect_metadata(repo_path)
+        Tau2Runtime.probe_gym(fingerprint.repo_path)
+        return RuntimeFingerprint(
+            repo_path=fingerprint.repo_path,
+            git_commit=fingerprint.git_commit,
+            package_version=fingerprint.package_version,
+            retail_tasks_path=fingerprint.retail_tasks_path,
+            retail_split_path=fingerprint.retail_split_path,
+            gym_available=True,
+        )
+
+    @staticmethod
+    def inspect_metadata(repo_path: Path) -> RuntimeFingerprint:
+        """Inspect checkout metadata and retail paths without importing Tau2."""
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.is_dir():
             raise RuntimeError(
@@ -44,15 +58,19 @@ class Tau2Runtime:
                 )
 
         package_version = _package_version(resolved_repo_path)
-        _require_tau2_gym(resolved_repo_path)
         return RuntimeFingerprint(
             repo_path=resolved_repo_path,
             git_commit=git_commit,
             package_version=package_version,
             retail_tasks_path=retail_tasks_path,
             retail_split_path=retail_split_path,
-            gym_available=True,
+            gym_available=False,
         )
+
+    @staticmethod
+    def probe_gym(repo_path: Path) -> None:
+        """Probe the exact AgentGymEnv module without retaining imported state."""
+        _require_tau2_gym(Path(repo_path).expanduser().resolve())
 
     @staticmethod
     def load_verified_gym_factory(repo_path: Path) -> Callable[..., Any]:

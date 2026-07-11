@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+import tau3_retail_evolver.envs.runtime as runtime_module
 from scripts import check_tau2_retail
 
 
@@ -63,11 +64,27 @@ def test_summaries_redact_nested_user_simulator_secrets(
         "solo_mode": False,
         "user_llm": "resolved-user-model",
         "user_llm_args": {
-            "api_key": "api-secret",
+            "provider_settings": {
+                "api_key": "api-secret",
+                "apiKey": "camel-api-secret",
+                "api_token": "api-token-secret",
+                "access_token": "access-token-secret",
+                "auth_token": "auth-token-secret",
+                "Authorization": "Bearer token-secret",
+                "client_secret": "client-secret-value",
+                "password": "password-secret",
+                "credentials": "credentials-secret",
+                "private_key": "private-key-secret",
+                "access_key": "access-key-secret",
+            },
             "nested": [
-                {"Authorization": "Bearer token-secret"},
-                {"client_secret": "client-secret-value"},
-                {"temperature": 0.0},
+                {
+                    "max_tokens": 512,
+                    "tokenizer": "tau-tokenizer",
+                    "token_count": 12,
+                    "max_completion_tokens": 256,
+                    "temperature": 0.0,
+                },
             ],
         },
         "credentials": "top-level-secret",
@@ -81,11 +98,27 @@ def test_summaries_redact_nested_user_simulator_secrets(
         "solo_mode": False,
         "user_llm": "resolved-user-model",
         "user_llm_args": {
-            "api_key": "[REDACTED]",
+            "provider_settings": {
+                "api_key": "[REDACTED]",
+                "apiKey": "[REDACTED]",
+                "api_token": "[REDACTED]",
+                "access_token": "[REDACTED]",
+                "auth_token": "[REDACTED]",
+                "Authorization": "[REDACTED]",
+                "client_secret": "[REDACTED]",
+                "password": "[REDACTED]",
+                "credentials": "[REDACTED]",
+                "private_key": "[REDACTED]",
+                "access_key": "[REDACTED]",
+            },
             "nested": [
-                {"Authorization": "[REDACTED]"},
-                {"client_secret": "[REDACTED]"},
-                {"temperature": 0.0},
+                {
+                    "max_tokens": 512,
+                    "tokenizer": "tau-tokenizer",
+                    "token_count": 12,
+                    "max_completion_tokens": 256,
+                    "temperature": 0.0,
+                },
             ],
         },
     }
@@ -101,57 +134,50 @@ def test_reset_summary_rejects_string_like_tools(tools: Any) -> None:
         )
 
 
-@pytest.mark.parametrize("contract_failure", ("pin mismatch", "split mismatch"))
+@pytest.mark.parametrize(
+    ("contract_failure", "message"),
+    (("pin mismatch", "pin mismatch"), ("split mismatch", "split count mismatch")),
+)
 def test_runtime_contract_failure_happens_before_gym_construction(
-    contract_failure: str, monkeypatch: pytest.MonkeyPatch
+    contract_failure: str,
+    message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    checkout = tmp_path / "external" / "tau2-bench"
+    retail_root = checkout / "data" / "tau2" / "domains" / "retail"
+    retail_root.mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text(
+        "[project]\nname = 'tau2-bench'\nversion = '1.0.0'\n", encoding="utf-8"
+    )
+    (retail_root / "tasks.json").write_text(
+        json.dumps([{"id": "0"}]), encoding="utf-8"
+    )
+    (retail_root / "split_tasks.json").write_text(
+        json.dumps({"train": ["0"], "test": [], "base": ["0"]}),
+        encoding="utf-8",
+    )
+    checkout.with_suffix(".commit").write_text(
+        ("b" if contract_failure == "pin mismatch" else "a") * 40,
+        encoding="utf-8",
+    )
     config = SimpleNamespace(
-        tau2=SimpleNamespace(repo_path=Path("external/tau2-bench")),
+        tau2=SimpleNamespace(repo_path=checkout),
         training=SimpleNamespace(seed=42),
     )
-    runtime = SimpleNamespace(
-        repo_path=Path("external/tau2-bench"),
-        git_commit="a" * 40,
-        package_version="1.0.0",
-        retail_tasks_path=Path("tasks.json"),
-        retail_split_path=Path("split_tasks.json"),
-    )
-
-    class RuntimeAPI:
-        inspect = staticmethod(lambda repo_path: runtime)
-
-        @staticmethod
-        def require_pinned_commit(fingerprint: Any) -> None:
-            if contract_failure == "pin mismatch":
-                raise RuntimeError(contract_failure)
-
-        @staticmethod
-        def load_verified_gym_factory(repo_path: Path) -> Any:
-            raise AssertionError("Gym factory must not load after contract failure")
-
-    class Catalog:
-        split_sha256 = "split-hash"
-
-        def require_official_compatibility(self) -> None:
-            if contract_failure == "split mismatch":
-                raise RuntimeError(contract_failure)
-
-        def task_ids(self, split: str) -> tuple[str, ...]:
-            return ("0",)
 
     def construct_environment(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Gym must not be constructed after contract failure")
 
+    def import_tau2(name: str) -> None:
+        raise AssertionError(f"Tau2 import must not run after contract failure: {name}")
+
     monkeypatch.setattr(check_tau2_retail, "load_config", lambda path: config)
-    monkeypatch.setattr(check_tau2_retail, "Tau2Runtime", RuntimeAPI)
-    monkeypatch.setattr(
-        check_tau2_retail,
-        "RetailTaskCatalog",
-        SimpleNamespace(from_files=lambda tasks_path, split_path: Catalog()),
-    )
+    monkeypatch.setattr(runtime_module, "_git_commit", lambda path: "a" * 40)
+    monkeypatch.setattr(runtime_module.importlib, "import_module", import_tau2)
     monkeypatch.setattr(check_tau2_retail, "Tau2RetailEnv", construct_environment)
 
-    with pytest.raises(RuntimeError, match=contract_failure):
+    with pytest.raises(RuntimeError, match=message):
         check_tau2_retail.main(["--split", "train", "--task-id", "0"])
 
 
@@ -184,9 +210,10 @@ def test_empty_initial_observation_is_blocked_without_leaking_simulation_run(
         check_tau2_retail,
         "Tau2Runtime",
         SimpleNamespace(
-            inspect=lambda repo_path: runtime,
+            inspect_metadata=lambda repo_path: runtime,
             require_pinned_commit=lambda fingerprint: None,
             load_verified_gym_factory=lambda repo_path: object(),
+            probe_gym=lambda repo_path: None,
         ),
     )
     monkeypatch.setattr(

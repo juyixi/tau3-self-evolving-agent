@@ -181,6 +181,37 @@ def test_runtime_probe_reports_checkout_metadata_without_leaking_sys_path(
     assert sys.path == before_sys_path
 
 
+def test_runtime_metadata_inspection_does_not_import_tau2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = tmp_path / "tau2-bench"
+    retail_root = checkout / "data" / "tau2" / "domains" / "retail"
+    retail_root.mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text(
+        "[project]\nname = 'tau2-bench'\nversion = '2.0.0'\n", encoding="utf-8"
+    )
+    _write_tasks(retail_root / "tasks.json", {"0"})
+    (retail_root / "split_tasks.json").write_text(
+        json.dumps({"train": ["0"], "test": [], "base": ["0"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runtime_module, "_git_commit", lambda path: "a" * 40)
+
+    def fail_import(name: str) -> None:
+        raise AssertionError(f"metadata inspection imported {name}")
+
+    monkeypatch.setattr(runtime_module.importlib, "import_module", fail_import)
+
+    fingerprint = Tau2Runtime.inspect_metadata(checkout)
+
+    assert fingerprint.repo_path == checkout.resolve()
+    assert fingerprint.git_commit == "a" * 40
+    assert fingerprint.package_version == "2.0.0"
+    assert fingerprint.retail_tasks_path == retail_root / "tasks.json"
+    assert fingerprint.retail_split_path == retail_root / "split_tasks.json"
+    assert fingerprint.gym_available is False
+
+
 def test_verified_gym_factory_rejects_agent_gym_from_another_checkout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

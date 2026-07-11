@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from tau3_retail_evolver.config import load_config
@@ -16,15 +17,20 @@ from tau3_retail_evolver.envs.tau2_retail import Tau2RetailEnv
 
 _REDACTED = "[REDACTED]"
 _USER_SIMULATOR_FIELDS = ("solo_mode", "user_llm", "user_llm_args")
-_CREDENTIAL_KEY_MARKERS = (
-    "apikey",
+_CREDENTIAL_TERMINAL_WORDS = {
     "token",
     "authorization",
     "secret",
+    "secrets",
     "password",
+    "passwords",
     "credential",
-    "privatekey",
-    "accesskey",
+    "credentials",
+}
+_CREDENTIAL_KEY_SUFFIXES = (
+    ("api", "key"),
+    ("private", "key"),
+    ("access", "key"),
 )
 
 
@@ -42,12 +48,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     require_learning_split(args.split)
 
     config = load_config(args.config)
-    runtime = Tau2Runtime.inspect(config.tau2.repo_path)
+    runtime = Tau2Runtime.inspect_metadata(config.tau2.repo_path)
     Tau2Runtime.require_pinned_commit(runtime)
     catalog = RetailTaskCatalog.from_files(runtime.retail_tasks_path, runtime.retail_split_path)
     catalog.require_official_compatibility()
     if args.task_id not in catalog.task_ids(args.split):
         raise ValueError(f"task {args.task_id!r} is not in the {args.split!r} retail split")
+
+    if args.inspect:
+        Tau2Runtime.probe_gym(runtime.repo_path)
 
     payload = {
         "status": "ok",
@@ -148,8 +157,13 @@ def _sanitize_value(value: Any) -> Any:
 
 
 def _is_credential_key(key: Any) -> bool:
-    normalized = "".join(character for character in str(key).casefold() if character.isalnum())
-    return any(marker in normalized for marker in _CREDENTIAL_KEY_MARKERS)
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key))
+    words = tuple(re.findall(r"[a-z0-9]+", separated.casefold()))
+    if not words:
+        return False
+    if words[-1] in _CREDENTIAL_TERMINAL_WORDS:
+        return True
+    return any(words[-len(suffix) :] == suffix for suffix in _CREDENTIAL_KEY_SUFFIXES)
 
 
 def _print_payload(payload: Mapping[str, Any]) -> None:
