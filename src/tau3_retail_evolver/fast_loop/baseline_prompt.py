@@ -28,16 +28,22 @@ def build_baseline_prompt(
     tools = reset_info.get("tools")
     if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
         raise ValueError("Tau2 reset info must contain a sequence of tools")
-    if not all(isinstance(tool, Mapping) for tool in tools):
-        raise ValueError("Tau2 tools must be mappings")
+    normalized_tools = tuple(_normalize_tool(tool) for tool in tools)
 
     messages = [{"role": "system", "content": _policy_content(policy)}]
     messages.extend(_public_history(history))
     messages.append({"role": "user", "content": observation})
     return BaselinePrompt(
         messages=tuple(messages),
-        tools=tuple(deepcopy(dict(tool)) for tool in tools),
+        tools=normalized_tools,
     )
+
+
+def _normalize_tool(tool: Any) -> dict[str, Any]:
+    schema = tool if isinstance(tool, Mapping) else getattr(tool, "openai_schema", None)
+    if not isinstance(schema, Mapping):
+        raise ValueError("Tau2 tools must be mappings or expose an openai_schema mapping")
+    return deepcopy(dict(schema))
 
 
 def _policy_content(policy: Any) -> str:

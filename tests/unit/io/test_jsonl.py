@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tau3_retail_evolver.io.jsonl import JsonlWriter
+import tau3_retail_evolver.io.jsonl as jsonl
 
 
 def test_appends_one_canonical_json_object_per_durable_line(tmp_path: Path) -> None:
@@ -27,3 +28,14 @@ def test_refuses_non_json_safe_event_values(tmp_path: Path) -> None:
         assert "JSON serializable" in str(error)
     else:
         raise AssertionError("expected JSON-safe validation failure")
+
+
+def test_best_effort_syncs_the_parent_directory_after_an_append(
+    monkeypatch, tmp_path: Path
+) -> None:
+    synced: list[Path] = []
+    monkeypatch.setattr(jsonl, "_fsync_directory", synced.append)
+
+    JsonlWriter(tmp_path / "events.jsonl").append({"event_type": "EpisodeStarted"})
+
+    assert synced == [tmp_path]

@@ -29,6 +29,7 @@ class FakeGymEnv:
             },
         )
         self.step_results: list[tuple[str, float, bool, bool, Mapping[str, Any]]] = []
+        self.actions: list[str] = []
         self.close_calls = 0
         type(self).instances.append(self)
 
@@ -36,6 +37,7 @@ class FakeGymEnv:
         return self.reset_result
 
     def step(self, action: str) -> tuple[str, float, bool, bool, Mapping[str, Any]]:
+        self.actions.append(action)
         return self.step_results.pop(0)
 
     def close(self) -> None:
@@ -230,6 +232,40 @@ def test_close_is_idempotent_and_context_manager_closes_once(config: ProjectConf
         environment.close()
 
     assert FakeGymEnv.instances[0].close_calls == 1
+
+
+def test_close_stops_an_active_nonterminal_episode_before_closing_the_gym(
+    config: ProjectConfig,
+) -> None:
+    environment = Tau2RetailEnv("task-17", config, gym_factory=FakeGymEnv)
+    gym = FakeGymEnv.instances[0]
+    environment.reset(seed=123)
+    gym.step_results.append(("stopped", 0.0, True, False, {}))
+
+    environment.close()
+
+    assert gym.actions == ["###STOP###"]
+    assert gym.close_calls == 1
+
+
+def test_close_does_not_send_stop_before_reset_or_after_a_terminal_step(
+    config: ProjectConfig,
+) -> None:
+    before_reset = Tau2RetailEnv("task-before", config, gym_factory=FakeGymEnv)
+    before_reset_gym = FakeGymEnv.instances[0]
+    before_reset.close()
+
+    terminal = Tau2RetailEnv("task-terminal", config, gym_factory=FakeGymEnv)
+    terminal_gym = FakeGymEnv.instances[1]
+    terminal.reset(seed=123)
+    terminal_gym.step_results.append(("done", 1.0, True, False, {}))
+    terminal.step("lookup")
+    terminal.close()
+
+    assert before_reset_gym.actions == []
+    assert before_reset_gym.close_calls == 1
+    assert terminal_gym.actions == ["lookup"]
+    assert terminal_gym.close_calls == 1
 
 
 def test_factory_creates_a_train_tau2_retail_environment(config: ProjectConfig) -> None:

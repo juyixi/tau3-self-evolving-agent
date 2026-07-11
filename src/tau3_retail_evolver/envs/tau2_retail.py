@@ -6,6 +6,7 @@ from typing import Any
 
 from tau3_retail_evolver.config import ProjectConfig
 from tau3_retail_evolver.envs.base import ResetResult, StepResult
+from tau3_retail_evolver.fast_loop.action_codec import TAU2_STOP_ACTION
 
 
 GymFactory = Callable[..., Any]
@@ -25,6 +26,8 @@ class Tau2RetailEnv:
         self._max_episode_steps = config.rollout.max_episode_steps
         self._episode_step = 0
         self._closed = False
+        self._reset_succeeded = False
+        self._terminal = False
         factory = gym_factory if gym_factory is not None else _load_agent_gym_env
         try:
             self._gym = factory(
@@ -53,6 +56,8 @@ class Tau2RetailEnv:
         except Exception as error:
             raise self._contextual_error("reset", self._episode_step, error) from error
         self._episode_step = 0
+        self._reset_succeeded = True
+        self._terminal = False
         return ResetResult(observation=observation, info=info)
 
     def step(self, action: str) -> StepResult:
@@ -64,6 +69,7 @@ class Tau2RetailEnv:
 
         self._episode_step = next_step
         truncated = truncated or next_step >= self._max_episode_steps
+        self._terminal = terminated or truncated
         return StepResult(
             observation=observation,
             reward=reward,
@@ -77,10 +83,20 @@ class Tau2RetailEnv:
         if self._closed:
             return
         self._closed = True
+        stop_error: Exception | None = None
+        try:
+            if self._reset_succeeded and not self._terminal:
+                self._gym.step(TAU2_STOP_ACTION)
+        except Exception as error:
+            stop_error = error
         try:
             self._gym.close()
         except Exception as error:
+            if stop_error is not None:
+                error.add_note(f"Tau2 stop cleanup also failed: {stop_error}")
             raise self._contextual_error("close", self._episode_step, error) from error
+        if stop_error is not None:
+            raise self._contextual_error("stop cleanup", self._episode_step, stop_error) from stop_error
 
     def __enter__(self) -> Tau2RetailEnv:
         return self

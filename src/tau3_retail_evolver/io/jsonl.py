@@ -23,3 +23,19 @@ class JsonlWriter:
             destination.write(f"{line}\n")
             destination.flush()
             os.fsync(destination.fileno())
+        _fsync_directory(self.path.parent)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Best-effort directory sync; Windows commonly rejects directory handles."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)

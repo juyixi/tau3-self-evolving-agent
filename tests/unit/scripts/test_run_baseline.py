@@ -79,6 +79,14 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
     class FakeEnvironment:
         def __init__(self, task_id: str, config: Any, gym_factory: Any) -> None:
             captured.setdefault("environments", []).append((task_id, gym_factory))
+            self.user_simulator_config = {
+                "solo_mode": False,
+                "user_llm": "resolved-simulator-model",
+                "user_llm_args": {"api_key": "resolved-secret", "temperature": 0.2},
+            }
+
+        def close(self) -> None:
+            captured["probe_close_calls"] = captured.get("probe_close_calls", 0) + 1
 
     def construct_client(**kwargs: Any) -> object:
         client_args.update(kwargs)
@@ -90,7 +98,8 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         captured["tasks"] = tasks
         captured["policy"] = policy
         captured["context"] = context
-        env_factory("task-1")
+        environment = env_factory("task-1")
+        environment.close()
         return RolloutSummary(episodes=())
 
     monkeypatch.setenv("QWEN_API_KEY", "top-secret-key")
@@ -154,18 +163,41 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
     assert captured["context"].adapter_revision is None
     assert captured["context"].memory_snapshot_id is None
     assert captured["context"].seed == 17
-    assert captured["environments"] == [("task-1", "verified-gym-factory")]
+    assert captured["environments"] == [
+        ("task-1", "verified-gym-factory"),
+        ("task-1", "verified-gym-factory"),
+    ]
+    assert captured["probe_close_calls"] == 2
     assert client_args == {
         "base_url": "http://qwen.invalid/v1",
         "model": "Qwen/Qwen3.5-9B",
         "api_key": "top-secret-key",
+        "max_tokens": 8192,
         "generation_settings": {
-            "chat_template_kwargs": {"enable_thinking": False},
+            "chat_template_kwargs": {"enable_thinking": True},
+            "top_k": 20,
+            "presence_penalty": 1.5,
             "parallel_tool_calls": False,
         },
     }
     assert manifest["task_ids"] == ["task-1", "task-2"]
-    assert manifest["user_simulator_config"]["user_llm_args"]["api_key"] == "[REDACTED]"
+    assert manifest["iteration"] == 0
+    assert manifest["parent_checkpoint"] is None
+    assert manifest["user_simulator_config"] == {
+        "solo_mode": False,
+        "user_llm": "resolved-simulator-model",
+        "user_llm_args": {"api_key": "[REDACTED]", "temperature": 0.2},
+    }
+    assert manifest["model_serving_contract"] == {
+        "language_model_only": True,
+        "reasoning_parser": "qwen3",
+        "tool_call_parser": "qwen3_coder",
+        "enable_thinking": True,
+        "max_tokens": 8192,
+        "top_k": 20,
+        "presence_penalty": 1.5,
+        "parallel_tool_calls": False,
+    }
     assert manifest["rollout_options"] == {
         "max_episode_steps": 40,
         "temperature": 1.0,
@@ -174,3 +206,19 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
     assert "top-secret-key" not in manifest_text
     assert "simulator-secret" not in manifest_text
     assert "top-secret-key" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "ftp://qwen.invalid/v1",
+        "https://secret@qwen.invalid/v1",
+        "https://qwen.invalid/v1?token=secret",
+        "https://qwen.invalid/v1#secret",
+    ),
+)
+def test_rejects_credential_or_non_http_qwen_urls_without_echoing_them(url: str) -> None:
+    with pytest.raises(ValueError) as error:
+        run_baseline._validate_qwen_base_url(url)
+
+    assert "secret" not in str(error.value)
