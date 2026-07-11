@@ -135,14 +135,14 @@
 ### 任务 1.4：真实环境 Smoke Gate
 
 **文件：**
-- 创建：`scripts/check_tau2_retail.py`
+- 创建：`tools/preflight/check_tau2_retail.py`
 - 创建：`tests/integration/test_real_tau2_retail.py`
 - 修改：`pytest.ini` 或 `pyproject.toml` 中的 marker
 
 - [ ] 添加 `tau2_integration` marker；仅当 `RUN_TAU2_INTEGRATION=1` 时运行。
 - [ ] 让脚本输出 tau2 commit、split hash、选中的 train task ID、tool 数量、policy hash、初始 observation 长度和解析后的用户模拟器配置。
 - [ ] 使用 `uv pip install -e "external/tau2-bench[gym]"` 安装固定版本的 checkout。
-- [ ] 在用户模拟器凭证和配置有效时运行 `python -m scripts.check_tau2_retail --split train --task-id 0`。
+- [ ] 在用户模拟器凭证和配置有效时运行 `python -m tools.preflight.check_tau2_retail --split train --task-id 0`。
 - [ ] 运行 `pytest -m tau2_integration tests/integration/test_real_tau2_retail.py -v`，确认真实 reset/close 流程通过。
 - [ ] 将 pin 写入 `external/tau2-bench.commit`；只提交该文本 pin，绝不提交外部 checkout。
 - [ ] 提交为 `test: verify real tau2 retail environment`。

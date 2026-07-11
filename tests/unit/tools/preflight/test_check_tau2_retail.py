@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 import tau3_retail_evolver.envs.runtime as runtime_module
-from scripts import check_tau2_retail
+from tools.preflight import check_tau2_retail
 
 
 class EmptyObservationEnvironment:

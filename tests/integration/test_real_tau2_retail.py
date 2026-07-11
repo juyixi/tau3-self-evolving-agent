@@ -34,7 +34,7 @@ EXPECTED_USER_SIMULATOR_CONFIG = {
 
 def run_smoke(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "scripts.check_tau2_retail", *args],
+        [sys.executable, "-m", "tools.preflight.check_tau2_retail", *args],
         cwd=WORKTREE_ROOT,
         capture_output=True,
         text=True,
