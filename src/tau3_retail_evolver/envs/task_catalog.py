@@ -9,6 +9,8 @@ from typing import Any, Literal
 
 SplitName = Literal["train", "test", "base"]
 _REQUIRED_SPLITS = ("train", "test", "base")
+OFFICIAL_SPLIT_COUNTS = {"train": 74, "test": 40, "base": 114}
+OFFICIAL_SPLIT_SHA256 = "235237983dd826c6c16989e90797e9d58f8ed52059020c9079e60069288147eb"
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,28 @@ class RetailTaskCatalog:
             return self._task_ids_by_split[split]
         except KeyError as error:
             raise ValueError(f"unknown retail split: {split!r}") from error
+
+    def require_official_compatibility(self) -> None:
+        actual_counts = {
+            split: len(self._task_ids_by_split[split]) for split in _REQUIRED_SPLITS
+        }
+        if actual_counts != OFFICIAL_SPLIT_COUNTS:
+            expected = ", ".join(
+                f"{split}={OFFICIAL_SPLIT_COUNTS[split]}" for split in _REQUIRED_SPLITS
+            )
+            actual = ", ".join(
+                f"{split}={actual_counts[split]}" for split in _REQUIRED_SPLITS
+            )
+            raise RuntimeError(
+                f"Tau2 retail split count mismatch: expected {expected}; resolved {actual}. "
+                "Restore the official split_tasks.json."
+            )
+        if self.split_sha256 != OFFICIAL_SPLIT_SHA256:
+            raise RuntimeError(
+                "Tau2 retail split hash mismatch: expected "
+                f"{OFFICIAL_SPLIT_SHA256}, resolved {self.split_sha256}. "
+                "Restore the official split_tasks.json."
+            )
 
 
 def _load_json(path: Path, label: str) -> Any:

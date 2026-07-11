@@ -18,7 +18,10 @@ rollout:
   top_p: 0.95
   max_episode_steps: 40
 memory:
-  enabled: true
-  max_entries: 1000
+  tiers: [trajectory, tip, skill, tool]
+  retrieve_top_k: 50
+  teacher_memory_cap: 20
+  score_threshold: 0.01
+  maintenance_period: 30
 training:
   seed: 42

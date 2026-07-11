@@ -14,6 +14,20 @@ from tau3_retail_evolver.envs.runtime import Tau2Runtime
 from tau3_retail_evolver.envs.tau2_retail import Tau2RetailEnv
 
 
+_REDACTED = "[REDACTED]"
+_USER_SIMULATOR_FIELDS = ("solo_mode", "user_llm", "user_llm_args")
+_CREDENTIAL_KEY_MARKERS = (
+    "apikey",
+    "token",
+    "authorization",
+    "secret",
+    "password",
+    "credential",
+    "privatekey",
+    "accesskey",
+)
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Smoke-check the real Tau2 retail environment.")
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
@@ -29,7 +43,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     config = load_config(args.config)
     runtime = Tau2Runtime.inspect(config.tau2.repo_path)
+    Tau2Runtime.require_pinned_commit(runtime)
     catalog = RetailTaskCatalog.from_files(runtime.retail_tasks_path, runtime.retail_split_path)
+    catalog.require_official_compatibility()
     if args.task_id not in catalog.task_ids(args.split):
         raise ValueError(f"task {args.task_id!r} is not in the {args.split!r} retail split")
 
@@ -46,7 +62,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_payload(payload)
         return 0
 
-    environment = Tau2RetailEnv(args.task_id, config)
+    gym_factory = Tau2Runtime.load_verified_gym_factory(runtime.repo_path)
+    environment = Tau2RetailEnv(args.task_id, config, gym_factory=gym_factory)
     user_simulator_config = environment.user_simulator_config
     try:
         with environment:
@@ -85,7 +102,7 @@ def _reset_summary(
             user_simulator_config,
         )
     tools = info.get("tools")
-    if not isinstance(tools, Sequence):
+    if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes, bytearray)):
         raise RuntimeError("Tau2 reset did not return a sequence of tools")
     policy = info.get("policy")
     if not isinstance(policy, str):
@@ -94,7 +111,7 @@ def _reset_summary(
         "tool_count": len(tools),
         "policy_sha256": hashlib.sha256(policy.encode("utf-8")).hexdigest(),
         "initial_observation_length": len(observation),
-        "user_simulator_config": dict(user_simulator_config),
+        "user_simulator_config": _sanitize_user_simulator_config(user_simulator_config),
     }
 
 
@@ -107,8 +124,32 @@ def _blocked_reset_summary(
         "tool_count": None,
         "policy_sha256": None,
         "initial_observation_length": None,
-        "user_simulator_config": dict(user_simulator_config),
+        "user_simulator_config": _sanitize_user_simulator_config(user_simulator_config),
     }
+
+
+def _sanitize_user_simulator_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        field: _sanitize_value(config[field])
+        for field in _USER_SIMULATOR_FIELDS
+        if field in config
+    }
+
+
+def _sanitize_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _REDACTED if _is_credential_key(key) else _sanitize_value(nested)
+            for key, nested in value.items()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_sanitize_value(item) for item in value]
+    return value
+
+
+def _is_credential_key(key: Any) -> bool:
+    normalized = "".join(character for character in str(key).casefold() if character.isalnum())
+    return any(marker in normalized for marker in _CREDENTIAL_KEY_MARKERS)
 
 
 def _print_payload(payload: Mapping[str, Any]) -> None:

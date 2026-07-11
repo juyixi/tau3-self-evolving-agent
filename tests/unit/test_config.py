@@ -34,6 +34,13 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.rollout.temperature == 1.0
     assert config.rollout.top_p == 0.95
     assert config.rollout.max_episode_steps == 40
+    assert config.memory.model_dump() == {
+        "tiers": ("trajectory", "tip", "skill", "tool"),
+        "retrieve_top_k": 50,
+        "teacher_memory_cap": 20,
+        "score_threshold": 0.01,
+        "maintenance_period": 30,
+    }
 
 
 def test_load_config_applies_typed_overrides() -> None:

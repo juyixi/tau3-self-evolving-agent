@@ -40,8 +40,16 @@ class RolloutConfig(_ConfigModel):
 
 
 class MemoryConfig(_ConfigModel):
-    enabled: bool = True
-    max_entries: int = 1000
+    tiers: tuple[Literal["trajectory", "tip", "skill", "tool"], ...] = (
+        "trajectory",
+        "tip",
+        "skill",
+        "tool",
+    )
+    retrieve_top_k: int = 50
+    teacher_memory_cap: int = 20
+    score_threshold: float = 0.01
+    maintenance_period: int = 30
 
 
 class TrainingConfig(_ConfigModel):
