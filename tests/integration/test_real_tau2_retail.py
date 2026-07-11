@@ -22,9 +22,13 @@ WORKTREE_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_COMMIT = "1901a301961cbbe3fd11f3e84a2a376530c759e3"
 EXPECTED_SPLIT_HASH = "235237983dd826c6c16989e90797e9d58f8ed52059020c9079e60069288147eb"
 EXPECTED_USER_SIMULATOR_CONFIG = {
-    "solo_mode": True,
-    "user_llm": "Qwen/Qwen3.5-9B",
-    "user_llm_args": {"temperature": 0.0},
+    "solo_mode": False,
+    "user_llm": "deepseek/deepseek-v4-pro",
+    "user_llm_args": {
+        "thinking": {"type": "disabled"},
+        "temperature": 0.0,
+        "max_tokens": 8192,
+    },
 }
 
 

@@ -3,9 +3,13 @@ tau2:
   domain: retail
   train_split: train
   eval_split: test
-  user_llm: Qwen/Qwen3.5-9B
-  user_llm_args: {}
-  solo_mode: true
+  user_llm: deepseek/deepseek-v4-pro
+  user_llm_args:
+      thinking:
+        type: disabled
+      temperature: 0.0
+      max_tokens: 8192
+  solo_mode: false
 model:
   base_model: Qwen/Qwen3.5-9B
 lora:
