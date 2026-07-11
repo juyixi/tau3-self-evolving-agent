@@ -32,6 +32,15 @@ _CREDENTIAL_KEY_SUFFIXES = (
     ("private", "key"),
     ("access", "key"),
 )
+_COMPACT_CREDENTIAL_KEYS = {
+    "apikey",
+    "apitoken",
+    "accesstoken",
+    "authtoken",
+    "clientsecret",
+    "privatekey",
+    "accesskey",
+}
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -157,7 +166,12 @@ def _sanitize_value(value: Any) -> Any:
 
 
 def _is_credential_key(key: Any) -> bool:
-    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key))
+    key_text = str(key)
+    compact = "".join(re.findall(r"[a-z0-9]+", key_text.casefold()))
+    if compact in _COMPACT_CREDENTIAL_KEYS:
+        return True
+    separated = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", key_text)
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", separated)
     words = tuple(re.findall(r"[a-z0-9]+", separated.casefold()))
     if not words:
         return False
