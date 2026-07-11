@@ -15,7 +15,11 @@ class BaselinePrompt:
     tools: tuple[dict[str, Any], ...]
 
 
-def build_baseline_prompt(observation: str, reset_info: Mapping[str, Any]) -> BaselinePrompt:
+def build_baseline_prompt(
+    observation: str,
+    reset_info: Mapping[str, Any],
+    history: Sequence[Mapping[str, str]] = (),
+) -> BaselinePrompt:
     """Build a public decision prompt from Tau2's official reset payload."""
     policy = reset_info.get("policy")
     if policy is None:
@@ -27,11 +31,11 @@ def build_baseline_prompt(observation: str, reset_info: Mapping[str, Any]) -> Ba
     if not all(isinstance(tool, Mapping) for tool in tools):
         raise ValueError("Tau2 tools must be mappings")
 
+    messages = [{"role": "system", "content": _policy_content(policy)}]
+    messages.extend(_public_history(history))
+    messages.append({"role": "user", "content": observation})
     return BaselinePrompt(
-        messages=(
-            {"role": "system", "content": _policy_content(policy)},
-            {"role": "user", "content": observation},
-        ),
+        messages=tuple(messages),
         tools=tuple(deepcopy(dict(tool)) for tool in tools),
     )
 
@@ -43,3 +47,19 @@ def _policy_content(policy: Any) -> str:
         return json.dumps(policy, sort_keys=True)
     except (TypeError, ValueError) as error:
         raise ValueError("Tau2 reset policy must be JSON serializable") from error
+
+
+def _public_history(history: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
+    if isinstance(history, (str, bytes)):
+        raise ValueError("prior message history must be a sequence of messages")
+
+    messages: list[dict[str, str]] = []
+    for message in history:
+        if not isinstance(message, Mapping):
+            raise ValueError("prior message history must contain mappings")
+        role = message.get("role")
+        content = message.get("content")
+        if not isinstance(role, str) or not isinstance(content, str):
+            raise ValueError("prior messages must contain string role and content")
+        messages.append({"role": role, "content": content})
+    return messages

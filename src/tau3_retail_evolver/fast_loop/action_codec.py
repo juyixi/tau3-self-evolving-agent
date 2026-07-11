@@ -9,6 +9,7 @@ from typing import Any
 
 _THINKING_BLOCK = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _FUNCTION_PREFIX = re.compile(r"^\s*([A-Za-z_]\w*)\s*\(")
+TAU2_STOP_ACTION = "###STOP###"
 
 
 class Tau2ActionCodec:
@@ -22,7 +23,11 @@ class Tau2ActionCodec:
         action = _THINKING_BLOCK.sub("", model_output).strip()
         if not action:
             raise ValueError("model output has no final action")
+        if "<think>" in action.casefold():
+            raise ValueError("unterminated thinking block")
         if action == "stop":
+            return TAU2_STOP_ACTION
+        if action == TAU2_STOP_ACTION:
             return action
 
         if action.startswith("{"):

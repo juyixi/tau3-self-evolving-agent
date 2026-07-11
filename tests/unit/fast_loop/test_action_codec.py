@@ -42,10 +42,19 @@ def test_rejects_malformed_tool_arguments(action: str) -> None:
 
 
 def test_preserves_the_stop_action() -> None:
-    assert Tau2ActionCodec.decode("stop", TOOLS) == "stop"
+    assert Tau2ActionCodec.decode("stop", TOOLS) == "###STOP###"
+
+
+def test_preserves_the_official_tau2_stop_token() -> None:
+    assert Tau2ActionCodec.decode("###STOP###", TOOLS) == "###STOP###"
 
 
 def test_strips_thinking_blocks_without_losing_the_final_answer() -> None:
     model_output = "<think>Check the order state first.</think>I found your order."
 
     assert Tau2ActionCodec.decode(model_output, TOOLS) == "I found your order."
+
+
+def test_rejects_an_unterminated_thinking_block() -> None:
+    with pytest.raises(ValueError, match="unterminated thinking"):
+        Tau2ActionCodec.decode("<think>I need to inspect the order", TOOLS)
