@@ -46,56 +46,68 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_payload(payload)
         return 0
 
+    environment = Tau2RetailEnv(args.task_id, config)
+    user_simulator_config = environment.user_simulator_config
     try:
-        with Tau2RetailEnv(args.task_id, config) as environment:
+        with environment:
             reset_result = environment.reset(seed=config.training.seed)
     except RuntimeError as error:
         if "Retail domain does not support solo mode" not in str(error):
             raise
-        payload.update(_blocked_reset_summary(str(error), config.tau2))
+        payload.update(_blocked_reset_summary(str(error), user_simulator_config))
         payload["mode"] = "reset_close"
         _print_payload(payload)
         return 2
 
-    payload.update(_reset_summary(reset_result.observation, reset_result.info, config.tau2))
+    payload.update(
+        _reset_summary(
+            reset_result.observation,
+            reset_result.info,
+            user_simulator_config,
+        )
+    )
     payload["mode"] = "reset_close"
     _print_payload(payload)
-    return 0
+    return 2 if payload["status"] == "blocked" else 0
 
 
-def _reset_summary(observation: Any, info: Mapping[str, Any], tau2_config: Any) -> dict[str, Any]:
+def _reset_summary(
+    observation: Any,
+    info: Mapping[str, Any],
+    user_simulator_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(observation, str):
+        raise RuntimeError("Tau2 reset did not return a string observation")
+    if not observation.strip():
+        return _blocked_reset_summary(
+            "Tau2 reset returned an empty initial observation; "
+            "the user simulator may have failed to start",
+            user_simulator_config,
+        )
     tools = info.get("tools")
     if not isinstance(tools, Sequence):
         raise RuntimeError("Tau2 reset did not return a sequence of tools")
     policy = info.get("policy")
     if not isinstance(policy, str):
         raise RuntimeError("Tau2 reset did not return a policy string")
-    if not isinstance(observation, str):
-        raise RuntimeError("Tau2 reset did not return a string observation")
     return {
         "tool_count": len(tools),
         "policy_sha256": hashlib.sha256(policy.encode("utf-8")).hexdigest(),
         "initial_observation_length": len(observation),
-        "user_simulator_config": {
-            "solo_mode": tau2_config.solo_mode,
-            "user_llm": tau2_config.user_llm,
-            "user_llm_args": tau2_config.user_llm_args,
-        },
+        "user_simulator_config": dict(user_simulator_config),
     }
 
 
-def _blocked_reset_summary(reason: str, tau2_config: Any) -> dict[str, Any]:
+def _blocked_reset_summary(
+    reason: str, user_simulator_config: Mapping[str, Any]
+) -> dict[str, Any]:
     return {
         "status": "blocked",
         "block_reason": reason,
         "tool_count": None,
         "policy_sha256": None,
         "initial_observation_length": None,
-        "user_simulator_config": {
-            "solo_mode": tau2_config.solo_mode,
-            "user_llm": tau2_config.user_llm,
-            "user_llm_args": tau2_config.user_llm_args,
-        },
+        "user_simulator_config": dict(user_simulator_config),
     }
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from typing import Any
 
 from tau3_retail_evolver.config import ProjectConfig
@@ -37,6 +38,14 @@ class Tau2RetailEnv:
             )
         except Exception as error:
             raise self._contextual_error("construct", self._episode_step, error) from error
+
+    @property
+    def user_simulator_config(self) -> dict[str, Any]:
+        return {
+            "solo_mode": self._gym.solo_mode,
+            "user_llm": self._gym.user_llm,
+            "user_llm_args": deepcopy(self._gym.user_llm_args),
+        }
 
     def reset(self, seed: int) -> ResetResult:
         try:

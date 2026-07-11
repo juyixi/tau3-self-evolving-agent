@@ -21,6 +21,11 @@ pytestmark = [
 WORKTREE_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_COMMIT = "1901a301961cbbe3fd11f3e84a2a376530c759e3"
 EXPECTED_SPLIT_HASH = "235237983dd826c6c16989e90797e9d58f8ed52059020c9079e60069288147eb"
+EXPECTED_USER_SIMULATOR_CONFIG = {
+    "solo_mode": True,
+    "user_llm": "Qwen/Qwen3.5-9B",
+    "user_llm_args": {"temperature": 0.0},
+}
 
 
 def run_smoke(*args: str) -> subprocess.CompletedProcess[str]:
@@ -54,6 +59,12 @@ def test_real_tau2_retail_reset_and_close_emit_machine_readable_summary() -> Non
 
     payload = json.loads(result.stdout)
     if payload["status"] == "blocked":
+        assert result.returncode == 2
+        assert "Retail domain does not support solo mode" in payload["block_reason"]
+        assert payload["tool_count"] is None
+        assert payload["policy_sha256"] is None
+        assert payload["initial_observation_length"] is None
+        assert payload["user_simulator_config"] == EXPECTED_USER_SIMULATOR_CONFIG
         pytest.skip(payload["block_reason"])
 
     assert result.returncode == 0, result.stderr
@@ -66,8 +77,4 @@ def test_real_tau2_retail_reset_and_close_emit_machine_readable_summary() -> Non
     assert payload["tool_count"] > 0
     assert len(payload["policy_sha256"]) == 64
     assert payload["initial_observation_length"] > 0
-    assert payload["user_simulator_config"] == {
-        "solo_mode": True,
-        "user_llm": "Qwen/Qwen3.5-9B",
-        "user_llm_args": {},
-    }
+    assert payload["user_simulator_config"] == EXPECTED_USER_SIMULATOR_CONFIG

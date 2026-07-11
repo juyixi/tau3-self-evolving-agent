@@ -16,6 +16,9 @@ class FakeGymEnv:
 
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
+        self.solo_mode = kwargs["solo_mode"]
+        self.user_llm = kwargs["user_llm"]
+        self.user_llm_args = kwargs["user_llm_args"] or {"temperature": 0.0}
         self.reset_result: tuple[str, Mapping[str, Any]] = (
             "Welcome to retail.",
             {
@@ -97,6 +100,26 @@ def test_uses_an_injected_gym_factory_even_when_it_is_falsy(
 
     assert isinstance(environment, Tau2RetailEnv)
     assert FakeGymEnv.instances[0].kwargs["task_id"] == "task-17"
+
+
+def test_exposes_the_user_simulator_config_resolved_by_gym(config: ProjectConfig) -> None:
+    config.tau2.user_llm_args = {}
+    environment = Tau2RetailEnv("task-17", config, gym_factory=FakeGymEnv)
+
+    assert environment.user_simulator_config == {
+        "solo_mode": True,
+        "user_llm": "Qwen/Qwen3.5-4B",
+        "user_llm_args": {"temperature": 0.0},
+    }
+
+
+def test_user_simulator_config_is_a_defensive_copy(config: ProjectConfig) -> None:
+    environment = Tau2RetailEnv("task-17", config, gym_factory=FakeGymEnv)
+
+    resolved = environment.user_simulator_config
+    resolved["user_llm_args"]["temperature"] = 0.9
+
+    assert environment.user_simulator_config["user_llm_args"] == {"temperature": 0.3}
 
 
 def test_reset_preserves_official_task_tools_and_policy_info(config: ProjectConfig) -> None:
