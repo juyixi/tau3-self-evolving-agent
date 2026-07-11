@@ -24,7 +24,7 @@ class Tau2RetailEnv:
         self._max_episode_steps = config.rollout.max_episode_steps
         self._episode_step = 0
         self._closed = False
-        factory = gym_factory or _load_agent_gym_env
+        factory = gym_factory if gym_factory is not None else _load_agent_gym_env
         try:
             self._gym = factory(
                 domain=config.tau2.domain,

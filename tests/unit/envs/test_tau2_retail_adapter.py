@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+import tau3_retail_evolver.envs.tau2_retail as tau2_retail
 from tau3_retail_evolver.config import ProjectConfig
 from tau3_retail_evolver.envs.factory import create_tau2_retail_env
 from tau3_retail_evolver.envs.tau2_retail import Tau2RetailEnv
@@ -36,6 +37,14 @@ class FakeGymEnv:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+class FalsyGymFactory:
+    def __bool__(self) -> bool:
+        return False
+
+    def __call__(self, **kwargs: Any) -> FakeGymEnv:
+        return FakeGymEnv(**kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -74,6 +83,20 @@ def test_constructs_gym_with_the_official_retail_arguments(config: ProjectConfig
         "user_llm_args": {"temperature": 0.3},
         "all_messages_as_observation": True,
     }
+
+
+def test_uses_an_injected_gym_factory_even_when_it_is_falsy(
+    config: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_lazy_import(**kwargs: Any) -> Any:
+        raise AssertionError("lazy Tau2 loader must not be called")
+
+    monkeypatch.setattr(tau2_retail, "_load_agent_gym_env", fail_lazy_import)
+
+    environment = Tau2RetailEnv("task-17", config, gym_factory=FalsyGymFactory())
+
+    assert isinstance(environment, Tau2RetailEnv)
+    assert FakeGymEnv.instances[0].kwargs["task_id"] == "task-17"
 
 
 def test_reset_preserves_official_task_tools_and_policy_info(config: ProjectConfig) -> None:
