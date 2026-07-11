@@ -10,7 +10,10 @@ runs/
 *.safetensors
 __pycache__/
 *.py[cod]
+.venv/
+*.egg-info/
 .pytest_cache/
+.pytest-tmp/
 .mypy_cache/
 .ruff_cache/
 cache/
