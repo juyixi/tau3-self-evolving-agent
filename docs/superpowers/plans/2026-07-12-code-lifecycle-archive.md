@@ -34,7 +34,7 @@
 - Produces: `python -m tools.preflight.check_tau2_retail --split train --task-id <id> [--inspect]`
 - Preserves: JSON payload fields, exit codes, credential redaction, pinned checkout checks, split checks, and reset/close behavior.
 
-- [ ] **Step 1: Change focused tests to the target module path**
+- [x] **Step 1: Change focused tests to the target module path**
 
 Update the unit test import:
 
@@ -48,7 +48,7 @@ Update the integration subprocess command:
 [sys.executable, "-m", "tools.preflight.check_tau2_retail", *args]
 ```
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run:
 
@@ -61,11 +61,11 @@ Run:
 
 Expected: collection fails because `tools.preflight.check_tau2_retail` does not exist.
 
-- [ ] **Step 3: Move the implementation and add package markers**
+- [x] **Step 3: Move the implementation and add package markers**
 
 Move the existing implementation without behavior changes. Add empty `tools/__init__.py` and `tools/preflight/__init__.py` so module execution is stable.
 
-- [ ] **Step 4: Update active documentation**
+- [x] **Step 4: Update active documentation**
 
 Replace the Stage 1 smoke command and file path with:
 
@@ -74,13 +74,13 @@ tools/preflight/check_tau2_retail.py
 python -m tools.preflight.check_tau2_retail --split train --task-id 0
 ```
 
-- [ ] **Step 5: Run focused tests and verify GREEN**
+- [x] **Step 5: Run focused tests and verify GREEN**
 
 Run the Step 2 command with `--basetemp .cache/pytest-preflight-green`.
 
 Expected: preflight unit tests pass and both integration tests skip unless `RUN_TAU2_INTEGRATION=1`.
 
-- [ ] **Step 6: Verify the old module path is gone**
+- [x] **Step 6: Verify the old module path is gone**
 
 Run:
 
@@ -111,7 +111,7 @@ Expected: no active command or import remains; historical mention is allowed onl
 - Tests gain: `tests.support.policy.ScriptedPolicy` with the same constructor, `requests` property, and `generate` behavior.
 - Environment callers construct `Tau2RetailEnv` directly.
 
-- [ ] **Step 1: Point tests at the target support module and direct adapter**
+- [x] **Step 1: Point tests at the target support module and direct adapter**
 
 Replace test imports with:
 
@@ -128,7 +128,7 @@ assert isinstance(environment, Tau2RetailEnv)
 
 Then remove the duplicate assertion if direct construction is already covered, so the behavior-free wrapper test is deleted rather than renamed.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run:
 
@@ -143,7 +143,7 @@ Run:
 
 Expected: collection fails because `tests.support.policy` does not exist.
 
-- [ ] **Step 3: Add the test-only scripted policy**
+- [x] **Step 3: Add the test-only scripted policy**
 
 Create `tests/support/policy.py` with:
 
@@ -173,17 +173,17 @@ class ScriptedPolicy(Policy):
         return response
 ```
 
-- [ ] **Step 4: Remove test-only production exports and the factory**
+- [x] **Step 4: Remove test-only production exports and the factory**
 
 Delete `ScriptedPolicy` from `models/policy.py`, remove it from `models/__init__.py`, and delete `envs/factory.py`.
 
-- [ ] **Step 5: Run focused tests and verify GREEN**
+- [x] **Step 5: Run focused tests and verify GREEN**
 
 Run the Step 2 command with `--basetemp .cache/pytest-support-green`.
 
 Expected: all focused tests pass, with one fewer test after removal of the factory wrapper assertion.
 
-- [ ] **Step 6: Verify production ownership boundaries**
+- [x] **Step 6: Verify production ownership boundaries**
 
 Run:
 
@@ -208,7 +208,7 @@ Expected: no `ScriptedPolicy` under production paths and no factory references a
 - Produces: one normative lifecycle document inherited by all future stage gates.
 - Produces: one concise historical Stage 1/2 delivery summary without raw scratch artifacts.
 
-- [ ] **Step 1: Write the normative lifecycle document**
+- [x] **Step 1: Write the normative lifecycle document**
 
 Include these required sections:
 
@@ -223,11 +223,11 @@ Include these required sections:
 
 State that `src/`, `scripts/`, `tools/`, `tests/`, and `docs/archive/` have the exact ownership rules defined in the approved design.
 
-- [ ] **Step 2: Write the concise milestone archive**
+- [x] **Step 2: Write the concise milestone archive**
 
 Record the Stage 1 and Stage 2.1/2.2 commit ranges, durable deliverables, moved/deleted files, and the final test gate. Do not copy `.superpowers` review diffs, briefs, reports, or progress logs.
 
-- [ ] **Step 3: Make the rule normative in current project docs**
+- [x] **Step 3: Make the rule normative in current project docs**
 
 Add a short “代码生命周期与归档” section to the main design and a global constraint plus stage-gate checklist item to the staged plan, both linking to:
 
@@ -235,7 +235,7 @@ Add a short “代码生命周期与归档” section to the main design and a g
 docs/development/code-lifecycle.md
 ```
 
-- [ ] **Step 4: Verify documentation consistency**
+- [x] **Step 4: Verify documentation consistency**
 
 Run:
 
@@ -246,7 +246,7 @@ rg -n "scripts\.check_tau2_retail" docs
 
 Expected: normative docs reference the lifecycle policy and current preflight command; the old command appears only in migration-history context.
 
-- [ ] **Step 5: Run the complete default suite**
+- [x] **Step 5: Run the complete default suite**
 
 Run:
 
@@ -257,7 +257,7 @@ Run:
 
 Expected: `93 passed, 2 skipped`.
 
-- [ ] **Step 6: Review and commit the implementation**
+- [x] **Step 6: Review and commit the implementation**
 
 Run:
 

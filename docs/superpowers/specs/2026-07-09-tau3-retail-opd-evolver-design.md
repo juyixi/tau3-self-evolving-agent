@@ -229,6 +229,10 @@ LoRA：
 
 高 GPU 开销的模型测试作为独立 integration test，默认跳过；仅在所需环境变量和模型 checkpoint 可用时运行。
 
+## 代码生命周期与归档
+
+所有实施阶段必须遵守 [`docs/development/code-lifecycle.md`](../../development/code-lifecycle.md)。`src/` 只保留运行时核心代码，`scripts/` 只保留产品级工作流入口，部署和诊断工具归入 `tools/`，测试辅助实现归入 `tests/`。每个阶段结束前必须完成生命周期审计；一次性验证、review 和调试资产在目的完成后删除，由 Git 历史或压缩后的 `docs/archive/` 里程碑摘要承担归档。
+
 ## 待接入项
 
 tau2-bench checkout 和 Qwen3.5-9B 权重是外部运行时依赖，不提交到本仓库。用户模拟器模型保持为显式配置，因为它会影响凭证、成本和可复现性；省略时使用固定 tau2-bench revision 的默认值，但解析后的实际配置仍必须记录到 run manifest。

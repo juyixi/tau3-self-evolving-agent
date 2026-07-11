@@ -23,6 +23,7 @@
 - 单元测试不依赖网络、API 凭证、Qwen 权重、GPU 或 tau2 checkout。
 - 真实环境、模型和 GPU 测试使用显式 pytest marker，绝不进入默认单元测试套件。
 - 每个阶段都以测试 gate 通过和一次 commit 结束。前一阶段 gate 为红色时，不得开始后一阶段。
+- 每个阶段结束时必须执行 [`docs/development/code-lifecycle.md`](../../development/code-lifecycle.md) 定义的生命周期审计；验证工具、测试辅助实现和历史资产必须在阶段完成前归入正确目录或删除。
 
 ## 已确定决策
 
@@ -576,6 +577,7 @@
 - 只 review 当前阶段的接口、测试和验收 gate。
 - 运行 `pytest tests/unit -v` 以及当前阶段已启用的 integration marker。
 - 运行 `git diff --check` 和 `git status --short`。
+- 审计新增文件的生产引用和测试引用，完成核心代码、产品入口、运维工具、测试支持和历史摘要的归档分类。
 - 开始下一阶段前完成 commit。
 - 在当前阶段完成的同一个 commit 中更新本计划的 checkbox。
 
