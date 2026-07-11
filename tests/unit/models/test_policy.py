@@ -139,6 +139,44 @@ def test_default_parser_converts_one_structured_tool_call_and_preserves_raw_mess
 @pytest.mark.parametrize(
     "message",
     (
+        {"role": "assistant", "content": "Your order is on the way."},
+        {"role": "assistant", "content": "Your order is on the way.", "tool_calls": None},
+        {"role": "assistant", "content": "Your order is on the way.", "tool_calls": []},
+    ),
+)
+def test_default_parser_treats_absent_null_or_empty_tool_calls_as_text(
+    message: dict[str, Any],
+) -> None:
+    policy = OpenAICompatibleQwenPolicy(
+        client=FakeClient({"choices": [{"message": message}]}), clock=FakeClock(1.0, 1.1)
+    )
+
+    response = policy.generate(_request())
+
+    assert response.raw_output == "Your order is on the way."
+    assert response.parsed_action == "Your order is on the way."
+
+
+@pytest.mark.parametrize("tool_calls", (None, []))
+def test_text_that_looks_like_malformed_tool_json_still_uses_the_codec(
+    tool_calls: list[object] | None,
+) -> None:
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": '{"name":"find_order","arguments":"order_id=123"}',
+        "tool_calls": tool_calls,
+    }
+    policy = OpenAICompatibleQwenPolicy(
+        client=FakeClient({"choices": [{"message": message}]}), clock=FakeClock(1.0, 1.1)
+    )
+
+    with pytest.raises(ValueError, match="tool arguments"):
+        policy.generate(_request())
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
         {
             "role": "assistant",
             "content": "I will look that up.",

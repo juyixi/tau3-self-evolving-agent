@@ -146,8 +146,12 @@ def parse_openai_qwen_tool_call(completion: object) -> str | None:
         return None
 
     tool_calls = message["tool_calls"]
+    if tool_calls is None:
+        return None
     if not isinstance(tool_calls, Sequence) or isinstance(tool_calls, (str, bytes)):
         raise ValueError("structured tool calls must be a sequence")
+    if not tool_calls:
+        return None
     if len(tool_calls) != 1:
         raise ValueError("structured responses must contain exactly one tool call")
     content = message.get("content")
@@ -180,7 +184,7 @@ def _structured_arguments(value: Any) -> Mapping[str, Any]:
 
 def _raw_output(completion: object) -> str:
     message = _assistant_message(completion)
-    if message is not None and "tool_calls" in message:
+    if message is not None and _has_structured_tool_calls(message):
         try:
             return json.dumps(message, sort_keys=True, separators=(",", ":"))
         except (TypeError, ValueError) as error:
@@ -194,6 +198,15 @@ def _raw_output(completion: object) -> str:
     if not isinstance(content, str):
         raise ValueError("Qwen completion has no text content")
     return content
+
+
+def _has_structured_tool_calls(message: Mapping[str, Any]) -> bool:
+    tool_calls = message.get("tool_calls")
+    return (
+        isinstance(tool_calls, Sequence)
+        and not isinstance(tool_calls, (str, bytes))
+        and bool(tool_calls)
+    )
 
 
 def _assistant_message(completion: object) -> Mapping[str, Any] | None:
