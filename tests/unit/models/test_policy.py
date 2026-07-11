@@ -10,7 +10,8 @@ from tau3_retail_evolver.models.openai_compatible import (
     OpenAICompatibleHttpClient,
     OpenAICompatibleQwenPolicy,
 )
-from tau3_retail_evolver.models.policy import DecisionRequest, DecisionResponse, ScriptedPolicy
+from tau3_retail_evolver.models.policy import DecisionRequest, DecisionResponse
+from tests.support.policy import ScriptedPolicy
 
 
 @dataclass

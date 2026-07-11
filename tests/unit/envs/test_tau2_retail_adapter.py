@@ -7,7 +7,6 @@ import pytest
 
 import tau3_retail_evolver.envs.tau2_retail as tau2_retail
 from tau3_retail_evolver.config import ProjectConfig
-from tau3_retail_evolver.envs.factory import create_tau2_retail_env
 from tau3_retail_evolver.envs.tau2_retail import Tau2RetailEnv
 
 
@@ -266,9 +265,3 @@ def test_close_does_not_send_stop_before_reset_or_after_a_terminal_step(
     assert before_reset_gym.close_calls == 1
     assert terminal_gym.actions == ["lookup"]
     assert terminal_gym.close_calls == 1
-
-
-def test_factory_creates_a_train_tau2_retail_environment(config: ProjectConfig) -> None:
-    environment = create_tau2_retail_env("task-17", config, gym_factory=FakeGymEnv)
-
-    assert isinstance(environment, Tau2RetailEnv)

@@ -8,7 +8,8 @@ import pytest
 from tau3_retail_evolver.envs.base import ResetResult, StepResult
 from tau3_retail_evolver.fast_loop.baseline_runner import run_baseline
 from tau3_retail_evolver.fast_loop.events import RunContext
-from tau3_retail_evolver.models.policy import DecisionResponse, ScriptedPolicy
+from tau3_retail_evolver.models.policy import DecisionResponse
+from tests.support.policy import ScriptedPolicy
 
 
 @dataclass

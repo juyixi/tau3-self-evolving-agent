@@ -8,8 +8,9 @@ from typing import Any
 import pytest
 
 from tau3_retail_evolver.fast_loop.baseline_runner import RolloutSummary
-from tau3_retail_evolver.models.policy import DecisionResponse, ScriptedPolicy
+from tau3_retail_evolver.models.policy import DecisionResponse
 from scripts import run_baseline
+from tests.support.policy import ScriptedPolicy
 
 
 def test_rejects_non_train_before_loading_configuration(
