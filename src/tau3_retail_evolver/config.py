@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import MutableMapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from pathlib import Path
+import re
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+_ENVIRONMENT_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CREDENTIAL_KEY_NAMES = frozenset(
+    {"apikey", "token", "secret", "password", "credential"}
+)
 
 
 class _ConfigModel(BaseModel):
@@ -56,6 +63,39 @@ class TrainingConfig(_ConfigModel):
     seed: int = 42
 
 
+class NLAssertionsConfig(_ConfigModel):
+    model: str = "openrouter/openai/gpt-4.1"
+    model_args: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0})
+    api_key_env: str = "OPENROUTER_API_KEY"
+
+    @field_validator("model")
+    @classmethod
+    def model_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("model must not be empty")
+        return value
+
+    @field_validator("api_key_env")
+    @classmethod
+    def api_key_env_must_be_a_valid_environment_variable_name(cls, value: str) -> str:
+        if not _ENVIRONMENT_VARIABLE_NAME.fullmatch(value):
+            raise ValueError("api_key_env must be a valid environment variable name")
+        return value
+
+    @field_validator("model_args", mode="before")
+    @classmethod
+    def model_args_must_not_contain_credentials(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            raise ValueError("model_args must be a mapping")
+        if _contains_credential_key(value):
+            raise ValueError("model_args must not contain credential-bearing keys")
+        return value
+
+
+class EvaluationConfig(_ConfigModel):
+    nl_assertions: NLAssertionsConfig = Field(default_factory=NLAssertionsConfig)
+
+
 class ProjectConfig(_ConfigModel):
     tau2: Tau2Config
     model: ModelConfig
@@ -63,6 +103,7 @@ class ProjectConfig(_ConfigModel):
     rollout: RolloutConfig = Field(default_factory=RolloutConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
 
 
 def load_config(path: Path, overrides: Sequence[str] = ()) -> ProjectConfig:
@@ -91,3 +132,19 @@ def _set_override(data: MutableMapping[str, Any], keys: list[str], value: Any) -
     if keys[-1] not in target:
         raise ValueError(f"unknown override path: {'.'.join(keys)}")
     target[keys[-1]] = value
+
+
+def _contains_credential_key(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, nested_value in value.items():
+            if isinstance(key, str) and _normalize_key_name(key) in _CREDENTIAL_KEY_NAMES:
+                return True
+            if _contains_credential_key(nested_value):
+                return True
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(_contains_credential_key(item) for item in value)
+    return False
+
+
+def _normalize_key_name(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", key.lower())

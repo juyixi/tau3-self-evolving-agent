@@ -5,7 +5,7 @@ import tomllib
 
 import pytest
 
-from tau3_retail_evolver.config import load_config
+from tau3_retail_evolver.config import ProjectConfig, load_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -41,16 +41,47 @@ def test_default_config_has_the_required_retail_environment() -> None:
         "score_threshold": 0.01,
         "maintenance_period": 30,
     }
+    assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
+    assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}
+    assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
+
+
+def test_project_config_defaults_the_nl_assertion_evaluator() -> None:
+    config = ProjectConfig.model_validate(
+        {
+            "tau2": {
+                "repo_path": "external/tau2-bench",
+                "domain": "retail",
+                "train_split": "train",
+                "eval_split": "test",
+                "user_llm": "Qwen/Qwen3.5-4B",
+            },
+            "model": {"base_model": "Qwen/Qwen3.5-9B"},
+        }
+    )
+
+    assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
+    assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}
+    assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
 
 
 def test_load_config_applies_typed_overrides() -> None:
     config = load_config(
         PROJECT_ROOT / "configs" / "default.yaml",
-        overrides=("rollout.max_episode_steps=24", "training.seed=7"),
+        overrides=(
+            "rollout.max_episode_steps=24",
+            "training.seed=7",
+            "evaluation.nl_assertions.model=openrouter/anthropic/claude-sonnet-4",
+            "evaluation.nl_assertions.model_args.temperature=0.25",
+            "evaluation.nl_assertions.api_key_env=TEST_OPENROUTER_API_KEY",
+        ),
     )
 
     assert config.rollout.max_episode_steps == 24
     assert config.training.seed == 7
+    assert config.evaluation.nl_assertions.model == "openrouter/anthropic/claude-sonnet-4"
+    assert config.evaluation.nl_assertions.model_args == {"temperature": 0.25}
+    assert config.evaluation.nl_assertions.api_key_env == "TEST_OPENROUTER_API_KEY"
 
 
 def test_user_simulator_may_differ_from_agent_model() -> None:
@@ -75,3 +106,63 @@ def test_load_config_rejects_disallowed_training_settings(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         load_config(PROJECT_ROOT / "configs" / "default.yaml", overrides=(override,))
+
+
+def test_load_config_rejects_blank_nl_assertion_model(tmp_path: Path) -> None:
+    config_path = _write_temporary_config(
+        tmp_path,
+        """
+evaluation:
+  nl_assertions:
+    model: "   "
+    model_args: {}
+    api_key_env: OPENROUTER_API_KEY
+""",
+    )
+
+    with pytest.raises(ValueError, match="model"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_invalid_nl_assertion_api_key_env(tmp_path: Path) -> None:
+    config_path = _write_temporary_config(
+        tmp_path,
+        """
+evaluation:
+  nl_assertions:
+    model: openrouter/openai/gpt-4.1
+    model_args: {}
+    api_key_env: 1INVALID_ENV
+""",
+    )
+
+    with pytest.raises(ValueError, match="api_key_env"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_nested_credential_model_args(tmp_path: Path) -> None:
+    config_path = _write_temporary_config(
+        tmp_path,
+        """
+evaluation:
+  nl_assertions:
+    model: openrouter/openai/gpt-4.1
+    model_args:
+      retry:
+        api-key: should-not-be-configured
+    api_key_env: OPENROUTER_API_KEY
+""",
+    )
+
+    with pytest.raises(ValueError, match="model_args"):
+        load_config(config_path)
+
+
+def _write_temporary_config(tmp_path: Path, evaluation_yaml: str) -> Path:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        (PROJECT_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
+        + evaluation_yaml,
+        encoding="utf-8",
+    )
+    return config_path

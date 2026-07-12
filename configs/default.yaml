@@ -29,3 +29,9 @@ memory:
   maintenance_period: 30
 training:
   seed: 42
+evaluation:
+  nl_assertions:
+    model: openrouter/openai/gpt-4.1
+    model_args:
+      temperature: 0.0
+    api_key_env: OPENROUTER_API_KEY
