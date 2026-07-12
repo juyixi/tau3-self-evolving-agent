@@ -42,6 +42,25 @@
 - 只供单元测试使用的 `ScriptedPolicy` 从生产模型包迁移到 `tests/support/`。
 - `scripts/run_baseline.py` 继续保留，因为它仍是 Qwen baseline 和后续对照实验入口。
 
+## OpenRouter 单任务验证
+
+以下步骤验证一个真实的 `train` 任务。先按既有 Qwen vLLM 隧道操作保持服务运行，并在控制机当前 PowerShell 会话中复用其 `QWEN_BASE_URL`：
+
+```powershell
+$env:OPENROUTER_API_KEY = Read-Host "OpenRouter API Key"
+$env:QWEN_BASE_URL = "http://127.0.0.1:8000/v1"
+python -m scripts.run_baseline `
+  --split train `
+  --task-id 0 `
+  --run-id baseline-openrouter-20260712-01 `
+  --qwen-base-url $env:QWEN_BASE_URL `
+  --model-revision c202236235762e1c871ad0ccb60c8ee5ba337b9a
+```
+
+`OPENROUTER_API_KEY` 只需配置在运行 `python -m scripts.run_baseline` 的 Windows/控制机上；只通过 vLLM 提供 Qwen 服务的 AutoDL 机器不需要该变量。每次运行都必须使用新的不可变 `--run-id`；失败的 run ID 不支持重跑。
+
+运行后检查 `runs/baseline-openrouter-20260712-01/manifest.json`：其中应有 `schema_version: 2` 和 `evaluation_config.nl_assertions.model: openrouter/openai/gpt-4.1`，但绝不能出现 key 值。进程 summary 成功返回，并且 `rollouts/events.jsonl` 含带 reward 字段的 `EpisodeFinished` 事件，才说明该管线完成了这次验证；本文不宣称真实 OpenRouter 运行已经通过。
+
 ## 生命周期整理
 
 设计与实施提交：
