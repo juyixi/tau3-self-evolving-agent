@@ -154,9 +154,6 @@ def parse_openai_qwen_tool_call(completion: object) -> str | None:
         return None
     if len(tool_calls) != 1:
         raise ValueError("structured responses must contain exactly one tool call")
-    content = message.get("content")
-    if content not in (None, ""):
-        raise ValueError("structured responses contain mixed content and tool calls")
 
     tool_call = tool_calls[0]
     if not isinstance(tool_call, Mapping):

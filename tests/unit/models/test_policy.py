@@ -175,32 +175,39 @@ def test_text_that_looks_like_malformed_tool_json_still_uses_the_codec(
         policy.generate(_request())
 
 
-@pytest.mark.parametrize(
-    "message",
-    (
-        {
-            "role": "assistant",
-            "content": "I will look that up.",
-            "tool_calls": [
-                {"type": "function", "function": {"name": "find_order", "arguments": "{}"}}
-            ],
-        },
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {"type": "function", "function": {"name": "find_order", "arguments": "{}"}},
-                {"type": "function", "function": {"name": "find_order", "arguments": "{}"}},
-            ],
-        },
-    ),
-)
-def test_default_parser_rejects_mixed_or_multiple_structured_tool_calls(message: dict[str, Any]) -> None:
+def test_default_parser_prioritizes_one_structured_tool_call_when_content_is_present() -> None:
+    message = {
+        "role": "assistant",
+        "content": "I will look that up.",
+        "reasoning": "The order must be retrieved before I answer.",
+        "tool_calls": [
+            {"type": "function", "function": {"name": "find_order", "arguments": "{}"}}
+        ],
+    }
     policy = OpenAICompatibleQwenPolicy(
         client=FakeClient({"choices": [{"message": message}]}), clock=FakeClock(1.0, 1.1)
     )
 
-    with pytest.raises(ValueError, match="mixed content|exactly one"):
+    response = policy.generate(_request())
+
+    assert response.parsed_action == '{"arguments":{},"name":"find_order"}'
+    assert json.loads(response.raw_output) == message
+
+
+def test_default_parser_rejects_multiple_structured_tool_calls() -> None:
+    message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"type": "function", "function": {"name": "find_order", "arguments": "{}"}},
+            {"type": "function", "function": {"name": "find_order", "arguments": "{}"}},
+        ],
+    }
+    policy = OpenAICompatibleQwenPolicy(
+        client=FakeClient({"choices": [{"message": message}]}), clock=FakeClock(1.0, 1.1)
+    )
+
+    with pytest.raises(ValueError, match="exactly one"):
         policy.generate(_request())
 
 
