@@ -113,6 +113,18 @@ Memory 持久化遵循 OPD-Evolver 官方仓库的文件式实现思路，不使
 - `skill_memory.json`
 - `tool_memory.json`
 
+训练 Memory 与运行代码分离，统一存放在项目根目录下且由 Git 忽略的 `history/`。Memory 使用 Agent namespace 隔离，而不是使用训练轮次或 `run_id` 隔离。默认 `agent_id` 为 `retail`，其权威状态目录固定为：
+
+```text
+history/agents/retail/memory/
+```
+
+同一个 `agent_id` 的所有 fast loop、slow loop 和训练轮次持续读取并更新同一份权威 Memory，使经验能够跨轮次累积。`run_id` 仅标识日志、OPD 数据、checkpoint 和 manifest，不得参与训练 Memory 路径。未来扩展 airline 时使用 `history/agents/airline/memory/`，不同 Agent namespace 之间禁止隐式读取、合并或迁移 Memory。`agent_id` 只允许 ASCII 字母、数字、连字符和下划线，必须拒绝空值、`.`、`..`、路径分隔符和其他路径穿越形式。
+
+Memory 路径必须相对项目根目录解析，不能依赖进程启动时的当前工作目录。程序首次打开某个 Agent namespace 时自动创建目录；仓库不提交 `.gitkeep` 或任何运行时 Memory。已有其他路径下的 Memory 不自动迁移或合并，迁移必须由显式工具完成并记录来源 snapshot。
+
+路径与生命周期测试必须证明：不同 `run_id` 但相同 `agent_id` 解析到同一训练 Memory；`retail` 与 `airline` 解析到不同目录；从项目外的当前工作目录启动仍得到项目根目录下的相同路径；非法 `agent_id` 在创建目录前失败；`history/` 下的文件不会进入 Git 跟踪。测试不得在真实 `history/` 写入数据，而应使用隔离的临时项目根目录。
+
 每个层级文件包含 `schema_version`、`tier`、`count` 和 `items`。每条 MemoryItem 至少包含稳定 ID、content、embedding、metadata、source task IDs、created/updated round、version、active/retired status，以及 usage/success 统计。可选的 provider 级 embedding 结果另存为 `embedding_cache.json`，并按输入 hash 和 embedding model revision 隔离。
 
 Repository 在进程内以字典和 embedding 数组维护活动状态。启动时完整加载四个 JSON 文件；新增、更新、merge 或 retire 时，先在内存副本中完成类型、层级、provenance、重复项和版本校验，再将完整层级状态写入同目录临时文件，执行 flush/fsync 后通过 `os.replace` 原子替换目标文件。单层写入失败时旧文件必须保持完整可读。
@@ -122,6 +134,8 @@ Repository 在进程内以字典和 embedding 数组维护活动状态。启动�
 模型不得直接修改 JSON 文件。Writer 和 Maintainer 只能输出经过 Pydantic 校验的 `create`、`update`、`merge`、`retire` 和 `lookup` 命令；Repository 负责应用命令和持久化。Merge 只能发生在同一层级，retire 是软删除，历史决策保留在 JSONL 日志中。
 
 普通 JSON 仅保存当前 Memory 状态；以下追加式数据使用 JSONL：rollout 生命周期事件、候选/选择/使用证据、Memory 写入与维护操作、归因结果以及四类 OPD 训练样本。Checkpoint 或评测所使用的 Memory 通过四层规范化 JSON 副本和 snapshot manifest 固化，snapshot 内容 hash 作为 `memory_snapshot_id`。
+
+每轮训练 manifest 必须记录 `agent_id`、输入 `memory_snapshot_id` 和输出 `memory_snapshot_id`。新 `run_id` 不得重置 Memory。`test_static` 只能通过只读 Repository 加载指定训练 snapshot；`test_streaming` 只能写入 `history/evaluations/<run_id>/<agent_id>/quarantine/`。训练 Memory loader 必须拒绝任何 `history/evaluations/` 路径，防止 test 经验回流训练。
 
 ## 结果校准的记忆归因
 
@@ -215,18 +229,19 @@ LoRA：
 
 ## 数据布局
 
-运行时 artifact 存放在 `runs/` 下，并由 git 忽略：
+运行时日志、训练样本和模型 artifact 存放在 `runs/` 下；持续进化的 Memory 单独存放在 `history/` 下。两个目录均由 Git 忽略：
 
 - `runs/<run_id>/rollouts/*.jsonl`
-- `runs/<run_id>/memory/{trajectory,tip,skill,tool}_memory.json`
-- `runs/<run_id>/memory/embedding_cache.json`
-- `runs/<run_id>/memory/snapshots/<snapshot_id>/*.json`
 - `runs/<run_id>/attribution/*.jsonl`
 - `runs/<run_id>/opd_examples/*.jsonl`
 - `runs/<run_id>/checkpoints/`
 - `runs/<run_id>/eval/`
+- `history/agents/<agent_id>/memory/{trajectory,tip,skill,tool}_memory.json`
+- `history/agents/<agent_id>/memory/embedding_cache.json`
+- `history/agents/<agent_id>/memory/snapshots/<snapshot_id>/*.json`
+- `history/evaluations/<run_id>/<agent_id>/quarantine/`
 
-每个 run 根目录还包含 `manifest.json`，其中记录模型 revision、LoRA revision、tau2-bench commit、split hash、任务 ID、seed、用户模拟器配置、memory snapshot ID 和 parent checkpoint。
+每个 run 根目录还包含 `manifest.json`，其中记录模型 revision、LoRA revision、tau2-bench commit、split hash、任务 ID、seed、用户模拟器配置、`agent_id`、输入/输出 memory snapshot ID 和 parent checkpoint。Manifest 可以记录规范化的项目相对 Memory 路径，但训练数据加载必须以 snapshot ID 和 Agent namespace 为权威边界。
 
 每条日志事件必须保留足够信息，以便重建：
 
