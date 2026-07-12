@@ -40,6 +40,13 @@ def test_default_config_has_the_required_retail_environment() -> None:
         "teacher_memory_cap": 20,
         "score_threshold": 0.01,
         "maintenance_period": 30,
+        "embedding_provider": "local",
+        "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
+        "embedding_device": "cuda",
+        "embedding_dtype": "float16",
+        "embedding_max_length": 2048,
+        "embedding_batch_size": 16,
+        "embedding_cache": True,
     }
     assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
     assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}

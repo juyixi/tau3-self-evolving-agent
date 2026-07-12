@@ -56,6 +56,13 @@ class MemoryConfig(_ConfigModel):
     teacher_memory_cap: int = 20
     score_threshold: float = 0.01
     maintenance_period: int = 30
+    embedding_provider: Literal["local"] = "local"
+    embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    embedding_device: str = "cuda"
+    embedding_dtype: Literal["float16", "bfloat16", "float32"] = "float16"
+    embedding_max_length: int = Field(default=2048, ge=1)
+    embedding_batch_size: int = Field(default=16, ge=1)
+    embedding_cache: bool = True
 
 
 class TrainingConfig(_ConfigModel):

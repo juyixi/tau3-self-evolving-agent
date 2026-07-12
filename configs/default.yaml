@@ -27,6 +27,13 @@ memory:
   teacher_memory_cap: 20
   score_threshold: 0.01
   maintenance_period: 30
+  embedding_provider: local
+  embedding_model: Qwen/Qwen3-Embedding-0.6B
+  embedding_device: cuda
+  embedding_dtype: float16
+  embedding_max_length: 2048
+  embedding_batch_size: 16
+  embedding_cache: true
 training:
   seed: 42
 evaluation:

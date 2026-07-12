@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping, Sequence
 
 from tau3_retail_evolver.io.jsonl import _fsync_directory
 from tau3_retail_evolver.memory.json_store import JsonTierStore, serialize_tier
@@ -107,6 +107,34 @@ class MemoryRepository:
         self._stores[current.tier].write(tier_items)
         self._items[memory_id] = replacement
         return replacement
+
+    def update_embeddings(
+        self,
+        updates: Mapping[str, tuple[Sequence[float], str]],
+    ) -> list[MemoryItem]:
+        replacements: dict[str, MemoryItem] = {}
+        for memory_id, (embedding, model_revision) in updates.items():
+            current = self._require(memory_id)
+            payload = current.model_dump(mode="python")
+            payload.update(
+                embedding=tuple(embedding),
+                embedding_model_revision=model_revision,
+            )
+            replacements[memory_id] = MemoryItem.model_validate(payload)
+        for tier in MemoryTier:
+            tier_replacements = {
+                memory_id: item
+                for memory_id, item in replacements.items()
+                if item.tier == tier
+            }
+            if not tier_replacements:
+                continue
+            tier_items = [
+                tier_replacements.get(item.id, item) for item in self._tier_items(tier)
+            ]
+            self._stores[tier].write(tier_items)
+            self._items.update(tier_replacements)
+        return [replacements[memory_id] for memory_id in sorted(replacements)]
 
     def snapshot(self) -> MemorySnapshot:
         files = {
