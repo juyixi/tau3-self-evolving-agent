@@ -8,27 +8,14 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from tau3_retail_evolver.credential_policy import is_credential_key
+
 
 _ENVIRONMENT_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_CREDENTIAL_KEY_NAMES = frozenset(
-    {
-        "accesskey",
-        "accesstoken",
-        "apikey",
-        "apitoken",
-        "authtoken",
-        "clientsecret",
-        "credential",
-        "password",
-        "privatekey",
-        "secret",
-        "token",
-    }
-)
 
 
 class _ConfigModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
 class Tau2Config(_ConfigModel):
@@ -149,14 +136,10 @@ def _set_override(data: MutableMapping[str, Any], keys: list[str], value: Any) -
 def _contains_credential_key(value: Any) -> bool:
     if isinstance(value, Mapping):
         for key, nested_value in value.items():
-            if isinstance(key, str) and _normalize_key_name(key) in _CREDENTIAL_KEY_NAMES:
+            if is_credential_key(key):
                 return True
             if _contains_credential_key(nested_value):
                 return True
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return any(_contains_credential_key(item) for item in value)
     return False
-
-
-def _normalize_key_name(key: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", key.lower())

@@ -158,9 +158,39 @@ evaluation:
         load_config(config_path)
 
 
+def test_validation_error_does_not_echo_rejected_model_args_credentials() -> None:
+    sentinel = "secret-sentinel"
+
+    with pytest.raises(ValueError) as error:
+        ProjectConfig.model_validate(
+            {
+                "tau2": {
+                    "repo_path": "external/tau2-bench",
+                    "domain": "retail",
+                    "train_split": "train",
+                    "eval_split": "test",
+                    "user_llm": "Qwen/Qwen3.5-4B",
+                },
+                "model": {"base_model": "Qwen/Qwen3.5-9B"},
+                "evaluation": {
+                    "nl_assertions": {
+                        "model_args": {"access_token": sentinel},
+                    }
+                },
+            }
+        )
+
+    assert "model_args" in str(error.value)
+    assert sentinel not in str(error.value)
+
+
 @pytest.mark.parametrize(
     "credential_key",
     (
+        "authorization",
+        "openrouter_api_key",
+        "credentials",
+        "passwords",
         "access_token",
         "client_secret",
         "auth_token",

@@ -50,6 +50,19 @@ def test_binds_configured_defaults_and_returns_redacted_provenance() -> None:
     assert "literal-test-secret" not in repr(provenance)
 
 
+def test_defaults_to_process_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    module = _evaluator_module()
+    monkeypatch.setenv(config.api_key_env, "literal-test-secret")
+
+    bind_tau2_nl_assertions(config, module_loader=lambda _: module)
+
+    assert module.DEFAULT_LLM_NL_ASSERTIONS == config.model
+    assert module.DEFAULT_LLM_NL_ASSERTIONS_ARGS == config.model_args
+
+
 def test_model_args_are_deep_copy_isolated_from_the_config() -> None:
     config = _config()
     module = _evaluator_module()
@@ -108,3 +121,5 @@ def test_rejects_tau2_modules_missing_required_contract_members(
     assert _TAU2_EVALUATOR_MODULE in str(error.value)
     assert missing_member in str(error.value)
     assert "literal-test-secret" not in str(error.value)
+    if missing_member == "DEFAULT_LLM_NL_ASSERTIONS_ARGS":
+        assert module.DEFAULT_LLM_NL_ASSERTIONS == "original-model"

@@ -4,35 +4,15 @@ from collections.abc import Mapping, Sequence
 import json
 import os
 from pathlib import Path
-import re
 import tempfile
 from typing import Any
 from urllib.parse import urlsplit
 
+from tau3_retail_evolver.credential_policy import is_credential_key
 from tau3_retail_evolver.io.jsonl import _fsync_directory
 
 
 _REDACTED = "[REDACTED]"
-_CREDENTIAL_TERMINAL_WORDS = {
-    "token",
-    "authorization",
-    "secret",
-    "secrets",
-    "password",
-    "passwords",
-    "credential",
-    "credentials",
-}
-_CREDENTIAL_KEY_SUFFIXES = (("api", "key"), ("private", "key"), ("access", "key"))
-_COMPACT_CREDENTIAL_KEYS = {
-    "apikey",
-    "apitoken",
-    "accesstoken",
-    "authtoken",
-    "clientsecret",
-    "privatekey",
-    "accesskey",
-}
 
 
 def create_manifest(
@@ -108,7 +88,7 @@ def sanitize_artifact_data(value: Any) -> Any:
     """Recursively preserve public metadata while removing credential values."""
     if isinstance(value, Mapping):
         return {
-            str(key): _REDACTED if _is_credential_key(key) else sanitize_artifact_data(nested)
+            str(key): _REDACTED if is_credential_key(key) else sanitize_artifact_data(nested)
             for key, nested in value.items()
         }
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
@@ -128,7 +108,7 @@ def _sanitize_command(command: Sequence[str]) -> list[str]:
             redact_next = False
         elif text.startswith("--"):
             key, separator, _ = text[2:].partition("=")
-            if _is_credential_key(key.replace("-", "_")):
+            if is_credential_key(key.replace("-", "_")):
                 if separator:
                     sanitized.append(f"--{key}={_REDACTED}")
                 else:
@@ -139,20 +119,6 @@ def _sanitize_command(command: Sequence[str]) -> list[str]:
         else:
             sanitized.append(sanitize_artifact_data(text))
     return sanitized
-
-
-def _is_credential_key(key: Any) -> bool:
-    key_text = str(key)
-    compact = "".join(re.findall(r"[a-z0-9]+", key_text.casefold()))
-    if compact in _COMPACT_CREDENTIAL_KEYS:
-        return True
-    separated = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", key_text)
-    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", separated)
-    words = tuple(re.findall(r"[a-z0-9]+", separated.casefold()))
-    return bool(words) and (
-        words[-1] in _CREDENTIAL_TERMINAL_WORDS
-        or any(words[-len(suffix) :] == suffix for suffix in _CREDENTIAL_KEY_SUFFIXES)
-    )
 
 
 def _is_credential_bearing_url(value: str) -> bool:

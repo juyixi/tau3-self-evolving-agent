@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tau3_retail_evolver.runs.manifest import create_manifest
+from tau3_retail_evolver.runs.manifest import create_manifest, sanitize_artifact_data
 import tau3_retail_evolver.runs.manifest as manifest_module
 
 
@@ -140,6 +140,33 @@ def test_sanitizes_credential_bearing_urls_in_artifact_data(tmp_path: Path) -> N
     )
 
     assert manifest["user_simulator_config"]["endpoint"] == "[REDACTED]"
+
+
+@pytest.mark.parametrize(
+    "credential_key",
+    (
+        "authorization",
+        "openrouter_api_key",
+        "credentials",
+        "passwords",
+        "access_token",
+        "client_secret",
+        "auth_token",
+        "api_token",
+        "private_key",
+        "access_key",
+    ),
+)
+def test_sanitizes_all_config_rejected_credential_keys(credential_key: str) -> None:
+    assert sanitize_artifact_data({credential_key: "sensitive"}) == {
+        credential_key: "[REDACTED]"
+    }
+
+
+def test_preserves_public_api_key_environment_variable_provenance() -> None:
+    assert sanitize_artifact_data({"api_key_env": "OPENROUTER_API_KEY"}) == {
+        "api_key_env": "OPENROUTER_API_KEY"
+    }
 
 
 def test_best_effort_syncs_manifest_parent_directory_after_atomic_publish(
