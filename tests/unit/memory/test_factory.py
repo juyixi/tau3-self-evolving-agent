@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tau3_retail_evolver.config import MemoryConfig
 from tau3_retail_evolver.memory.factory import open_training_memory
 
@@ -35,3 +37,18 @@ def test_different_agents_do_not_share_memory(tmp_path: Path) -> None:
 
     assert airline.get(created.id) is None
     assert airline.list() == []
+
+
+def test_default_memory_config_opens_retail_training_memory(tmp_path: Path) -> None:
+    repository = open_training_memory(MemoryConfig(), root=tmp_path)
+
+    assert repository.root == tmp_path.resolve() / "history" / "agents" / "retail" / "memory"
+
+
+def test_training_memory_factory_rejects_run_id(tmp_path: Path) -> None:
+    with pytest.raises(TypeError):
+        open_training_memory(
+            MemoryConfig(),
+            root=tmp_path,
+            run_id="iteration-1",
+        )
