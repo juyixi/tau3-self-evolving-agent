@@ -12,6 +12,7 @@ from tau3_retail_evolver.credential_policy import is_credential_key
 
 
 _ENVIRONMENT_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_AGENT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class _ConfigModel(BaseModel):
@@ -46,6 +47,7 @@ class RolloutConfig(_ConfigModel):
 
 
 class MemoryConfig(_ConfigModel):
+    agent_id: str = "retail"
     tiers: tuple[Literal["trajectory", "tip", "skill", "tool"], ...] = (
         "trajectory",
         "tip",
@@ -63,6 +65,13 @@ class MemoryConfig(_ConfigModel):
     embedding_max_length: int = Field(default=2048, ge=1)
     embedding_batch_size: int = Field(default=16, ge=1)
     embedding_cache: bool = True
+
+    @field_validator("agent_id")
+    @classmethod
+    def agent_id_must_be_a_safe_slug(cls, value: str) -> str:
+        if not _AGENT_ID.fullmatch(value) or value in {".", ".."}:
+            raise ValueError("agent_id must contain only ASCII letters, digits, '-' or '_'")
+        return value
 
 
 class TrainingConfig(_ConfigModel):

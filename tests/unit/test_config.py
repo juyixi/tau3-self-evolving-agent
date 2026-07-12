@@ -34,7 +34,9 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.rollout.temperature == 1.0
     assert config.rollout.top_p == 0.95
     assert config.rollout.max_episode_steps == 40
+    assert config.memory.agent_id == "retail"
     assert config.memory.model_dump() == {
+        "agent_id": "retail",
         "tiers": ("trajectory", "tip", "skill", "tool"),
         "retrieve_top_k": 50,
         "teacher_memory_cap": 20,
@@ -51,6 +53,24 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
     assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}
     assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
+
+
+@pytest.mark.parametrize("agent_id", ("", ".", "..", "retail/other", r"retail\\other", "零售"))
+def test_memory_config_rejects_unsafe_agent_id(agent_id: str) -> None:
+    with pytest.raises(ValueError, match="agent_id"):
+        ProjectConfig.model_validate(
+            {
+                "tau2": {
+                    "repo_path": "external/tau2-bench",
+                    "domain": "retail",
+                    "train_split": "train",
+                    "eval_split": "test",
+                    "user_llm": "test-user",
+                },
+                "model": {"base_model": "Qwen/Qwen3.5-9B"},
+                "memory": {"agent_id": agent_id},
+            }
+        )
 
 
 def test_project_config_defaults_the_nl_assertion_evaluator() -> None:

@@ -4,6 +4,7 @@
 external/*
 !external/tau2-bench.commit
 runs/
+/history/
 *.pt
 *.pth
 *.ckpt
