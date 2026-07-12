@@ -55,7 +55,9 @@
 
 - `manifest.json`：模型和适配器 revision、tau2 commit、split hash、任务 ID、seed、用户模拟器、环境选项、memory snapshot、parent checkpoint 和运行命令。
 - `rollouts/events.jsonl`：只追加的决策与环境事件。
-- `memory/{trajectory,tip,skill,tool}_memory.json`、`memory/embedding_cache.json` 和 `memory/snapshots/<snapshot_id>/` 下的确定性 JSON 副本。
+- `runs/<run_id>/` stores rollout JSONL, attribution JSONL, OPD examples, checkpoints, evaluation output and manifest only.
+- `history/agents/<agent_id>/memory/` stores the continuously evolving four-tier Memory, embedding cache and immutable snapshots.
+- `history/evaluations/<run_id>/<agent_id>/quarantine/` stores streaming evaluation Memory that training loaders must reject.
 - `attribution/scores.jsonl`。
 - `opd_examples/{sel,act,write,maint}.jsonl`。
 - `checkpoints/iteration-<n>/adapter/`。
@@ -485,6 +487,7 @@
 **接口：**
 - 状态：`created -> rollout_complete -> attribution_complete -> dataset_complete -> training_complete -> promoted`
 - 产出：`run_iteration(config, parent_checkpoint, parent_memory_snapshot) -> IterationResult`
+- 接口：`open_training_memory(config.memory)`；iteration records the returned Repository's pre/post snapshot IDs and never resets it.
 
 - [ ] 编写端到端 fake 失败测试，覆盖精确阶段顺序、artifact hash、parent/child revision 和 promoted output。
 - [ ] 为每个已完成状态编写 resume 测试，并断言已完成阶段通过 hash 验证，而不是重新运行。
@@ -534,7 +537,7 @@
 
 - [ ] 编写失败测试，确保两种协议都禁用 optimizer 创建、attribution、dataset 写入、checkpoint 保存和 train-memory 修改。
 - [ ] 断言 `test_static` 拒绝所有 memory operation。
-- [ ] 断言 `test_streaming` 只写入 `runs/<run_id>/eval/test_streaming/quarantine/`，并且训练 artifact loader 拒绝该路径。
+- [ ] 断言 `test_streaming` 只写入 `history/evaluations/<run_id>/<agent_id>/quarantine/` via `evaluation_quarantine_root(run_id, agent_id)`，并且训练 artifact loader 拒绝该路径。
 - [ ] 重新运行测试并确认 PASS。
 - [ ] 提交为 `feat: isolate static and streaming test evaluation`。
 
