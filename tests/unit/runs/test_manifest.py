@@ -39,6 +39,13 @@ def test_creates_a_no_memory_manifest_atomically_with_sanitized_runtime_data(tmp
             "presence_penalty": 1.5,
             "parallel_tool_calls": False,
         },
+        evaluation_config={
+            "nl_assertions": {
+                "model": "openrouter/openai/gpt-4.1",
+                "model_args": {"temperature": 0.0},
+                "api_key_env": "OPENROUTER_API_KEY",
+            }
+        },
         command=("python", "-m", "scripts.run_baseline", "--token=secret"),
     )
 
@@ -47,6 +54,13 @@ def test_creates_a_no_memory_manifest_atomically_with_sanitized_runtime_data(tmp
         "adapter_revision": None,
         "command": ["python", "-m", "scripts.run_baseline", "--token=[REDACTED]"],
         "environment_options": {"all_messages_as_observation": True},
+        "evaluation_config": {
+            "nl_assertions": {
+                "api_key_env": "OPENROUTER_API_KEY",
+                "model": "openrouter/openai/gpt-4.1",
+                "model_args": {"temperature": 0.0},
+            }
+        },
         "memory_snapshot_id": None,
         "model_serving_contract": {
             "enable_thinking": True,
@@ -63,7 +77,7 @@ def test_creates_a_no_memory_manifest_atomically_with_sanitized_runtime_data(tmp
         "run_id": "baseline-001",
         "iteration": 3,
         "parent_checkpoint": None,
-        "schema_version": 1,
+        "schema_version": 2,
         "seed": 17,
         "split": "train",
         "split_hash": "b" * 64,
@@ -96,6 +110,7 @@ def test_refuses_to_overwrite_an_existing_manifest(tmp_path: Path) -> None:
             environment_options={},
             rollout_options={},
             model_serving_contract={},
+            evaluation_config={},
             command=("python",),
         )
 
@@ -120,6 +135,7 @@ def test_sanitizes_credential_bearing_urls_in_artifact_data(tmp_path: Path) -> N
         environment_options={},
         rollout_options={},
         model_serving_contract={},
+        evaluation_config={},
         command=("python",),
     )
 
@@ -147,6 +163,7 @@ def test_best_effort_syncs_manifest_parent_directory_after_atomic_publish(
         environment_options={},
         rollout_options={},
         model_serving_contract={},
+        evaluation_config={},
         command=("python",),
     )
 

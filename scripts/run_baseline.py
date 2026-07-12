@@ -13,6 +13,7 @@ from tau3_retail_evolver.envs.runtime import Tau2Runtime
 from tau3_retail_evolver.envs.split_guard import require_learning_split
 from tau3_retail_evolver.envs.task_catalog import RetailTaskCatalog
 from tau3_retail_evolver.envs.tau2_retail import Tau2RetailEnv
+from tau3_retail_evolver.evaluation.tau2_nl_assertions import bind_tau2_nl_assertions
 from tau3_retail_evolver.fast_loop.baseline_runner import RolloutSummary, run_baseline
 from tau3_retail_evolver.fast_loop.events import RunContext
 from tau3_retail_evolver.io.jsonl import JsonlWriter
@@ -75,6 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("QWEN_BASE_URL or --qwen-base-url is required")
     api_key = os.environ.get("QWEN_API_KEY") or "EMPTY"
     gym_factory = Tau2Runtime.load_verified_gym_factory(runtime.repo_path)
+    evaluation_provenance = bind_tau2_nl_assertions(config.evaluation.nl_assertions)
     probe = Tau2RetailEnv(args.task_ids[0], config, gym_factory=gym_factory)
     try:
         user_simulator_config = probe.user_simulator_config
@@ -112,6 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "max_episode_steps": config.rollout.max_episode_steps,
         },
         model_serving_contract=MODEL_SERVING_CONTRACT,
+        evaluation_config={"nl_assertions": evaluation_provenance},
         command=_command_for_manifest(argv),
     )
     context = RunContext(

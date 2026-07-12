@@ -51,11 +51,12 @@ def create_manifest(
     environment_options: Mapping[str, Any],
     rollout_options: Mapping[str, Any],
     model_serving_contract: Mapping[str, Any],
+    evaluation_config: Mapping[str, Any],
     command: Sequence[str],
 ) -> dict[str, Any]:
     """Atomically create one immutable, no-memory run manifest."""
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_id,
         "iteration": iteration,
         "model_revision": model_revision,
@@ -71,6 +72,7 @@ def create_manifest(
         "environment_options": sanitize_artifact_data(environment_options),
         "rollout_options": sanitize_artifact_data(rollout_options),
         "model_serving_contract": sanitize_artifact_data(model_serving_contract),
+        "evaluation_config": sanitize_artifact_data(evaluation_config),
         "command": _sanitize_command(command),
     }
     try:

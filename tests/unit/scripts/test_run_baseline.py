@@ -62,6 +62,13 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         model=SimpleNamespace(base_model="Qwen/Qwen3.5-9B"),
         rollout=SimpleNamespace(temperature=1.0, top_p=0.95, max_episode_steps=40),
         training=SimpleNamespace(seed=17),
+        evaluation=SimpleNamespace(
+            nl_assertions=SimpleNamespace(
+                model="openrouter/openai/gpt-4.1",
+                model_args={"temperature": 0.0},
+                api_key_env="OPENROUTER_API_KEY",
+            )
+        ),
     )
     runtime = SimpleNamespace(
         repo_path=config.tau2.repo_path,
@@ -76,9 +83,11 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
     )
     client_args: dict[str, Any] = {}
     captured: dict[str, Any] = {}
+    ordering: list[str] = []
 
     class FakeEnvironment:
         def __init__(self, task_id: str, config: Any, gym_factory: Any) -> None:
+            ordering.append("probe")
             captured.setdefault("environments", []).append((task_id, gym_factory))
             self.user_simulator_config = {
                 "solo_mode": False,
@@ -90,12 +99,14 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
             captured["probe_close_calls"] = captured.get("probe_close_calls", 0) + 1
 
     def construct_client(**kwargs: Any) -> object:
+        ordering.append("policy")
         client_args.update(kwargs)
         return object()
 
     def fake_run(
         tasks: tuple[str, ...], env_factory: Any, policy: Any, context: Any
     ) -> RolloutSummary:
+        ordering.append("episodes")
         captured["tasks"] = tasks
         captured["policy"] = policy
         captured["context"] = context
@@ -103,7 +114,23 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         environment.close()
         return RolloutSummary(episodes=())
 
+    def bind_assertions(nl_assertions: Any) -> dict[str, Any]:
+        ordering.append("bind")
+        assert nl_assertions is config.evaluation.nl_assertions
+        return {
+            "model": nl_assertions.model,
+            "model_args": nl_assertions.model_args,
+            "api_key_env": nl_assertions.api_key_env,
+        }
+
+    real_create_manifest = run_baseline.create_manifest
+
+    def create_recorded_manifest(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        ordering.append("manifest")
+        return real_create_manifest(*args, **kwargs)
+
     monkeypatch.setenv("QWEN_API_KEY", "top-secret-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-secret-key")
     monkeypatch.setattr(run_baseline, "load_config", lambda path: config)
     monkeypatch.setattr(
         run_baseline,
@@ -111,7 +138,9 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         SimpleNamespace(
             inspect_metadata=lambda repo_path: runtime,
             require_pinned_commit=lambda fingerprint: None,
-            load_verified_gym_factory=lambda repo_path: "verified-gym-factory",
+            load_verified_gym_factory=lambda repo_path: (
+                ordering.append("gym") or "verified-gym-factory"
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -120,7 +149,9 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         SimpleNamespace(from_files=lambda tasks_path, split_path: catalog),
     )
     monkeypatch.setattr(run_baseline, "Tau2RetailEnv", FakeEnvironment)
+    monkeypatch.setattr(run_baseline, "bind_tau2_nl_assertions", bind_assertions, raising=False)
     monkeypatch.setattr(run_baseline, "OpenAICompatibleHttpClient", construct_client)
+    monkeypatch.setattr(run_baseline, "create_manifest", create_recorded_manifest)
     monkeypatch.setattr(
         run_baseline,
         "OpenAICompatibleQwenPolicy",
@@ -169,6 +200,7 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         ("task-1", "verified-gym-factory"),
     ]
     assert captured["probe_close_calls"] == 2
+    assert ordering == ["gym", "bind", "probe", "policy", "manifest", "episodes", "probe"]
     assert client_args == {
         "base_url": "http://qwen.invalid/v1",
         "model": "Qwen/Qwen3.5-9B",
@@ -183,6 +215,7 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
     }
     assert manifest["task_ids"] == ["task-1", "task-2"]
     assert manifest["iteration"] == 0
+    assert manifest["schema_version"] == 2
     assert manifest["parent_checkpoint"] is None
     assert manifest["user_simulator_config"] == {
         "solo_mode": False,
@@ -204,9 +237,19 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         "temperature": 1.0,
         "top_p": 0.95,
     }
+    assert manifest["evaluation_config"] == {
+        "nl_assertions": {
+            "model": "openrouter/openai/gpt-4.1",
+            "model_args": {"temperature": 0.0},
+            "api_key_env": "OPENROUTER_API_KEY",
+        }
+    }
     assert "top-secret-key" not in manifest_text
     assert "simulator-secret" not in manifest_text
-    assert "top-secret-key" not in capsys.readouterr().out
+    assert "openrouter-secret-key" not in manifest_text
+    stdout = capsys.readouterr().out
+    assert "top-secret-key" not in stdout
+    assert "openrouter-secret-key" not in stdout
 
 
 @pytest.mark.parametrize(
