@@ -104,6 +104,25 @@ retail 环境由当前官方 tau benchmark 仓库提供：
 - 维护周期：`Q = 30`。
 - 最大 episode 长度：40，除非 tau3 retail 需要不同上限。
 
+## Memory 存储设计
+
+Memory 持久化遵循 OPD-Evolver 官方仓库的文件式实现思路，不使用 SQLite 或其他数据库。四个层级分别使用普通 JSON 文件保存当前权威状态：
+
+- `trajectory_memory.json`
+- `tip_memory.json`
+- `skill_memory.json`
+- `tool_memory.json`
+
+每个层级文件包含 `schema_version`、`tier`、`count` 和 `items`。每条 MemoryItem 至少包含稳定 ID、content、embedding、metadata、source task IDs、created/updated round、version、active/retired status，以及 usage/success 统计。可选的 provider 级 embedding 结果另存为 `embedding_cache.json`，并按输入 hash 和 embedding model revision 隔离。
+
+Repository 在进程内以字典和 embedding 数组维护活动状态。启动时完整加载四个 JSON 文件；新增、更新、merge 或 retire 时，先在内存副本中完成类型、层级、provenance、重复项和版本校验，再将完整层级状态写入同目录临时文件，执行 flush/fsync 后通过 `os.replace` 原子替换目标文件。单层写入失败时旧文件必须保持完整可读。
+
+四层文件之间不宣称数据库式跨文件 ACID。一次 write decision 涉及多个层级时，各层使用稳定 Memory ID 幂等应用；只有全部目标层级完成后才追加成功事件。进程中断后根据 rollout JSONL 中的 write proposal/commit 状态检查并重试未完成层级，禁止生成重复 Memory。
+
+模型不得直接修改 JSON 文件。Writer 和 Maintainer 只能输出经过 Pydantic 校验的 `create`、`update`、`merge`、`retire` 和 `lookup` 命令；Repository 负责应用命令和持久化。Merge 只能发生在同一层级，retire 是软删除，历史决策保留在 JSONL 日志中。
+
+普通 JSON 仅保存当前 Memory 状态；以下追加式数据使用 JSONL：rollout 生命周期事件、候选/选择/使用证据、Memory 写入与维护操作、归因结果以及四类 OPD 训练样本。Checkpoint 或评测所使用的 Memory 通过四层规范化 JSON 副本和 snapshot manifest 固化，snapshot 内容 hash 作为 `memory_snapshot_id`。
+
 ## 结果校准的记忆归因
 
 项目只在某条记忆实际被检索到的任务上估计其价值。对于记忆 `m` 和任务组 `g`，比较“被检索且被选择”的使用情况与“被检索但未被选择”的使用情况。这对应论文的候选集受控归因思想：
@@ -199,7 +218,9 @@ LoRA：
 运行时 artifact 存放在 `runs/` 下，并由 git 忽略：
 
 - `runs/<run_id>/rollouts/*.jsonl`
-- `runs/<run_id>/memory/*.jsonl`
+- `runs/<run_id>/memory/{trajectory,tip,skill,tool}_memory.json`
+- `runs/<run_id>/memory/embedding_cache.json`
+- `runs/<run_id>/memory/snapshots/<snapshot_id>/*.json`
 - `runs/<run_id>/attribution/*.jsonl`
 - `runs/<run_id>/opd_examples/*.jsonl`
 - `runs/<run_id>/checkpoints/`

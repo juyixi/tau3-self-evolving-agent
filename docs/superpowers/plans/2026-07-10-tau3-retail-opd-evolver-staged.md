@@ -4,9 +4,9 @@
 
 **目标：** 分八个可独立测试的阶段构建并验证 tau3 retail 训练系统，覆盖官方 tau2-bench 环境接入、OPD-Evolver 快循环记忆、共享策略 LoRA 慢循环训练，以及留出 retail 任务评测。
 
-**架构：** 使用严格的适配器和 split guard 封装官方 `sierra-research/tau2-bench` retail Gym 环境。仅由 train 同策略 rollout 驱动事务化四层记忆快循环和 OPD-Evolver 归因/数据管线；一个 Qwen3.5-9B 和一个当前 LoRA 适配器同时执行学生 forward 与特权 stop-gradient 教师 forward。评测使用独立的只读或隔离管线，test 信息不能进入记忆归因、数据集、checkpoint 或 checkpoint 选择。
+**架构：** 使用严格的适配器和 split guard 封装官方 `sierra-research/tau2-bench` retail Gym 环境。仅由 train 同策略 rollout 驱动文件持久化的四层记忆快循环和 OPD-Evolver 归因/数据管线；一个 Qwen3.5-9B 和一个当前 LoRA 适配器同时执行学生 forward 与特权 stop-gradient 教师 forward。评测使用独立的只读或隔离管线，test 信息不能进入记忆归因、数据集、checkpoint 或 checkpoint 选择。
 
-**技术栈：** Python 3.12、uv、pytest、Pydantic、PyYAML、Gymnasium/tau2、SQLite 加 JSONL 导出、PyTorch、由 uv 锁定的最新版 Qwen3.5-compatible Transformers revision、PEFT、Accelerate，以及用于 rollout 推理的 OpenAI-compatible vLLM 或 SGLang endpoint。
+**技术栈：** Python 3.12、uv、pytest、Pydantic、PyYAML、Gymnasium/tau2、JSON memory 加 JSONL 日志/训练数据、PyTorch、由 uv 锁定的最新版 Qwen3.5-compatible Transformers revision、PEFT、Accelerate，以及用于 rollout 推理的 OpenAI-compatible vLLM 或 SGLang endpoint。
 
 ## 全局约束
 
@@ -30,7 +30,8 @@
 - 虽然项目面对用户的文档将任务称为 tau3 retail，但集成的是当前官方环境包 `tau2`。
 - 固定 revision 下的官方 split 文件是任务 ID 的唯一来源。当前兼容性检查预期 74 个 train、40 个 test 和 114 个 base ID。
 - 用于归因的训练任务分组使用特权离线签名，该签名由任务要求的非只读 evaluator action 名称生成，绝不暴露给学生 prompt。
-- SQLite 是可变 memory 的权威存储。版本化 JSONL snapshot 用于检查、训练溯源和 checkpoint 打包。
+- 与 OPD-Evolver 官方仓库一致，四层可变 memory 分别以普通 JSON 文件作为权威存储；运行日志、归因和 OPD 训练数据使用只追加 JSONL。版本化 JSON snapshot 用于检查、训练溯源和 checkpoint 打包。
+- Memory JSON 的修改必须先完整校验内存状态，再通过同目录临时文件、flush/fsync 和 `os.replace` 原子替换。单层文件更新失败时旧文件必须保持可读；跨层写入不宣称数据库式 ACID，依靠稳定 ID、幂等重试和 JSONL 生命周期事件恢复。
 - 真实检索使用可插拔 embedding retriever，并以 `Qwen/Qwen3-Embedding-0.6B` 作为与论文对齐的默认值。单元测试使用确定性的 fake embedding。
 - 慢循环 batch 由当前学生 checkpoint 生成，并且只在当前 iteration 中消费。LoRA checkpoint 更新后不得重复使用该 batch。
 - 禁止在 `public_input + privileged_input` 上执行普通 causal SFT。OPD loss 只能是对齐后的学生采样 response token 上的全词表 `KL(teacher || student)`。
@@ -54,7 +55,7 @@
 
 - `manifest.json`：模型和适配器 revision、tau2 commit、split hash、任务 ID、seed、用户模拟器、环境选项、memory snapshot、parent checkpoint 和运行命令。
 - `rollouts/events.jsonl`：只追加的决策与环境事件。
-- `memory/memory.sqlite3` 和 `memory/snapshots/<snapshot_id>.jsonl`。
+- `memory/{trajectory,tip,skill,tool}_memory.json`、`memory/embedding_cache.json` 和 `memory/snapshots/<snapshot_id>/` 下的确定性 JSON 副本。
 - `attribution/scores.jsonl`。
 - `opd_examples/{sel,act,write,maint}.jsonl`。
 - `checkpoints/iteration-<n>/adapter/`。
@@ -213,14 +214,14 @@
 
 ## 阶段 3：四层 Memory 基础
 
-**产出：** trajectory、tip、skill 和 tool memory 可以事务化存储、检索、版本化、维护和快照。
+**产出：** trajectory、tip、skill 和 tool memory 可以原子文件持久化、检索、版本化、维护和快照。
 
-### 任务 3.1：Memory 类型与事务化 Repository
+### 任务 3.1：Memory 类型与 JSON Repository
 
 **文件：**
 - 创建：`src/tau3_retail_evolver/memory/types.py`
 - 创建：`src/tau3_retail_evolver/memory/repository.py`
-- 创建：`src/tau3_retail_evolver/memory/schema.sql`
+- 创建：`src/tau3_retail_evolver/memory/json_store.py`
 - 测试：`tests/unit/memory/test_repository.py`
 
 **接口：**
@@ -228,12 +229,12 @@
 - 产出：`MemoryRepository.add/get/list/update_status/snapshot`
 - 强制层级：`trajectory`、`tip`、`skill` 和 `tool`
 
-- [ ] 编写失败测试，覆盖所有层级、稳定 ID、provenance、重复项拒绝、version 递增、active/retired 过滤、事务回滚和确定性 snapshot 导出。
+- [ ] 编写失败测试，覆盖所有层级、稳定 ID、provenance、重复项拒绝、version 递增、active/retired 过滤、原子替换失败后旧文件仍可读取、重启恢复和确定性 snapshot 导出。
 - [ ] 运行聚焦测试并确认失败。
-- [ ] 实现带 schema-version 表和 foreign-key enforcement 的 SQLite schema migration。
-- [ ] 按稳定的 `tier,id` 顺序导出 snapshot，并对文件计算 hash 作为 `memory_snapshot_id`。
+- [ ] 实现四个层级 JSON store；每个文件包含 `schema_version`、`tier`、`count` 和 `items`，每条 item 保存 content、embedding、metadata、source task、version、status 和使用统计。写入使用同目录临时文件和 `os.replace`。
+- [ ] 按稳定的 `tier,id` 顺序和规范化 JSON 编码导出四层 snapshot，并对 snapshot manifest 和文件内容计算 hash 作为 `memory_snapshot_id`。
 - [ ] 重新运行测试并确认 PASS。
-- [ ] 提交为 `feat: add four-tier transactional memory repository`。
+- [ ] 提交为 `feat: add four-tier json memory repository`。
 
 ### 任务 3.2：检索与候选日志
 
@@ -260,8 +261,8 @@
 - 创建：`src/tau3_retail_evolver/memory/read_only.py`
 - 测试：`tests/unit/memory/test_operations.py`
 
-- [ ] 编写失败测试，覆盖结构化 lookup、同层级 merge、拒绝跨层级 merge、soft delete、provenance 合并、无效批次回滚，以及只读 snapshot 拒绝修改。
-- [ ] 将 operation 实现为带类型的 command，绝不能直接执行模型输出的临时 SQL。
+- [ ] 编写失败测试，覆盖结构化 lookup、同层级 merge、拒绝跨层级 merge、soft delete、provenance 合并、无效批次不修改原文件，以及只读 snapshot 拒绝修改。
+- [ ] 将 operation 实现为带类型的 command，绝不能直接把未经校验的模型输出写入 Memory JSON。
 - [ ] 重新运行测试并确认 PASS。
 - [ ] 提交为 `feat: add memory lifecycle operations`。
 
@@ -300,10 +301,10 @@
 
 **接口：**
 - 产出：`run_fast_loop_episode(task, env, policy, memory, config, context) -> EpisodeResult`
-- 事件顺序：retrieve、select、action step、terminal result、write proposal、memory transaction
+- 事件顺序：retrieve、select、action step、terminal result、write proposal、memory persistence
 
 - [ ] 编写 fake-policy episode 失败测试，证明 selected set 是 candidate 的子集，每个学生 action 都是 on-policy，terminal reward 被保留，并且写入的 memory 引用源 episode。
-- [ ] 添加失败测试，覆盖无效 action、环境异常、最大步数截断、policy timeout 和 memory transaction rollback。
+- [ ] 添加失败测试，覆盖无效 action、环境异常、最大步数截断、policy timeout 和 Memory JSON 原子替换失败。
 - [ ] 实现 learning runner，使得只有 split 为 `train` 的 `RunMode.LEARN` 能获得训练 memory 修改能力。阶段 8 仅可通过 evaluation-quarantine capability 复用生命周期逻辑。
 - [ ] 重新运行测试并确认 PASS。
 - [ ] 提交为 `feat: add opd evolver fast-loop runner`。
@@ -314,7 +315,7 @@
 - 创建：`src/tau3_retail_evolver/fast_loop/maintenance.py`
 - 测试：`tests/unit/fast_loop/test_maintenance.py`
 
-- [ ] 编写失败测试，证明每完成 30 个 train 任务运行一次 maintenance；其只接收有边界的 repository diagnostics，以原子方式应用 lookup/merge/delete，并记录完整 maintenance 轨迹。
+- [ ] 编写失败测试，证明每完成 30 个 train 任务运行一次 maintenance；其只接收有边界的 repository diagnostics，按层级原子应用 lookup/merge/delete，并记录完整 maintenance 轨迹。
 - [ ] 根据已完成 round 数实现调度，保证 resume 不会重复运行同一个 maintenance round。
 - [ ] 重新运行测试并确认 PASS。
 - [ ] 提交为 `feat: add periodic memory maintenance`。
