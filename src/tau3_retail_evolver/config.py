@@ -11,7 +11,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _ENVIRONMENT_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CREDENTIAL_KEY_NAMES = frozenset(
-    {"apikey", "token", "secret", "password", "credential"}
+    {
+        "accesskey",
+        "accesstoken",
+        "apikey",
+        "apitoken",
+        "authtoken",
+        "clientsecret",
+        "credential",
+        "password",
+        "privatekey",
+        "secret",
+        "token",
+    }
 )
 
 

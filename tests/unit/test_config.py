@@ -158,6 +158,37 @@ evaluation:
         load_config(config_path)
 
 
+@pytest.mark.parametrize(
+    "credential_key",
+    (
+        "access_token",
+        "client_secret",
+        "auth_token",
+        "api_token",
+        "private_key",
+        "access_key",
+    ),
+)
+def test_load_config_rejects_nested_compound_credential_model_args(
+    tmp_path: Path, credential_key: str
+) -> None:
+    config_path = _write_temporary_config(
+        tmp_path,
+        f"""
+evaluation:
+  nl_assertions:
+    model: openrouter/openai/gpt-4.1
+    model_args:
+      retry:
+        {credential_key}: should-not-be-configured
+    api_key_env: OPENROUTER_API_KEY
+""",
+    )
+
+    with pytest.raises(ValueError, match="model_args"):
+        load_config(config_path)
+
+
 def _write_temporary_config(tmp_path: Path, evaluation_yaml: str) -> Path:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
