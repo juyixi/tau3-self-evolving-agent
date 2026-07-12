@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+from threading import Event
 
 import pytest
 
 from tau3_retail_evolver.io.jsonl import JsonlWriter
+from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import Retriever
 from tau3_retail_evolver.memory.types import MemoryStatus
@@ -26,6 +29,13 @@ class FakeEmbeddingProvider:
     def embed_batch(self, texts: list[str]) -> list[tuple[float, ...]]:
         self.batches.append(list(texts))
         return [self.vectors[text] for text in texts]
+
+
+class ResolvingEmbeddingProvider(FakeEmbeddingProvider):
+    model_revision = "fake-embedding@alias"
+
+    def prepare(self) -> None:
+        self.model_revision = "fake-embedding@resolved-commit"
 
 
 def test_retrieval_backfills_embeddings_and_returns_auditable_candidates(
@@ -142,3 +152,121 @@ def test_retrieval_appends_complete_candidate_evidence(tmp_path: Path) -> None:
             "tier": "tip",
         }
     ]
+
+
+def test_read_only_snapshot_retrieves_without_persisting_missing_embeddings(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    item = repository.add(
+        tier="tip",
+        content="Verify identity before refund",
+        source_task_ids=("task-1",),
+        created_round=0,
+    )
+    snapshot = repository.snapshot()
+    tip_path = snapshot.path / "tip_memory.json"
+    original = tip_path.read_bytes()
+    provider = FakeEmbeddingProvider(
+        {"refund request": (1.0, 0.0), item.retrieval_text: (1.0, 0.0)}
+    )
+
+    candidates = Retriever(provider).retrieve(
+        "refund request",
+        ReadOnlyMemoryRepository(snapshot.path),
+    )
+
+    assert [candidate.memory_id for candidate in candidates] == [item.id]
+    assert candidates[0].item.embedding == (1.0, 0.0)
+    assert tip_path.read_bytes() == original
+
+
+def test_retrieval_holds_a_consistent_view_during_embedding_backfill(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    item = repository.add(
+        tier="tip",
+        content="Verify identity before refund",
+        source_task_ids=("task-1",),
+        created_round=0,
+    )
+    provider = FakeEmbeddingProvider(
+        {"refund request": (1.0, 0.0), item.retrieval_text: (1.0, 0.0)}
+    )
+    entered = Event()
+    release = Event()
+    retired = Event()
+    original_embed_batch = provider.embed_batch
+
+    def blocking_embed_batch(texts: list[str]) -> list[tuple[float, ...]]:
+        entered.set()
+        assert release.wait(timeout=2)
+        return original_embed_batch(texts)
+
+    provider.embed_batch = blocking_embed_batch  # type: ignore[method-assign]
+
+    def retire() -> None:
+        repository.update_status(item.id, MemoryStatus.RETIRED, updated_round=1)
+        retired.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retrieval = pool.submit(Retriever(provider).retrieve, "refund request", repository)
+        assert entered.wait(timeout=1)
+        maintenance = pool.submit(retire)
+        try:
+            assert not retired.wait(timeout=0.1)
+        finally:
+            release.set()
+        candidates = retrieval.result()
+        maintenance.result()
+
+    assert [candidate.memory_id for candidate in candidates] == [item.id]
+    assert repository.get(item.id).status == MemoryStatus.RETIRED
+
+
+def test_retrieval_resolves_revision_before_classifying_stale_embeddings(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    item = repository.add(
+        tier="tip",
+        content="Verify identity before refund",
+        source_task_ids=("task-1",),
+        created_round=0,
+        embedding=(1.0, 0.0),
+        embedding_model_revision="fake-embedding@alias",
+    )
+    provider = ResolvingEmbeddingProvider(
+        {"refund request": (1.0, 0.0), item.retrieval_text: (0.6, 0.8)}
+    )
+
+    candidates = Retriever(provider).retrieve("refund request", repository)
+
+    assert provider.batches == [[item.retrieval_text]]
+    assert candidates[0].retriever_revision == "fake-embedding@resolved-commit"
+    assert repository.get(item.id).embedding == (0.6, 0.8)
+    assert repository.get(item.id).embedding_model_revision == provider.model_revision
+
+
+def test_retrieval_recomputes_invalid_stored_vector_and_rejects_invalid_query(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    item = repository.add(
+        tier="tip",
+        content="Verify identity before refund",
+        source_task_ids=("task-1",),
+        created_round=0,
+        embedding=(0.0, 0.0),
+        embedding_model_revision="fake-embedding@revision-1",
+    )
+    provider = FakeEmbeddingProvider(
+        {"bad query": (float("nan"), 0.0), item.retrieval_text: (1.0, 0.0)}
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        Retriever(provider).retrieve("bad query", repository)
+
+    assert provider.batches == [[item.retrieval_text]]
+    assert repository.get(item.id).embedding == (1.0, 0.0)

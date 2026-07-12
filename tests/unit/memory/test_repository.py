@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+from threading import Event, Lock
 
 import pytest
 
@@ -86,6 +88,120 @@ def test_status_change_increments_version_and_filters_retired_items(tmp_path: Pa
     assert repository.list(status=None) == [retired]
 
 
+def test_status_change_validates_round_without_changing_file(tmp_path: Path) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    item = repository.add(
+        tier="skill",
+        content="Authenticate before accessing an order.",
+        source_task_ids=("task-3",),
+        created_round=2,
+    )
+    path = tmp_path / "memory" / "skill_memory.json"
+    original = path.read_bytes()
+
+    with pytest.raises(ValueError):
+        repository.update_status(
+            item.id,
+            MemoryStatus.RETIRED,
+            updated_round=-1,
+        )
+
+    assert path.read_bytes() == original
+    assert repository.get(item.id) == item
+
+
+def test_status_change_rejects_round_regression(tmp_path: Path) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    item = repository.add(
+        tier="skill",
+        content="Authenticate before accessing an order.",
+        source_task_ids=("task-3",),
+        created_round=3,
+    )
+
+    with pytest.raises(ValueError, match="must not move backwards"):
+        repository.update_status(item.id, MemoryStatus.RETIRED, updated_round=2)
+
+    assert repository.get(item.id) == item
+
+
+def test_serializes_concurrent_writes_to_the_same_tier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    store = repository._stores[next(tier for tier in MEMORY_TIERS if tier == "tip")]
+    original_write = store.write
+    first_entered = Event()
+    release_first = Event()
+    second_entered = Event()
+    call_lock = Lock()
+    call_count = 0
+
+    def blocking_write(items: object) -> None:
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+            current_call = call_count
+        if current_call == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+        else:
+            second_entered.set()
+        original_write(items)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "write", blocking_write)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(
+            repository.add,
+            tier="tip",
+            content="Confirm the order number before a return.",
+            source_task_ids=("task-1",),
+            created_round=0,
+        )
+        assert first_entered.wait(timeout=1)
+        second = pool.submit(
+            repository.add,
+            tier="tip",
+            content="Confirm the item before an exchange.",
+            source_task_ids=("task-2",),
+            created_round=0,
+        )
+        try:
+            assert not second_entered.wait(timeout=0.1)
+        finally:
+            release_first.set()
+        first.result()
+        second.result()
+
+    assert second_entered.is_set()
+    reopened = MemoryRepository(tmp_path / "memory")
+    assert len(reopened.list(tier="tip")) == 2
+
+
+def test_repository_instances_do_not_overwrite_each_others_updates(tmp_path: Path) -> None:
+    root = tmp_path / "memory"
+    first = MemoryRepository(root)
+    second = MemoryRepository(root)
+
+    first.add(
+        tier="tip",
+        content="Confirm the order number before a return.",
+        source_task_ids=("task-1",),
+        created_round=0,
+    )
+    second.add(
+        tier="tip",
+        content="Confirm the item before an exchange.",
+        source_task_ids=("task-2",),
+        created_round=0,
+    )
+
+    assert len(first.list(tier="tip")) == 2
+    assert len(second.list(tier="tip")) == 2
+    assert len(MemoryRepository(root).list(tier="tip")) == 2
+
+
 def test_atomic_replace_failure_preserves_previous_store(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -160,4 +276,22 @@ def test_rejects_corrupt_or_mismatched_tier_store(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="tier mismatch"):
+        MemoryRepository(root)
+
+
+def test_rejects_memory_id_that_does_not_match_content(tmp_path: Path) -> None:
+    root = tmp_path / "memory"
+    repository = MemoryRepository(root)
+    repository.add(
+        tier="tip",
+        content="Confirm identity before a refund.",
+        source_task_ids=("task-1",),
+        created_round=0,
+    )
+    path = root / "tip_memory.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["items"][0]["id"] = "mem_tip_invalid"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="stable memory id mismatch"):
         MemoryRepository(root)

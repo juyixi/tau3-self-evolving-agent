@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 from typing import Protocol
 
+from tau3_retail_evolver.config import MemoryConfig
 from tau3_retail_evolver.memory.json_store import write_bytes_atomic
 
 
@@ -35,7 +36,7 @@ class JsonEmbeddingCache:
     ) -> None:
         replacement = dict(self._entries)
         for text, embedding in values:
-            vector = _validated_vector(embedding)
+            vector = validate_embedding(embedding)
             replacement[_cache_key(model_revision, text)] = list(vector)
         payload = {
             "schema_version": 1,
@@ -60,7 +61,7 @@ class JsonEmbeddingCache:
         entries = payload.get("entries")
         if not isinstance(entries, dict) or payload.get("count") != len(entries):
             raise ValueError(f"embedding cache count mismatch: {self.path}")
-        return {str(key): list(_validated_vector(value)) for key, value in entries.items()}
+        return {str(key): list(validate_embedding(value)) for key, value in entries.items()}
 
 
 class CachedEmbeddingProvider:
@@ -79,27 +80,36 @@ class CachedEmbeddingProvider:
     def embed(self, text: str) -> tuple[float, ...]:
         return self.embed_batch([text])[0]
 
+    def prepare(self) -> None:
+        prepare = getattr(self.provider, "prepare", None)
+        if callable(prepare):
+            prepare()
+
     def embed_batch(self, texts: list[str]) -> list[tuple[float, ...]]:
         if not texts:
             return []
+        self.prepare()
+        model_revision = self.model_revision
         resolved: dict[str, tuple[float, ...]] = {}
         missing: list[str] = []
         for text in texts:
-            cached = self.cache.get(self.model_revision, text)
+            cached = self.cache.get(model_revision, text)
             if cached is not None:
-                resolved[text] = cached
+                resolved[text] = validate_embedding(cached, dimension=self.dimension)
             elif text not in resolved and text not in missing:
                 missing.append(text)
         if missing:
             generated = self.provider.embed_batch(missing)
+            if self.model_revision != model_revision:
+                raise RuntimeError("embedding model revision changed during generation")
             if len(generated) != len(missing):
                 raise ValueError("embedding provider returned the wrong batch size")
             additions: list[tuple[str, tuple[float, ...]]] = []
             for text, embedding in zip(missing, generated, strict=True):
-                vector = _validated_vector(embedding, dimension=self.dimension)
+                vector = validate_embedding(embedding, dimension=self.dimension)
                 resolved[text] = vector
                 additions.append((text, vector))
-            self.cache.put_many(self.model_revision, additions)
+            self.cache.put_many(model_revision, additions)
         return [resolved[text] for text in texts]
 
 
@@ -129,6 +139,9 @@ class LocalQwenEmbeddingProvider:
 
     def embed(self, text: str) -> tuple[float, ...]:
         return self.embed_batch([text])[0]
+
+    def prepare(self) -> None:
+        self._load()
 
     def embed_batch(self, texts: list[str]) -> list[tuple[float, ...]]:
         if not texts:
@@ -204,11 +217,32 @@ class LocalQwenEmbeddingProvider:
         ]
 
 
+def build_embedding_provider(
+    config: MemoryConfig,
+    memory_root: Path,
+) -> EmbeddingProvider:
+    if config.embedding_provider != "local":
+        raise ValueError(f"unsupported embedding provider: {config.embedding_provider}")
+    provider = LocalQwenEmbeddingProvider(
+        model_id=config.embedding_model,
+        device=config.embedding_device,
+        dtype=config.embedding_dtype,
+        max_length=config.embedding_max_length,
+        batch_size=config.embedding_batch_size,
+    )
+    if not config.embedding_cache:
+        return provider
+    return CachedEmbeddingProvider(
+        provider,
+        JsonEmbeddingCache(memory_root / "embedding_cache.json"),
+    )
+
+
 def _cache_key(model_revision: str, text: str) -> str:
     return hashlib.sha256(f"{model_revision}\0{text}".encode("utf-8")).hexdigest()
 
 
-def _validated_vector(
+def validate_embedding(
     value: Sequence[float], *, dimension: int | None = None
 ) -> tuple[float, ...]:
     vector = tuple(float(component) for component in value)
@@ -216,4 +250,6 @@ def _validated_vector(
         raise ValueError("embedding must contain finite values")
     if dimension is not None and len(vector) != dimension:
         raise ValueError(f"embedding dimension mismatch: expected {dimension}, got {len(vector)}")
+    if math.sqrt(sum(component * component for component in vector)) == 0.0:
+        raise ValueError("embedding must not be zero-norm")
     return vector

@@ -7,7 +7,7 @@ import tempfile
 from typing import Iterable
 
 from tau3_retail_evolver.io.jsonl import _fsync_directory
-from tau3_retail_evolver.memory.types import MemoryItem, MemoryTier
+from tau3_retail_evolver.memory.types import MemoryItem, MemoryTier, stable_memory_id
 
 
 MEMORY_SCHEMA_VERSION = 1
@@ -47,6 +47,8 @@ class JsonTierStore:
         for item in items:
             if item.tier != self.tier:
                 raise ValueError(f"memory tier mismatch for {item.id}")
+            if item.id != stable_memory_id(item.tier, item.content):
+                raise ValueError(f"stable memory id mismatch for {item.id}")
             if item.id in seen:
                 raise ValueError(f"duplicate memory id: {item.id}")
             seen.add(item.id)
