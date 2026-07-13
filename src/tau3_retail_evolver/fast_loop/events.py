@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Protocol
 
 
 SCHEMA_VERSION = 1
+
+
+class RunMode(StrEnum):
+    LEARN = "learn"
+    EVALUATE = "evaluate"
+    BASELINE = "baseline"
 
 
 class EventWriter(Protocol):
@@ -21,10 +28,11 @@ class RunContext:
     iteration: int
     split: str
     model_revision: str
-    adapter_revision: None
-    memory_snapshot_id: None
+    adapter_revision: str | None
+    memory_snapshot_id: str | None
     seed: int
     event_writer: EventWriter
+    mode: RunMode = RunMode.BASELINE
     task_groups: Mapping[str, str] = field(default_factory=dict)
     temperature: float = 1.0
     top_p: float = 0.95
@@ -39,6 +47,7 @@ class RunContext:
             "run_id": self.run_id,
             "iteration": self.iteration,
             "split": self.split,
+            "mode": self.mode.value,
             "task_id": task_id,
             "task_group": self.task_group_for(task_id),
             "model_revision": self.model_revision,
