@@ -226,3 +226,62 @@ python -m pytest tests/unit/fast_loop tests/unit/memory -q --basetemp=.pytest-tm
 
 Changed-module compilation and `git diff --check` completed with exit code 0.
 The review fix is committed in the commit containing this section.
+
+### Contention Review Follow-Up
+
+#### Why The Previous Synchronization Did Not Prove Contention
+
+The previous tracking context manager set its second-attempt event before it
+delegated to the real `ReentrantFileLock.__enter__`. Waiting for that event only
+proved that the second worker had reached the wrapper. The first worker could
+release the real RLock after the event was set but before the second worker
+actually tried to acquire it, so the green test did not prove overlapping lock
+contention. This is recorded as the RED-equivalent diagnosis permitted by the
+review request; no production behavior or production code changed.
+
+The active CPython runtime reports the real `_thread.RLock.acquire` signature
+as `(blocking=True, timeout=-1)` and accepts `blocking=False`.
+
+#### Revised Deterministic Synchronization
+
+- The test obtains the actual scheduler `ReentrantFileLock` from the production
+  `reentrant_process_lock` factory for the real repository root and namespace.
+- It saves that object's real `_thread_lock` RLock and replaces only the field
+  with a proxy. Production `ReentrantFileLock.__enter__`/`__exit__`, depth
+  tracking, OS/file locking, and the real underlying RLock remain active.
+- On the second calling thread, proxy `acquire()` first delegates
+  `actual_rlock.acquire(blocking=False)`. If that succeeds, the contention
+  event remains unset and the test times out. Only an explicit `False`, proving
+  that the first thread currently owns the real RLock, sets
+  `second_contended`; the proxy then delegates the real blocking `acquire()`.
+- Proxy `release()` delegates directly to the saved real RLock. No no-lock fake
+  or substituted scheduler context manager is used.
+- The main thread waits for `second_contended` before releasing the blocked
+  first policy call. Assertions require two lock-acquire calls, one policy
+  generation, one delegated real `apply_batch`, one three-event sequence, and
+  one completed state round.
+
+#### Verification
+
+Targeted contention test:
+
+```text
+python -m pytest tests/unit/fast_loop/test_maintenance.py::test_two_threads_execute_same_round_only_once -q --basetemp=.pytest-tmp/task3-contention-rlock
+1 passed in 0.25s
+```
+
+Task 3 suite:
+
+```text
+python -m pytest tests/unit/fast_loop/test_maintenance.py -q --basetemp=.pytest-tmp/task3-contention-review
+62 passed in 1.03s
+```
+
+Fast-loop and memory regression:
+
+```text
+python -m pytest tests/unit/fast_loop tests/unit/memory -q --basetemp=.pytest-tmp/task3-contention-review-regression
+190 passed in 5.22s
+```
+
+Only the Task 3 test and this report changed in this follow-up.

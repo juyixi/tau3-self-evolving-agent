@@ -744,39 +744,58 @@ def test_two_threads_execute_same_round_only_once(
     policy = BlockingPolicy()
     first_events = EventCollector()
     second_events = EventCollector()
-    second_lock_attempt = threading.Event()
-    attempts_guard = threading.Lock()
-    scheduler_lock_attempts = 0
+    second_contended = threading.Event()
+    tracking_guard = threading.Lock()
+    lock_acquire_calls = 0
     application_calls = 0
-    actual_lock_factory = maintenance.reentrant_process_lock
     actual_apply_batch = maintenance.MemoryOperations.apply_batch
+    actual_scheduler_lock = maintenance.reentrant_process_lock(
+        root,
+        namespace="fast-loop-maintenance",
+    )
+    actual_thread_lock = actual_scheduler_lock._thread_lock
+    first_thread_id: int | None = None
+    second_thread_checked = False
 
-    class TrackingLock:
-        def __init__(self, actual_lock: Any) -> None:
-            self.actual_lock = actual_lock
+    class TrackingRLock:
+        def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+            nonlocal first_thread_id, lock_acquire_calls, second_thread_checked
+            current_thread_id = threading.get_ident()
+            with tracking_guard:
+                lock_acquire_calls += 1
+                if first_thread_id is None:
+                    first_thread_id = current_thread_id
+                probe_contention = (
+                    current_thread_id != first_thread_id
+                    and not second_thread_checked
+                )
+                if probe_contention:
+                    second_thread_checked = True
 
-        def __enter__(self):
-            nonlocal scheduler_lock_attempts
-            with attempts_guard:
-                scheduler_lock_attempts += 1
-                if scheduler_lock_attempts == 2:
-                    second_lock_attempt.set()
-            self.actual_lock.__enter__()
-            return self
+            if probe_contention:
+                if actual_thread_lock.acquire(blocking=False):
+                    return True
+                second_contended.set()
+                return actual_thread_lock.acquire()
+            if timeout == -1:
+                return actual_thread_lock.acquire(blocking)
+            return actual_thread_lock.acquire(blocking, timeout)
 
-        def __exit__(self, *args: Any) -> None:
-            self.actual_lock.__exit__(*args)
+        def release(self) -> None:
+            actual_thread_lock.release()
 
-    def tracking_lock_factory(resource: Path, *, namespace: str):
-        return TrackingLock(actual_lock_factory(resource, namespace=namespace))
+    monkeypatch.setattr(
+        actual_scheduler_lock,
+        "_thread_lock",
+        TrackingRLock(),
+    )
 
     def tracking_apply_batch(self: Any, commands: Any):
         nonlocal application_calls
-        with attempts_guard:
+        with tracking_guard:
             application_calls += 1
         return actual_apply_batch(self, commands)
 
-    monkeypatch.setattr(maintenance, "reentrant_process_lock", tracking_lock_factory)
     monkeypatch.setattr(
         maintenance.MemoryOperations,
         "apply_batch",
@@ -790,12 +809,13 @@ def test_two_threads_execute_same_round_only_once(
         first_future = executor.submit(invoke, first_events)
         assert policy.entered.wait(timeout=5)
         second_future = executor.submit(invoke, second_events)
-        assert second_lock_attempt.wait(timeout=5)
+        assert second_contended.wait(timeout=5)
         policy.release.set()
         results = (first_future.result(timeout=5), second_future.result(timeout=5))
 
     assert sorted(result.executed for result in results) == [False, True]
-    assert scheduler_lock_attempts == 2
+    assert lock_acquire_calls == 2
+    assert second_contended.is_set()
     assert len(policy.prompts) == 1
     assert application_calls == 1
     assert sum(len(events.events) for events in (first_events, second_events)) == 3
