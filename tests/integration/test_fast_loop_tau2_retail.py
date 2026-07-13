@@ -134,7 +134,9 @@ def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) ->
     assert manifest["tau2_commit"] == runtime.git_commit
     assert manifest["split_hash"] == catalog.split_sha256
     assert manifest["task_ids"] == list(task_ids)
+    assert manifest["rollout_options"]["memory_enabled"] is True
     assert manifest["memory_snapshot_id"] == summary["input_memory_snapshot_id"]
+    assert summary["memory_enabled"] is True
 
     required_lifecycle = {
         "EpisodeStarted",

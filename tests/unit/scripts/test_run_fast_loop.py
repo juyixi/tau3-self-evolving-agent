@@ -14,7 +14,7 @@ from tau3_retail_evolver.io.jsonl import JsonlWriter
 from tau3_retail_evolver.memory.repository import MemoryRepository
 
 
-def _config(tmp_path: Path) -> SimpleNamespace:
+def _config(tmp_path: Path, *, memory_enabled: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
         tau2=SimpleNamespace(
             repo_path=tmp_path / "external" / "tau2-bench",
@@ -23,6 +23,7 @@ def _config(tmp_path: Path) -> SimpleNamespace:
         model=SimpleNamespace(base_model="Qwen/Qwen3.5-9B"),
         rollout=SimpleNamespace(temperature=1.0, top_p=0.95, max_episode_steps=40),
         memory=SimpleNamespace(
+            enabled=memory_enabled,
             agent_id="retail",
             retrieve_top_k=50,
             maintenance_period=30,
@@ -56,8 +57,9 @@ def _install_main_dependencies(
     tmp_path: Path,
     *,
     episode_runner: Any,
+    memory_enabled: bool = True,
 ) -> tuple[list[str], dict[str, Any]]:
-    config = _config(tmp_path)
+    config = _config(tmp_path, memory_enabled=memory_enabled)
     runtime = SimpleNamespace(
         repo_path=config.tau2.repo_path,
         git_commit="a" * 40,
@@ -454,12 +456,14 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
     assert manifest["adapter_revision"] == "adapter-revision-b"
     assert manifest["parent_checkpoint"] is None
     assert manifest["task_ids"] == ["task-1", "task-2"]
+    assert manifest["rollout_options"]["memory_enabled"] is True
     assert summary == {
         "completed_train_tasks_after": 27,
         "completed_train_tasks_before": 25,
         "episode_count": 2,
         "input_memory_snapshot_id": manifest["memory_snapshot_id"],
         "maintenance_rounds_executed": [],
+        "memory_enabled": True,
         "output_memory_snapshot_id": summary["output_memory_snapshot_id"],
         "run_id": "learn-001",
         "successful_task_ids": ["task-1", "task-2"],
@@ -519,6 +523,72 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
     for secret in ("qwen-secret", "openrouter-secret", "simulator-secret"):
         assert secret not in all_artifacts
         assert secret not in stdout
+
+
+def test_disables_memory_dependencies_and_records_no_memory_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    episode_contexts: list[RunContext] = []
+
+    def episode_runner(**kwargs: Any) -> EpisodeResult:
+        assert kwargs["repository"] is None
+        assert kwargs["retriever"] is None
+        assert kwargs["config"].memory_enabled is False
+        episode_contexts.append(kwargs["context"])
+        kwargs["environment"].close()
+        return _episode(kwargs["task_id"])
+
+    _install_main_dependencies(
+        monkeypatch,
+        tmp_path,
+        episode_runner=episode_runner,
+        memory_enabled=False,
+    )
+
+    def memory_dependency_called(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("memory dependency must not be called when disabled")
+
+    monkeypatch.setattr(run_fast_loop, "open_training_memory", memory_dependency_called)
+    monkeypatch.setattr(run_fast_loop, "build_embedding_provider", memory_dependency_called)
+    monkeypatch.setattr(run_fast_loop, "run_due_maintenance", memory_dependency_called)
+
+    returncode = run_fast_loop.main(
+        [
+            "--split",
+            "train",
+            "--task-id",
+            "task-1",
+            "--run-id",
+            "learn-no-memory",
+            "--output-root",
+            str(tmp_path / "runs"),
+            "--project-root",
+            str(tmp_path / "isolated-project"),
+            "--qwen-base-url",
+            "http://qwen.invalid/v1",
+            "--model-revision",
+            "revision-a",
+            "--completed-train-tasks-before",
+            "0",
+        ]
+    )
+
+    run_path = tmp_path / "runs" / "learn-no-memory"
+    manifest = json.loads((run_path / "manifest.json").read_text(encoding="utf-8"))
+    summary = json.loads((run_path / "fast_loop_summary.json").read_text(encoding="utf-8"))
+
+    assert returncode == 0
+    assert all(context.memory_snapshot_id is None for context in episode_contexts)
+    assert manifest["rollout_options"]["memory_enabled"] is False
+    assert manifest["memory_snapshot_id"] is None
+    assert summary["memory_enabled"] is False
+    assert summary["input_memory_snapshot_id"] is None
+    assert summary["output_memory_snapshot_id"] is None
+    assert summary["maintenance_rounds_executed"] == []
+    assert not (tmp_path / "isolated-project" / "history").exists()
+    assert json.loads(capsys.readouterr().out) == summary
 
 
 def test_episode_failure_preserves_events_without_success_summary(

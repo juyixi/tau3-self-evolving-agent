@@ -103,10 +103,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         probe.close()
 
-    repository = open_training_memory(config.memory, root=args.project_root)
-    embedding_provider = build_embedding_provider(config.memory, repository.root)
-    retriever = Retriever(embedding_provider)
-    input_snapshot = repository.snapshot()
+    if config.memory.enabled:
+        repository = open_training_memory(config.memory, root=args.project_root)
+        embedding_provider = build_embedding_provider(config.memory, repository.root)
+        retriever = Retriever(embedding_provider)
+        input_memory_snapshot_id = repository.snapshot().memory_snapshot_id
+    else:
+        repository = None
+        retriever = None
+        input_memory_snapshot_id = None
 
     client = OpenAICompatibleHttpClient(
         base_url=base_url,
@@ -128,7 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_revision=args.model_revision,
         parent_checkpoint=None,
         adapter_revision=args.adapter_revision,
-        memory_snapshot_id=input_snapshot.memory_snapshot_id,
+        memory_snapshot_id=input_memory_snapshot_id,
         tau2_commit=runtime.git_commit,
         split=args.split,
         split_hash=catalog.split_sha256,
@@ -143,6 +148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "temperature": config.rollout.temperature,
             "top_p": config.rollout.top_p,
             "max_episode_steps": config.rollout.max_episode_steps,
+            "memory_enabled": config.memory.enabled,
         },
         model_serving_contract=MODEL_SERVING_CONTRACT,
         evaluation_config={"nl_assertions": evaluation_provenance},
@@ -154,7 +160,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         split=args.split,
         model_revision=args.model_revision,
         adapter_revision=args.adapter_revision,
-        memory_snapshot_id=input_snapshot.memory_snapshot_id,
+        memory_snapshot_id=input_memory_snapshot_id,
         seed=config.training.seed,
         event_writer=JsonlWriter(run_path / "rollouts" / "events.jsonl"),
         mode=RunMode.LEARN,
@@ -164,6 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default_task_group="retail",
     )
     fast_loop_config = FastLoopConfig(
+        memory_enabled=config.memory.enabled,
         retrieve_top_k=config.memory.retrieve_top_k,
         max_episode_steps=config.rollout.max_episode_steps,
     )
@@ -182,7 +189,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         completed_train_tasks_before=args.completed_train_tasks_before,
         maintenance_period=config.memory.maintenance_period,
     )
-    output_snapshot = repository.snapshot()
+    output_memory_snapshot_id = (
+        repository.snapshot().memory_snapshot_id if repository is not None else None
+    )
     summary = {
         "run_id": args.run_id,
         "episode_count": len(results),
@@ -191,8 +200,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "maintenance_rounds_executed": list(maintenance_rounds),
         "completed_train_tasks_before": args.completed_train_tasks_before,
         "completed_train_tasks_after": args.completed_train_tasks_before + len(results),
-        "input_memory_snapshot_id": input_snapshot.memory_snapshot_id,
-        "output_memory_snapshot_id": output_snapshot.memory_snapshot_id,
+        "memory_enabled": config.memory.enabled,
+        "input_memory_snapshot_id": input_memory_snapshot_id,
+        "output_memory_snapshot_id": output_memory_snapshot_id,
     }
     summary_bytes = _canonical_json_bytes(summary)
     write_bytes_atomic(run_path / "fast_loop_summary.json", summary_bytes)
@@ -205,8 +215,8 @@ def _run_requested_tasks(
     task_ids: Sequence[str],
     env_factory: Callable[[str], Any],
     policy: Any,
-    repository: MemoryRepository,
-    retriever: Any,
+    repository: MemoryRepository | None,
+    retriever: Any | None,
     fast_loop_config: Any,
     context: RunContext,
     completed_train_tasks_before: int,
@@ -215,11 +225,13 @@ def _run_requested_tasks(
     results: list[EpisodeResult] = []
     maintenance_rounds: list[int] = []
     for index, task_id in enumerate(task_ids, start=1):
-        episode_snapshot = repository.snapshot()
-        episode_context = replace(
-            context,
-            memory_snapshot_id=episode_snapshot.memory_snapshot_id,
-        )
+        if repository is not None:
+            episode_context = replace(
+                context,
+                memory_snapshot_id=repository.snapshot().memory_snapshot_id,
+            )
+        else:
+            episode_context = replace(context, memory_snapshot_id=None)
         result = run_fast_loop_episode(
             task_id=task_id,
             task_instruction=TASK_INSTRUCTION,
@@ -231,20 +243,20 @@ def _run_requested_tasks(
             context=episode_context,
         )
         results.append(result)
-        maintenance_snapshot = repository.snapshot()
-        maintenance_context = replace(
-            context,
-            memory_snapshot_id=maintenance_snapshot.memory_snapshot_id,
-        )
-        maintenance = run_due_maintenance(
-            completed_train_tasks=completed_train_tasks_before + index,
-            period=maintenance_period,
-            repository=repository,
-            policy=policy,
-            context=maintenance_context,
-        )
-        if maintenance.executed:
-            maintenance_rounds.append(maintenance.maintenance_round)
+        if repository is not None:
+            maintenance_context = replace(
+                context,
+                memory_snapshot_id=repository.snapshot().memory_snapshot_id,
+            )
+            maintenance = run_due_maintenance(
+                completed_train_tasks=completed_train_tasks_before + index,
+                period=maintenance_period,
+                repository=repository,
+                policy=policy,
+                context=maintenance_context,
+            )
+            if maintenance.executed:
+                maintenance_rounds.append(maintenance.maintenance_round)
     return tuple(results), tuple(maintenance_rounds)
 
 
