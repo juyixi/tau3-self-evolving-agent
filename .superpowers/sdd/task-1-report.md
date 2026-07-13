@@ -1,60 +1,168 @@
-# Task 1 Report
+# Stage 4 Task 1 Report
 
-Status: DONE_WITH_CONCERNS
+## Status
 
-## Modified files
+Completed and committed on branch `codex/stage-4-fast-loop`.
 
-- `configs/default.yaml`
-- `src/tau3_retail_evolver/config.py`
+## TDD Evidence
+
+### RED
+
+Command:
+
+```powershell
+python -m pytest tests/unit/fast_loop/test_decisions.py tests/unit/fast_loop/test_prompts.py -q --basetemp=.pytest-tmp/task1
+```
+
+Result: failed during collection as expected because both required modules did not yet
+exist:
+
+- `ModuleNotFoundError: No module named 'tau3_retail_evolver.fast_loop.decisions'`
+- `ModuleNotFoundError: No module named 'tau3_retail_evolver.fast_loop.prompts'`
+
+### GREEN
+
+Command:
+
+```powershell
+python -m pytest tests/unit/fast_loop/test_decisions.py tests/unit/fast_loop/test_prompts.py -q --basetemp=.pytest-tmp/task1
+```
+
+Result: `12 passed in 0.20s`.
+
+Relevant existing-memory and fast-loop regression command:
+
+```powershell
+python -m pytest tests/unit/memory tests/unit/fast_loop -q --basetemp=.pytest-tmp/task1-regression
+```
+
+Result: `92 passed in 4.03s`.
+
+Additional verification:
+
+```powershell
+python -m compileall -q src/tau3_retail_evolver/fast_loop/decisions.py src/tau3_retail_evolver/fast_loop/prompts.py
+git diff --check
+```
+
+Result: both completed successfully with no output.
+
+## Files Changed
+
+- `src/tau3_retail_evolver/fast_loop/decisions.py`
 - `src/tau3_retail_evolver/fast_loop/prompts.py`
-- `tests/unit/test_config.py`
+- `tests/unit/fast_loop/test_decisions.py`
 - `tests/unit/fast_loop/test_prompts.py`
 - `.superpowers/sdd/task-1-report.md`
 
-## RED
+## Implementation Summary
 
-- Command: `python -m pytest tests/unit/test_config.py -q`
-- Expected failure: `MemoryConfig` had no `enabled` field; the new default assertion raised `AttributeError`.
-- Command: `python -m pytest tests/unit/fast_loop/test_prompts.py -q`
-- Expected failure: `build_action_prompt()` rejected the new `include_memory_context` keyword argument.
-- Note: the config RED run also reported unrelated `tmp_path` setup errors because the environment denied scanning `C:\Users\huang\AppData\Local\Temp\pytest-of-huang`.
+- Added strict, frozen, extra-forbidding decision models for selection, action, memory
+  writes, maintenance commands, and parser results.
+- Added single-object JSON parsing with optional semantic validation, at most one repair,
+  and explicit failure results that never produce a maintenance command from invalid
+  output.
+- Added JSON-safe lifecycle prompts that project Memory candidates to the allowed public
+  fields and reject hidden evaluation, attribution, embedding, metadata, hindsight, and
+  task-ID fields.
+- Added bounded maintenance diagnostics with schemas for the existing typed lookup,
+  merge, and delete commands.
 
-## GREEN
+## Self-Review
 
-- Command: `python -m pytest --basetemp .pytest-tmp tests/unit/test_config.py tests/unit/fast_loop/test_prompts.py -q`
-- Result: `48 passed in 0.59s`
-
-## Implementation
-
-- Added `memory.enabled: true` to the default YAML.
-- Added `MemoryConfig.enabled: StrictBool = True`.
-- Added `include_memory_context: bool = True` to `build_action_prompt`, preserving default memory output and allowing the `memories` payload field to be omitted.
-- Added regression tests for strict boolean validation, YAML false override parsing, default behavior, and memory omission.
+- Confirmed every new Pydantic model is frozen, strict, and forbids extra fields.
+- Confirmed selection IDs are trimmed, nonblank, unique, and can be semantically checked
+  against the supplied candidate ID set through `validate_candidates`.
+- Confirmed the parser rejects non-object JSON, schema failures, semantic failures, and a
+  failed repaired response without falling back to a command.
+- Confirmed selection and action prompts include only the Memory allowlist: ID, tier,
+  content, version, rank, and similarity.
+- Confirmed no unrelated tracked files were modified. The pre-existing untracked plan
+  file `docs/superpowers/plans/2026-07-13-stage-4-fast-loop.md` was left untouched.
 
 ## Commit
 
-- Implementation commit: `b2f7aeadc4a8c52541be5b9dc673b19eec202730`
-- Message: `feat: add strict memory feature switch`
-
-## Self-check
-
-- `git diff --check`: passed.
-- Changed code and tests are limited to the five task files; this report is the only additional file changed.
-- Focused tests pass with a workspace-local basetemp.
+Implementation commit: `1599112` (`Add fast loop lifecycle decisions and prompts`).
 
 ## Concerns
 
-- The default pytest temp directory is inaccessible in this environment, so focused verification required `--basetemp .pytest-tmp`. This is an environment permission issue, not a test failure in the task changes.
-- Git needed elevated permission to create the worktree index lock during commit.
+None. Git emitted existing line-ending conversion warnings for the newly added Python
+files; they do not affect test or compilation results.
 
-## Reviewer Fix
+## Fix Review Findings
 
-- Replaced direct `ProjectConfig.model_validate` strictness coverage with temporary YAML files loaded through `load_config`.
-- `test_memory_config_accepts_yaml_false` now writes and reads a temporary YAML file containing `enabled: false`.
-- Added YAML loader boundary coverage for `enabled: "false"` and `enabled: 0`, both expecting `ValidationError`.
-- Production files were not modified.
-- Test command: `python -m pytest --basetemp .pytest-tmp tests/unit/test_config.py tests/unit/fast_loop/test_prompts.py -q`
-- Exact result: `48 passed in 0.37s`
-- Fix commit: `f932c3028196fd36f7fb17c3cd2c80e5149db91e`
+### Findings Addressed
 
-Final verification: `python -m pytest -p no:cacheprovider --basetemp .pytest-tmp-review tests/unit/test_config.py tests/unit/fast_loop/test_prompts.py -q` -> `48 passed in 0.32s`.
+- Forbidden prompt keys are normalized with Unicode NFKC, case folding, and removal of
+  separators before comparison. Nested camelCase, mixed-case, hyphenated, dotted, and
+  tuple-contained variants are rejected. History messages use an exact `role` and
+  `content` whitelist.
+- Maintenance command payloads pass through strict fast-loop input models before they
+  are exposed as the existing Stage 3 `LookupCommand`, `MergeCommand`, and
+  `DeleteCommand` types. String, float, and boolean values cannot be coerced into
+  `updated_round`.
+- Parsing `SelectionDecision` now requires `candidate_ids`; missing sets and unknown IDs
+  return explicit failures, while valid subsets parse successfully.
+- Maintenance diagnostics now require exactly the `trajectory`, `tip`, `skill`, and
+  `tool` tiers. Each tier has an `items` list capped at 100 entries, and each item permits
+  only `id`, `content`, `version`, `usage_count`, `success_count`, and `last_used` with
+  strict bounded types.
+
+### Review RED
+
+Command:
+
+```powershell
+python -m pytest tests/unit/fast_loop/test_decisions.py tests/unit/fast_loop/test_prompts.py -q --basetemp=.pytest-tmp/task1-review-red
+```
+
+Result: `13 failed, 12 passed in 0.28s`. The failures reproduced missing mandatory
+candidate sets, unknown candidate handling, maintenance scalar coercion, forbidden-key
+variants, history leakage, and unbounded diagnostics.
+
+Additional direct-construction boundary command:
+
+```powershell
+python -m pytest tests/unit/fast_loop/test_prompts.py -q --basetemp=.pytest-tmp/task1-review-red-tuple
+```
+
+Result: `1 failed, 15 passed in 0.24s`. The failing test demonstrated that a JSON-safe
+nested tuple could bypass recursive hidden-field scanning.
+
+### Review GREEN
+
+Task 1 command:
+
+```powershell
+python -m pytest tests/unit/fast_loop/test_decisions.py tests/unit/fast_loop/test_prompts.py -q --basetemp=.pytest-tmp/task1-review-final-2
+```
+
+Result: `28 passed in 0.24s`.
+
+Relevant regression command:
+
+```powershell
+python -m pytest tests/unit/memory tests/unit/fast_loop -q --basetemp=.pytest-tmp/task1-review-regression-2
+```
+
+Result: `108 passed in 4.07s`.
+
+Additional verification:
+
+```powershell
+python -m compileall -q src/tau3_retail_evolver/fast_loop/decisions.py src/tau3_retail_evolver/fast_loop/prompts.py
+git diff --check
+```
+
+Result: both completed successfully. `git diff --check` reported only the existing Git
+line-ending conversion warnings.
+
+### Fix Commit
+
+Implementation fix commit: `edaa2aa` (`Fix Task 1 lifecycle review findings`).
+
+### Fix Concerns
+
+`pytest-cov` is not installed in the current environment, so no percentage-based
+coverage report was generated. All new review cases have focused regression tests, and
+the complete related fast-loop and memory unit suites pass.
