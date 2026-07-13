@@ -265,7 +265,6 @@ git commit -m "feat: record no-memory fast-loop ablations"
 **Files:**
 - Modify: `docs/stage-4-fast-loop-validation.md`
 - Modify: `docs/superpowers/specs/2026-07-09-tau3-retail-opd-evolver-design.md`
-- Modify: `docs/superpowers/plans/2026-07-10-tau3-retail-opd-evolver-staged.md`
 - Test: full repository suite
 
 **Interfaces:**
@@ -273,7 +272,7 @@ git commit -m "feat: record no-memory fast-loop ablations"
 
 - [ ] **Step 1: 更新长期设计与阶段计划**
 
-在主设计的快循环章节明确总开关，阶段计划 Stage 4 gate 增加无 Memory fake run 验收；不得改变 Stage 5 attribution 公式或 Stage 8 test 隔离协议。
+在主设计的快循环章节明确总开关和无 Memory fake run 验收；不得改变 Stage 5 attribution 公式或 Stage 8 test 隔离协议。独立的本功能设计与实施计划承担变更追踪，不修改存在用户未提交工作的分阶段总计划。
 
 - [ ] **Step 2: 增加消融运行指南**
 
@@ -307,7 +306,7 @@ Expected: 两条命令 exit code 0。
 - [ ] **Step 6: 提交 Task 4**
 
 ```bash
-git add docs/stage-4-fast-loop-validation.md docs/superpowers/specs/2026-07-09-tau3-retail-opd-evolver-design.md docs/superpowers/plans/2026-07-10-tau3-retail-opd-evolver-staged.md
+git add docs/stage-4-fast-loop-validation.md docs/superpowers/specs/2026-07-09-tau3-retail-opd-evolver-design.md
 git commit -m "docs: document memory ablation workflow"
 ```
 
