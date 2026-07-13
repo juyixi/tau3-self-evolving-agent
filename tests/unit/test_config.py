@@ -58,31 +58,18 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
 
 
-@pytest.mark.parametrize("enabled", ("false", 0))
-def test_memory_config_rejects_non_strict_enabled_values(enabled: object) -> None:
-    with pytest.raises(ValidationError):
-        ProjectConfig.model_validate(
-            {
-                "tau2": {
-                    "repo_path": "external/tau2-bench",
-                    "domain": "retail",
-                    "train_split": "train",
-                    "eval_split": "test",
-                    "user_llm": "test-user",
-                },
-                "model": {"base_model": "Qwen/Qwen3.5-9B"},
-                "memory": {"enabled": enabled},
-            }
-        )
-
-
-def test_memory_config_accepts_yaml_false() -> None:
-    config = load_config(
-        PROJECT_ROOT / "configs" / "default.yaml",
-        overrides=("memory.enabled=false",),
-    )
+def test_memory_config_accepts_yaml_false(tmp_path: Path) -> None:
+    config = load_config(_write_config_with_memory_enabled(tmp_path, "false"))
 
     assert config.memory.enabled is False
+
+
+@pytest.mark.parametrize("enabled_yaml", ('"false"', "0"))
+def test_memory_config_rejects_non_strict_enabled_values_from_yaml(
+    tmp_path: Path, enabled_yaml: str
+) -> None:
+    with pytest.raises(ValidationError):
+        load_config(_write_config_with_memory_enabled(tmp_path, enabled_yaml))
 
 
 @pytest.mark.parametrize(
@@ -284,6 +271,17 @@ def _write_temporary_config(tmp_path: Path, evaluation_yaml: str) -> Path:
     config_path.write_text(
         (PROJECT_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
         + evaluation_yaml,
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def _write_config_with_memory_enabled(tmp_path: Path, enabled_yaml: str) -> Path:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        (PROJECT_ROOT / "configs" / "default.yaml")
+        .read_text(encoding="utf-8")
+        .replace("  enabled: true", f"  enabled: {enabled_yaml}", 1),
         encoding="utf-8",
     )
     return config_path
