@@ -114,7 +114,7 @@ git diff --cached --check
 - 五任务 PowerShell 命令使用 `--adapter-revision "adapter@immutable-revision"`，不再包含会被 PowerShell 解释的裸 `<...>`。
 - manifest 的 model revision、parent checkpoint、adapter revision 和 memory snapshot ID 在非空校验之外，统一拒绝含 username、password、query 或 fragment 的 HTTP(S) URL；错误不回显输入，baseline schema version 2 精确输出保持不变。
 - opt-in smoke 读取 manifest 并绑定 pinned tau2 commit、官方 split hash、task IDs 和输入 Memory snapshot；所有 episode event 必须携带同一输入 snapshot ID。lifecycle 门禁增加 `EnvironmentStepped` 并校验顺序。
-- snapshot 变化只由每个 `MemoryWriteCommitted` 中 `written_memory_ids - replayed_memory_ids` 的非空结果，或 `MaintenanceCommitted.created_ids/updated_ids` 的非空结果触发。纯 replay/no-op 要求输入输出 snapshot 相等。
+- snapshot 变化只由全部 `MemoryWriteCommitted` 的 `Counter(written_memory_ids) - Counter(replayed_memory_ids)` 多重集差非空触发。纯 replay/no-op 要求输入输出 snapshot 相等。
 
 ### RED
 
@@ -144,3 +144,30 @@ git diff --check
 - `.superpowers/sdd/task-4b-report.md`
 
 未修改 CLI 编排、已审核 fast-loop/memory/environment/model adapter/baseline/configuration 模块，也未触碰其他开发者的未跟踪 implementation plan。
+
+## Snapshot Replay 审查修复追加（2026-07-13）
+
+### 修复内容
+
+- opt-in integration test 新增 `_has_canonical_memory_write` 纯 helper，分别累计全部 `MemoryWriteCommitted` 的 written/replayed `Counter`，以多重集差是否非空判定真实 canonical write。
+- helper 用例覆盖 `written=[id,id], replayed=[id]` 为 changed，以及 `written=[id], replayed=[id]` 为 no change，避免集合去重丢失重复计数。
+- 五任务 smoke 使用 `completed_train_tasks_before=0`，不会到达 Q30 maintenance 边界。snapshot 断言仅使用真实 write multiset；隔离空库没有真实 write 时要求输入输出 snapshot 相等，不再基于 `MaintenanceCommitted` 推断。
+- 本轮只修改 `tests/integration/test_fast_loop_tau2_retail.py` 和本报告，生产代码未改动。
+
+### RED/GREEN
+
+```text
+python -m pytest tests/integration/test_fast_loop_tau2_retail.py -q --basetemp=.pytest-tmp/task4b-replay-red
+python -m pytest tests/integration/test_fast_loop_tau2_retail.py -q --basetemp=.pytest-tmp/task4b-replay-green
+```
+
+RED：`2 failed, 1 skipped in 0.22s`，两个 Counter 场景均因 helper 尚未定义而失败。GREEN：`2 passed, 1 skipped in 0.20s`。
+
+### 目标与全量回归
+
+```text
+python -m pytest tests/unit/scripts/test_run_fast_loop.py tests/unit/runs/test_manifest.py tests/integration/test_fast_loop_tau2_retail.py -q --basetemp=.pytest-tmp/task4b-replay-target
+python -m pytest -q --basetemp=.pytest-tmp/task4b-replay-regression
+```
+
+结果：目标集 `38 passed, 1 skipped in 0.41s`；全量 `359 passed, 3 skipped in 6.06s`。真实五任务 smoke 仍按 opt-in 契约跳过，未产生模型成本。

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 
@@ -22,20 +24,53 @@ REQUIRED_ENV = (
 )
 MISSING_ENV = tuple(name for name in REQUIRED_ENV if not os.environ.get(name))
 
-pytestmark = [
-    pytest.mark.tau2_integration,
-    pytest.mark.skipif(
-        os.environ.get("RUN_FAST_LOOP_TAU2_INTEGRATION") != "1" or bool(MISSING_ENV),
-        reason=(
-            "set RUN_FAST_LOOP_TAU2_INTEGRATION=1 and provide the Qwen endpoint "
-            "(QWEN_BASE_URL, QWEN_MODEL_REVISION), OpenRouter evaluator credential "
-            "(OPENROUTER_API_KEY), and default DeepSeek simulator credential "
-            "(DEEPSEEK_API_KEY)"
-        ),
+pytestmark = [pytest.mark.tau2_integration]
+real_tau2_integration = pytest.mark.skipif(
+    os.environ.get("RUN_FAST_LOOP_TAU2_INTEGRATION") != "1" or bool(MISSING_ENV),
+    reason=(
+        "set RUN_FAST_LOOP_TAU2_INTEGRATION=1 and provide the Qwen endpoint "
+        "(QWEN_BASE_URL, QWEN_MODEL_REVISION), OpenRouter evaluator credential "
+        "(OPENROUTER_API_KEY), and default DeepSeek simulator credential "
+        "(DEEPSEEK_API_KEY)"
     ),
-]
+)
 
 
+def _has_canonical_memory_write(events: list[dict[str, Any]]) -> bool:
+    written_ids: Counter[str] = Counter()
+    replayed_ids: Counter[str] = Counter()
+    for event in events:
+        if event["event_type"] != "MemoryWriteCommitted":
+            continue
+        written_ids.update(event["written_memory_ids"])
+        replayed_ids.update(event["replayed_memory_ids"])
+    return bool(written_ids - replayed_ids)
+
+
+@pytest.mark.parametrize(
+    ("written_ids", "replayed_ids", "expected"),
+    (
+        (("memory-1", "memory-1"), ("memory-1",), True),
+        (("memory-1",), ("memory-1",), False),
+    ),
+)
+def test_detects_canonical_memory_writes_as_a_multiset(
+    written_ids: tuple[str, ...],
+    replayed_ids: tuple[str, ...],
+    expected: bool,
+) -> None:
+    events = [
+        {
+            "event_type": "MemoryWriteCommitted",
+            "written_memory_ids": list(written_ids),
+            "replayed_memory_ids": list(replayed_ids),
+        }
+    ]
+
+    assert _has_canonical_memory_write(events) is expected
+
+
+@real_tau2_integration
 def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) -> None:
     config_path = WORKTREE_ROOT / "configs" / "default.yaml"
     config = load_config(config_path)
@@ -143,21 +178,7 @@ def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) ->
             for proposal in proposed["proposals"]
         )
 
-    canonical_written_ids = {
-        memory_id
-        for event in events
-        if event["event_type"] == "MemoryWriteCommitted"
-        for memory_id in event["written_memory_ids"]
-        if memory_id not in set(event["replayed_memory_ids"])
-    }
-    maintenance_changed_ids = {
-        memory_id
-        for event in events
-        if event["event_type"] == "MaintenanceCommitted"
-        for field in ("created_ids", "updated_ids")
-        for memory_id in event[field]
-    }
-    if canonical_written_ids or maintenance_changed_ids:
+    if _has_canonical_memory_write(events):
         assert summary["output_memory_snapshot_id"] != summary["input_memory_snapshot_id"]
     else:
         assert summary["output_memory_snapshot_id"] == summary["input_memory_snapshot_id"]
