@@ -247,10 +247,9 @@ class OpenAICompatibleFastLoopPolicy:
             raise RuntimeError("OpenAI-compatible fast-loop policy request failed") from None
         latency_s = max(0.0, self._clock() - started_at)
         if prompt.kind == "action":
-            raw_output = _fast_loop_action_raw_output(completion)
-            raw_output = self._action_output(completion, raw_output, tools)
+            raw_output = self._action_output(completion, tools)
         else:
-            raw_output = _raw_output(completion)
+            raw_output = _fast_loop_non_action_output(completion)
         return LifecycleResponse(
             raw_output=raw_output,
             sampling_params={
@@ -263,17 +262,19 @@ class OpenAICompatibleFastLoopPolicy:
     def _action_output(
         self,
         completion: object,
-        raw_output: str,
         tools: Sequence[Mapping[str, Any]],
     ) -> str:
         try:
+            raw_output = _fast_loop_action_raw_output(completion)
             parser = self._tool_call_parser or parse_openai_qwen_tool_call
             tool_call = parser(completion)
             if tool_call is not None and not isinstance(tool_call, str):
                 raise ValueError("Qwen tool-call parser must return text or None")
             action = Tau2ActionCodec.decode(tool_call or raw_output, _tool_names(tools))
-        except (TypeError, ValueError):
-            return raw_output
+        except Exception:
+            return _canonical_json(
+                {"invalid_action_output": "action decoding failed"}
+            )
         return _canonical_json({"action": action})
 
 
@@ -343,6 +344,25 @@ def _fast_loop_action_raw_output(completion: object) -> str:
         except (TypeError, ValueError) as error:
             raise ValueError("structured assistant message must be JSON serializable") from error
     return _raw_output(completion)
+
+
+def _fast_loop_non_action_output(completion: object) -> str:
+    try:
+        message = _assistant_message(completion)
+        if message is not None and _has_rejected_tool_calls(message):
+            return _canonical_json(message)
+        return _raw_output(completion)
+    except Exception:
+        return _canonical_json(
+            {"invalid_lifecycle_output": "model response could not be decoded"}
+        )
+
+
+def _has_rejected_tool_calls(message: Mapping[str, Any]) -> bool:
+    if "tool_calls" not in message or message["tool_calls"] is None:
+        return False
+    tool_calls = message["tool_calls"]
+    return not (isinstance(tool_calls, list) and not tool_calls)
 
 
 def _has_structured_tool_calls(message: Mapping[str, Any]) -> bool:

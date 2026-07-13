@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 
+from tau3_retail_evolver.envs.base import ResetResult, StepResult
 from tau3_retail_evolver.fast_loop.decisions import ActionDecision, parse_decision
+from tau3_retail_evolver.fast_loop.events import RunContext, RunMode
 from tau3_retail_evolver.fast_loop.prompts import (
     LifecyclePrompt,
     build_action_prompt,
@@ -14,6 +16,9 @@ from tau3_retail_evolver.fast_loop.prompts import (
     build_selection_prompt,
     build_write_prompt,
 )
+from tau3_retail_evolver.fast_loop.runner import FastLoopConfig, run_fast_loop_episode
+from tau3_retail_evolver.memory.repository import MemoryRepository
+from tau3_retail_evolver.memory.retrieval import Retriever
 from tau3_retail_evolver.models.openai_compatible import (
     OpenAICompatibleFastLoopPolicy,
     OpenAICompatibleHttpClient,
@@ -37,6 +42,16 @@ class FakeClient:
     def create_chat_completion(self, **kwargs: Any) -> object:
         self.calls.append(kwargs)
         return self.completion
+
+
+class ScriptedClient:
+    def __init__(self, completions: list[object]) -> None:
+        self.completions = list(completions)
+        self.calls: list[dict[str, Any]] = []
+
+    def create_chat_completion(self, **kwargs: Any) -> object:
+        self.calls.append(kwargs)
+        return self.completions.pop(0)
 
 
 class FakeClock:
@@ -409,18 +424,61 @@ def test_fast_loop_malformed_action_is_returned_invalid_for_runner_repair() -> N
     response = policy.generate(_lifecycle_prompts()["action"])
     parsed = parse_decision(response.raw_output, ActionDecision)
 
-    assert response.raw_output == malformed
+    assert set(json.loads(response.raw_output)) == {"invalid_action_output"}
     assert parsed.decision is None
     assert parsed.error is not None
     assert len(client.calls) == 1
 
 
-def test_fast_loop_malformed_structured_action_is_returned_for_runner_repair() -> None:
-    message = {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": {"function": {"name": "find_order", "arguments": "{}"}},
-    }
+def test_fast_loop_codec_failure_cannot_bypass_repair_with_action_decision_shell() -> None:
+    nested_invalid_action = _canonical(
+        {"action": _canonical({"name": "unknown", "arguments": {}})}
+    )
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=FakeClient(_completion(nested_invalid_action)),
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.generate(_lifecycle_prompts()["action"])
+
+    assert set(json.loads(response.raw_output)) == {"invalid_action_output"}
+    assert parse_decision(response.raw_output, ActionDecision).decision is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        {"role": "assistant", "content": None},
+        {"role": "assistant", "content": None, "tool_calls": None},
+        {"role": "assistant", "content": None, "tool_calls": []},
+        {
+            "role": "assistant",
+            "content": '{"action":"mixed content"}',
+            "tool_calls": {"function": {"name": "find_order", "arguments": "{}"}},
+        },
+        {
+            "role": "assistant",
+            "content": '{"action":"mixed content"}',
+            "tool_calls": "malformed",
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "find_order",
+                        "arguments": {"not_json_safe"},
+                    }
+                }
+            ],
+        },
+    ),
+)
+def test_fast_loop_action_extraction_failures_return_parser_invalid_wrapper(
+    message: dict[str, object],
+) -> None:
     policy = OpenAICompatibleFastLoopPolicy(
         client=FakeClient({"choices": [{"message": message}]}),
         temperature=0.7,
@@ -429,7 +487,7 @@ def test_fast_loop_malformed_structured_action_is_returned_for_runner_repair() -
 
     response = policy.generate(_lifecycle_prompts()["action"])
 
-    assert response.raw_output == _canonical(message)
+    assert set(json.loads(response.raw_output)) == {"invalid_action_output"}
     assert parse_decision(response.raw_output, ActionDecision).decision is None
 
 
@@ -451,6 +509,41 @@ def test_fast_loop_non_action_rejects_structured_tool_calls(kind: str) -> None:
     response = policy.generate(_lifecycle_prompts()[kind])
 
     assert response.raw_output == _canonical(message)
+
+
+@pytest.mark.parametrize("kind", ("selection", "write", "maintenance"))
+@pytest.mark.parametrize(
+    "tool_calls",
+    (
+        {"function": {"name": "hidden_tool", "arguments": "{}"}},
+        "malformed-tool-call",
+        7,
+    ),
+)
+def test_fast_loop_non_action_rejects_any_nonempty_tool_calls_mixed_with_valid_content(
+    kind: str,
+    tool_calls: object,
+) -> None:
+    valid_content = {
+        "selection": '{"memory_ids":[]}',
+        "write": '{"memories":[]}',
+        "maintenance": '{"commands":[]}',
+    }[kind]
+    message = {
+        "role": "assistant",
+        "content": valid_content,
+        "tool_calls": tool_calls,
+    }
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=FakeClient({"choices": [{"message": message}]}),
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.generate(_lifecycle_prompts()[kind])
+
+    assert response.raw_output == _canonical(message)
+    assert response.raw_output != valid_content
 
 
 def test_fast_loop_repair_sends_only_public_prompt_invalid_output_and_error() -> None:
@@ -518,6 +611,110 @@ def test_fast_loop_action_repair_retains_tools_and_converts_structured_action() 
         '{"action":"{\\"arguments\\":{\\"order_id\\":\\"123\\"},'
         '\\"name\\":\\"find_order\\"}"}'
     )
+
+
+def test_fast_loop_runner_repairs_codec_invalid_action_before_environment_step(
+    tmp_path: Any,
+) -> None:
+    invalid_action = _canonical(
+        {"action": _canonical({"name": "unknown", "arguments": {}})}
+    )
+    repaired_tool_call = [
+        {
+            "type": "function",
+            "function": {"name": "find_order", "arguments": {"order_id": "123"}},
+        }
+    ]
+    client = ScriptedClient(
+        [
+            _completion('{"memory_ids":[]}'),
+            _completion(invalid_action),
+            _completion(None, tool_calls=repaired_tool_call),
+            _completion('{"memories":[]}'),
+        ]
+    )
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=client,
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    class OneStepEnvironment:
+        def __init__(self) -> None:
+            self.actions: list[str] = []
+
+        def reset(self, *, seed: int) -> ResetResult:
+            return ResetResult(
+                observation="Please find order 123.",
+                info={
+                    "policy": {"rule": "Verify the order first."},
+                    "tools": _public_context()["tools"],
+                },
+            )
+
+        def step(self, action: str) -> StepResult:
+            self.actions.append(action)
+            return StepResult(
+                observation="Order found.",
+                reward=1.0,
+                done=True,
+                terminated=True,
+                truncated=False,
+                info={"reward_info": "{}", "simulation_run": "{}"},
+            )
+
+        def close(self) -> None:
+            pass
+
+    class EmptyEmbeddingProvider:
+        model_revision = "empty@1"
+        dimension = 2
+
+        def embed(self, text: str) -> tuple[float, ...]:
+            return (1.0, 0.0)
+
+        def embed_batch(self, texts: list[str]) -> list[tuple[float, ...]]:
+            return [(1.0, 0.0) for _ in texts]
+
+    class EventCollector:
+        def __init__(self) -> None:
+            self.events: list[dict[str, Any]] = []
+
+        def append(self, event: dict[str, Any]) -> None:
+            self.events.append(event)
+
+    environment = OneStepEnvironment()
+    events = EventCollector()
+    run_fast_loop_episode(
+        task_id="runner-repair-test",
+        task_instruction="Help the customer find an order.",
+        environment=environment,
+        policy=policy,
+        repository=MemoryRepository(tmp_path / "memory"),
+        retriever=Retriever(EmptyEmbeddingProvider()),
+        config=FastLoopConfig(max_episode_steps=1),
+        context=RunContext(
+            run_id="task4a-review",
+            iteration=1,
+            split="train",
+            model_revision="Qwen/Qwen3.5-9B",
+            adapter_revision=None,
+            memory_snapshot_id=None,
+            seed=7,
+            event_writer=events,
+            mode=RunMode.LEARN,
+        ),
+    )
+
+    expected_action = '{"arguments":{"order_id":"123"},"name":"find_order"}'
+    assert environment.actions == [expected_action]
+    action_calls = [call for call in client.calls if call["tools"]]
+    assert len(action_calls) == 2
+    assert len(client.calls) == 4
+    assert client.completions == []
+    serialized_events = _canonical(events.events)
+    assert "unknown" not in serialized_events
+    assert "invalid_action_output" not in serialized_events
 
 
 @pytest.mark.parametrize(
