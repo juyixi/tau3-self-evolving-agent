@@ -20,7 +20,7 @@
 
 ## 生命周期审计
 
-- 本任务修改范围仅为两份文档；没有新增、修改或删除 `src/`、`scripts/`、`tools/` 或 `tests/` 文件。
+- 产品文档修改范围仅为两份文档；另新增本审计报告，且没有新增、修改或删除 `src/`、`scripts/`、`tools/` 或 `tests/` 文件。
 - `scripts/` 的已跟踪产品入口仍为 `scripts/run_baseline.py` 和 `scripts/run_fast_loop.py`（及包初始化文件）；没有一次性验证脚本进入该目录。
 - `git ls-files history runs` 无输出，确认运行数据未被 Git 跟踪。
 - `.pytest-tmp/` 由 `.gitignore` 忽略，完整测试的 workspace-local basetemp 未进入交付。
