@@ -36,9 +36,10 @@ class RunContext:
     task_groups: Mapping[str, str] = field(default_factory=dict)
     temperature: float = 1.0
     top_p: float = 0.95
+    default_task_group: str = "baseline"
 
     def task_group_for(self, task_id: str) -> str:
-        return self.task_groups.get(task_id, "baseline")
+        return self.task_groups.get(task_id, self.default_task_group)
 
     def event(self, event_type: str, task_id: str, **payload: Any) -> dict[str, Any]:
         return {

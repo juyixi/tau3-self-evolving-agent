@@ -18,6 +18,7 @@ from tau3_retail_evolver.fast_loop.runner import (
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import Retriever
+from tau3_retail_evolver.memory.types import MemoryTier, stable_memory_id
 
 
 class EventCollector:
@@ -108,6 +109,16 @@ class FailOnNthAddRepository(MemoryRepository):
         if self.runner_add_calls == self.fail_on_add:
             raise OSError("database password=super-secret")
         return super().add(**kwargs)
+
+
+class FailOnceOnGetRepository(MemoryRepository):
+    fail_memory_id: str | None = None
+
+    def get(self, memory_id: str):
+        if memory_id == self.fail_memory_id:
+            self.fail_memory_id = None
+            raise OSError("lookup password=super-secret")
+        return super().get(memory_id)
 
 
 def _response(raw_output: str) -> LifecycleResponse:
@@ -531,7 +542,10 @@ def test_public_boundary_redacts_credentials_before_events_retrieval_and_policy(
     assert "[REDACTED]" in json.dumps(events.events)
 
 
-@pytest.mark.parametrize("forbidden_key", ["ａｔｔｒｉｂｕｔｉｏｎ＿ｓｃｏｒｅ", "apiToken"])
+@pytest.mark.parametrize(
+    "forbidden_key",
+    ["ａｔｔｒｉｂｕｔｉｏｎ＿ｓｃｏｒｅ", "apiToken", "dbPassword", "refreshToken"],
+)
 def test_forbidden_write_metadata_receives_one_clean_repair_without_leakage(
     tmp_path: Path,
     forbidden_key: str,
@@ -580,6 +594,44 @@ def test_forbidden_write_metadata_receives_one_clean_repair_without_leakage(
     assert sentinel not in json.dumps(
         [item.model_dump(mode="json") for item in repository.list()]
     )
+
+
+@pytest.mark.parametrize("forbidden_key", ["dbPassword", "refreshToken"])
+def test_credential_write_metadata_in_repair_stops_before_proposal_or_persistence(
+    tmp_path: Path,
+    forbidden_key: str,
+) -> None:
+    sentinel = "repaired-write-credential-sentinel"
+    invalid_write = json.dumps(
+        {
+            "memories": [
+                {
+                    "tier": "tip",
+                    "content": "Must not persist",
+                    "metadata": {"nested": {forbidden_key: sentinel}},
+                }
+            ]
+        }
+    )
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    policy = ScriptedLifecyclePolicy(
+        ['{"memory_ids":[]}', '{"action":"finish"}', invalid_write],
+        [invalid_write],
+    )
+
+    with pytest.raises(ValueError, match="write decision after repair"):
+        _run(
+            repository=repository,
+            environment=FakeEnvironment(_reset(), [_terminal_step()]),
+            policy=policy,
+            events=events,
+        )
+
+    assert len(policy.repair_calls) == 1
+    assert not any(event["event_type"] == "MemoryWriteProposed" for event in events.events)
+    assert repository.list() == []
+    assert sentinel not in json.dumps(events.events)
 
 
 def test_full_width_attribution_failed_repair_stops_before_proposal_or_persistence(
@@ -887,6 +939,61 @@ def test_partial_write_failure_separates_replays_from_new_commits(
     assert failed["event_type"] == "MemoryWriteFailed"
     assert failed["committed_memory_ids"] == [new_item.id]
     assert failed["replayed_memory_ids"] == [existing.id]
+
+
+def test_replay_lookup_failure_preserves_prior_write_progress(
+    tmp_path: Path,
+) -> None:
+    repository = FailOnceOnGetRepository(tmp_path / "memory")
+    replay = repository.add(
+        tier="tip",
+        content="Existing replay",
+        source_task_ids=("provenance-task-923",),
+        created_round=0,
+        embedding=(1.0, 0.0),
+        embedding_model_revision="fake-embedding@1",
+    )
+    lookup_failure = repository.add(
+        tier="tool",
+        content="Lookup fails for this replay",
+        source_task_ids=("provenance-task-923",),
+        created_round=0,
+        embedding=(1.0, 0.0),
+        embedding_model_revision="fake-embedding@1",
+    )
+    repository.fail_memory_id = lookup_failure.id
+    events = EventCollector()
+    policy = ScriptedLifecyclePolicy(
+        [
+            '{"memory_ids":[]}',
+            '{"action":"finish"}',
+            json.dumps(
+                {
+                    "memories": [
+                        {"tier": "tip", "content": "Existing replay"},
+                        {"tier": "skill", "content": "New committed"},
+                        {"tier": "tool", "content": "Lookup fails for this replay"},
+                    ]
+                }
+            ),
+        ]
+    )
+
+    with pytest.raises(OSError, match="super-secret"):
+        _run(
+            repository=repository,
+            environment=FakeEnvironment(_reset(), [_terminal_step()]),
+            policy=policy,
+            events=events,
+        )
+
+    failed = events.events[-1]
+    new_memory_id = stable_memory_id(MemoryTier.SKILL, "New committed")
+    assert failed["event_type"] == "MemoryWriteFailed"
+    assert failed["committed_memory_ids"] == [new_memory_id]
+    assert failed["replayed_memory_ids"] == [replay.id]
+    assert repository.get(new_memory_id) is not None
+    assert "super-secret" not in json.dumps(events.events)
 
 
 def test_duplicate_write_is_accepted_only_as_safe_stable_id_replay(tmp_path: Path) -> None:

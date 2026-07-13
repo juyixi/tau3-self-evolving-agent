@@ -451,6 +451,56 @@ def test_nested_camelcase_attribution_triggers_clean_repair(
     assert sentinel not in repr(merged.metadata)
 
 
+def test_nested_credential_metadata_triggers_clean_repair(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    first, second, _ = _seed(repository)
+    events = EventCollector()
+    sentinel = "maintenance-credential-sentinel"
+    base_command = {
+        "operation": "merge",
+        "source_ids": [first.id, second.id],
+        "content": "Verify identity and confirmation before refund.",
+        "updated_round": 1,
+    }
+    policy = ScriptedPolicy(
+        [
+            json.dumps(
+                {
+                    "commands": [
+                        {
+                            **base_command,
+                            "metadata": {"audit": {"apiToken": sentinel}},
+                        }
+                    ]
+                }
+            )
+        ],
+        repairs=[
+            json.dumps(
+                {
+                    "commands": [
+                        {
+                            **base_command,
+                            "metadata": {"audit": {"reason": "deduplicate"}},
+                        }
+                    ]
+                }
+            )
+        ],
+    )
+
+    result = _run(repository, policy, events)
+
+    assert len(policy.repair_calls) == 1
+    assert events.events[1]["repair_used"] is True
+    merged = repository.get(result.created_ids[0])
+    assert merged is not None
+    assert sentinel not in json.dumps(merged.model_dump(mode="json"))
+    assert sentinel not in json.dumps(events.events)
+
+
 def test_attribution_separator_variant_after_repair_fails_without_mutation(
     tmp_path: Path,
 ) -> None:

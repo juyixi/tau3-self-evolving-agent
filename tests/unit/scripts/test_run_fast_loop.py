@@ -211,8 +211,28 @@ def test_rejects_non_train_before_loading_configuration(
                 str(tmp_path),
                 "--model-revision",
                 "revision-a",
+                "--completed-train-tasks-before",
+                "0",
             ]
         )
+
+
+def test_requires_explicit_completed_train_tasks_before() -> None:
+    with pytest.raises(SystemExit) as error:
+        run_fast_loop.parse_args(
+            [
+                "--split",
+                "train",
+                "--task-id",
+                "task-1",
+                "--run-id",
+                "learn-001",
+                "--model-revision",
+                "revision-a",
+            ]
+        )
+
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize(
@@ -247,6 +267,8 @@ def test_rejects_invalid_arguments_before_configuration_access(
         str(tmp_path),
         "--model-revision",
         "revision-a",
+        "--completed-train-tasks-before",
+        "0",
     ]
     option = extra_args[0]
     if option in arguments:
@@ -309,6 +331,8 @@ def test_requires_qwen_base_url_after_catalog_verification(
                 str(tmp_path / "runs"),
                 "--model-revision",
                 "revision-a",
+                "--completed-train-tasks-before",
+                "0",
             ]
         )
 
@@ -336,6 +360,8 @@ def test_refuses_existing_run_before_configuration_access(
                 str(tmp_path / "runs"),
                 "--model-revision",
                 "revision-a",
+                "--completed-train-tasks-before",
+                "0",
             ]
         )
 
@@ -421,6 +447,7 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         context.task_group_for(task_id) == "retail"
         for context, task_id in zip(episode_contexts, captured_tasks, strict=True)
     )
+    assert all(context.default_task_group == "retail" for context in episode_contexts)
     maintenance_contexts = captured["maintenance_contexts"]
     assert maintenance_contexts[0].memory_snapshot_id == episode_contexts[1].memory_snapshot_id
     assert maintenance_contexts[1].memory_snapshot_id == summary["output_memory_snapshot_id"]
@@ -523,6 +550,8 @@ def test_episode_failure_preserves_events_without_success_summary(
                 "http://qwen.invalid/v1",
                 "--model-revision",
                 "revision-a",
+                "--completed-train-tasks-before",
+                "0",
             ]
         )
 
@@ -546,6 +575,7 @@ def test_thirty_successful_tasks_execute_exactly_maintenance_round_one(
         seed=17,
         event_writer=JsonlWriter(tmp_path / "events.jsonl"),
         mode=RunMode.LEARN,
+        default_task_group="retail",
     )
 
     class EmptyMaintenancePolicy:
@@ -590,3 +620,4 @@ def test_thirty_successful_tasks_execute_exactly_maintenance_round_one(
     assert len(starts) == 1
     assert starts[0]["completed_train_tasks"] == 30
     assert starts[0]["task_id"] == "maintenance-round-1"
+    assert starts[0]["task_group"] == "retail"

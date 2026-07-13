@@ -557,9 +557,11 @@ def _validate_write_decision(decision: WriteDecision) -> WriteDecision:
 def _validate_write_metadata(value: Any) -> None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
-            normalized_key = unicodedata.normalize("NFKC", str(key)).casefold()
+            normalized_key = unicodedata.normalize("NFKC", str(key))
             compact_key = "".join(
-                character for character in normalized_key if character.isalnum()
+                character
+                for character in normalized_key.casefold()
+                if character.isalnum()
             )
             if "attributionscore" in compact_key:
                 raise ValueError("write metadata must not contain attribution score")
@@ -584,9 +586,9 @@ def _without_forbidden_metadata(value: Any) -> Any:
 
 
 def _is_forbidden_metadata_key(key: Any) -> bool:
-    normalized_key = unicodedata.normalize("NFKC", str(key)).casefold()
+    normalized_key = unicodedata.normalize("NFKC", str(key))
     compact_key = "".join(
-        character for character in normalized_key if character.isalnum()
+        character for character in normalized_key.casefold() if character.isalnum()
     )
     return "attributionscore" in compact_key or is_credential_key(normalized_key)
 
@@ -602,7 +604,14 @@ def _persist_proposals(
         try:
             item = repository.add(**proposal["add_kwargs"])
         except ValueError as error:
-            existing = repository.get(proposal["memory_id"])
+            try:
+                existing = repository.get(proposal["memory_id"])
+            except BaseException as lookup_error:
+                _attach_write_progress(lookup_error, committed, replayed)
+                lookup_error.add_note(
+                    f"Replay lookup followed rejected add ({type(error).__name__})"
+                )
+                raise
             if not _is_safe_replay(existing, proposal):
                 _attach_write_progress(error, committed, replayed)
                 raise

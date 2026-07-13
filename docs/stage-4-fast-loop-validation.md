@@ -52,7 +52,7 @@ python -m scripts.run_fast_loop `
 
 ## 累计维护调度
 
-`--completed-train-tasks-before` 必须显式给出同一共享 agent namespace 在本次调用前已成功完成的 train 任务总数。CLI 不从 run ID 或目录猜测该值。summary 同时记录 `completed_train_tasks_before` 和 `completed_train_tasks_after`。
+`--completed-train-tasks-before` 是 required 参数，必须显式给出同一共享 agent namespace 在本次调用前已成功完成的 train 任务总数。遗漏会在 argparse 阶段失败，不会静默默认为 0。CLI 不从 run ID 或目录猜测该值。summary 同时记录 `completed_train_tasks_before` 和 `completed_train_tasks_after`。
 
 - `0 + 5`：五任务运行依次检查累计值 1 到 5，不执行 maintenance。
 - `25 + 5`：前四个任务检查 26 到 29；第五个任务成功后累计值为 30，执行且只执行 maintenance round 1。

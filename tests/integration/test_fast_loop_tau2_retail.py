@@ -102,6 +102,8 @@ def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) ->
         os.environ["QWEN_BASE_URL"],
         "--model-revision",
         os.environ["QWEN_MODEL_REVISION"],
+        "--completed-train-tasks-before",
+        "0",
     ]
     for task_id in task_ids:
         command.extend(("--task-id", task_id))

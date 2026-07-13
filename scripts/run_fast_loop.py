@@ -71,7 +71,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-revision", required=True)
     parser.add_argument("--adapter-revision")
     parser.add_argument("--project-root", type=Path)
-    parser.add_argument("--completed-train-tasks-before", type=int, default=0)
+    parser.add_argument("--completed-train-tasks-before", type=int, required=True)
     return parser.parse_args(argv)
 
 
@@ -161,6 +161,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         task_groups={task_id: "retail" for task_id in args.task_ids},
         temperature=config.rollout.temperature,
         top_p=config.rollout.top_p,
+        default_task_group="retail",
     )
     fast_loop_config = FastLoopConfig(
         retrieve_top_k=config.memory.retrieve_top_k,

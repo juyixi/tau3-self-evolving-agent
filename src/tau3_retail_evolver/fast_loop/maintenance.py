@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 import unicodedata
 
+from tau3_retail_evolver.credential_policy import is_credential_key
 from tau3_retail_evolver.fast_loop.decisions import (
     MaintenanceDecision,
     parse_decision,
@@ -283,24 +284,30 @@ def _validate_commands(
                 "maintenance command updated_round must equal maintenance_round"
             )
         if isinstance(command, MergeCommand):
-            _reject_attribution_score(command.metadata)
+            _reject_forbidden_metadata(command.metadata)
 
 
-def _reject_attribution_score(value: Any) -> None:
+def _reject_forbidden_metadata(value: Any) -> None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
-            normalized_key = unicodedata.normalize("NFKC", str(key)).casefold()
-            normalized_key = "".join(
-                character for character in normalized_key if character.isalnum()
+            normalized_key = unicodedata.normalize("NFKC", str(key))
+            compact_key = "".join(
+                character
+                for character in normalized_key.casefold()
+                if character.isalnum()
             )
-            if "attributionscore" in normalized_key:
+            if "attributionscore" in compact_key:
                 raise ValueError(
                     "maintenance merge metadata must not contain attribution score"
                 )
-            _reject_attribution_score(nested)
+            if is_credential_key(normalized_key):
+                raise ValueError(
+                    "maintenance merge metadata must not contain credential fields"
+                )
+            _reject_forbidden_metadata(nested)
     elif isinstance(value, (list, tuple)):
         for nested in value:
-            _reject_attribution_score(nested)
+            _reject_forbidden_metadata(nested)
 
 
 def _load_state(path: Path, current_round: int) -> MaintenanceState:
