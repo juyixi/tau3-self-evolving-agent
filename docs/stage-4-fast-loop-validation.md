@@ -50,6 +50,54 @@ python -m scripts.run_fast_loop `
 
 `--model-revision` 是实际服务模型的不可变 provenance；运行时模型名称仍固定为 `Qwen/Qwen3.5-9B`。`--adapter-revision` 是可选的当前服务 LoRA/adapter provenance，不会在 Stage 4 触发训练或切换 endpoint。
 
+## Memory 开关与消融运行
+
+`memory.enabled` 是 YAML 配置级总开关，必须是严格 boolean；默认 `true` 保持完整的 Stage 4 Memory 生命周期。无 Memory 消融使用单独、受版本控制的配置副本，例如：
+
+```yaml
+memory:
+  enabled: false
+```
+
+关闭开关**仍使用同一条** `python -m scripts.run_fast_loop` 命令和相同 CLI 参数、Qwen、任务顺序、seed 与用户模拟器；只将 `--config` 指向上述配置副本。不要增加 `run_no_memory` 或 CLI override，以免消融经过不同的 orchestration 路径。`--completed-train-tasks-before` 仍为必填参数，用于保持任务计数可比；关闭 Memory 时它不会触发 maintenance。
+
+示例（将配置副本路径和 run ID 换成实际值）：
+
+```powershell
+python -m scripts.run_fast_loop `
+  --config configs/memory-disabled.yaml `
+  --split train `
+  --task-id 0 `
+  --run-id stage4-memory-disabled-0 `
+  --model-revision $env:QWEN_MODEL_REVISION `
+  --completed-train-tasks-before 0
+```
+
+启用 `memory.enabled: true` 时，使用本指南前述命令与既有检查：manifest/summary 记录实际 Memory snapshot provenance，事件包含 retrieve、select、write，达到边界时包含 maintenance。
+
+关闭 `memory.enabled: false` 时，对 fake 无 Memory run 审计以下证据：
+
+- manifest 的 `rollout_options.memory_enabled` 和 summary 顶层的 `memory_enabled` 都是 `false`。
+- manifest 的 `memory_snapshot_id`、summary 的 `input_memory_snapshot_id` 与 `output_memory_snapshot_id` 都是 `null`；`maintenance_rounds_executed` 是空数组。
+- 每个 episode 的 `EpisodeStarted` 后出现 `MemoryDisabled`，其 `reason` 为 `config`；不得出现 `MemoryCandidatesRetrieved`、`MemorySelected`、任何 Memory write 或 maintenance 事件。
+- run 可以保留 trajectory、官方 terminal reward/result 以及 `FastLoopFailed` 失败证据；但项目根目录不得新建或修改 `history/agents/<agent_id>/memory/`，也不得产生 snapshot 或 maintenance state。
+
+可用以下 PowerShell 检查 disabled 运行：
+
+```powershell
+$run = "stage4-memory-disabled-0"
+$manifest = Get-Content "runs/$run/manifest.json" | ConvertFrom-Json
+$summary = Get-Content "runs/$run/fast_loop_summary.json" | ConvertFrom-Json
+$events = Get-Content "runs/$run/rollouts/events.jsonl" | ForEach-Object { $_ | ConvertFrom-Json }
+$manifest.rollout_options.memory_enabled
+$summary.memory_enabled, $summary.input_memory_snapshot_id, $summary.output_memory_snapshot_id, $summary.maintenance_rounds_executed
+$events | Where-Object event_type -eq "MemoryDisabled" | Select-Object task_id,reason
+$events | Where-Object event_type -match "^Memory(CandidatesRetrieved|Selected|Write)|^Maintenance" | Select-Object event_type,task_id
+Test-Path "history/agents/retail/memory"
+```
+
+最后一条必须为 `False`，且前一个事件查询不返回任何记录。`memory_enabled=false` 的 run 只可用于无 Memory baseline/ablation 指标比较；Stage 5 attribution 和 OPD dataset builder 不得消费它作为 Memory 生命周期监督来源。
+
 ## 累计维护调度
 
 `--completed-train-tasks-before` 是 required 参数，必须显式给出同一共享 agent namespace 在本次调用前已成功完成的 train 任务总数。遗漏会在 argparse 阶段失败，不会静默默认为 0。CLI 不从 run ID 或目录猜测该值。summary 同时记录 `completed_train_tasks_before` 和 `completed_train_tasks_after`。

@@ -81,6 +81,13 @@ retail 环境由当前官方 tau benchmark 仓库提供：
 
 快循环遵循论文 Algorithm 1。
 
+快循环的 Memory 生命周期由 YAML 中的 `memory.enabled` 总开关控制，默认值为 `true`。开关不改变 CLI 入口：有 Memory 与无 Memory 消融都必须使用同一条 `python -m scripts.run_fast_loop` 命令、相同的 Qwen、任务顺序、seed 和用户模拟器；仅使用受版本控制的 YAML 配置副本切换 `memory.enabled`。`enabled` 必须是严格 YAML boolean，不接受字符串 `"false"` 或整数 `0` 等隐式值。
+
+- `memory.enabled: true`：保持下述完整的 retrieve、select、act、write 与 periodic maintenance 生命周期，并保留输入/输出 Memory snapshot provenance。
+- `memory.enabled: false`：不打开训练 Memory，不加载 embedding provider，不执行 retrieve、select、write 或 maintenance；action prompt 不含 `memories` 或 Memory 占位内容，也不得创建或修改 `history/agents/<agent_id>/memory/`。每个 episode 在 `EpisodeStarted` 后必须记录 `MemoryDisabled`，且 `reason="config"`；这与“检索到零条 Memory”不同。`MemoryCandidatesRetrieved`、`MemorySelected`、写入事件及全部 maintenance 事件不得出现。
+
+无 Memory run 仍执行任务环境、Qwen action generation、trajectory 和官方 terminal reward/result，并在 manifest 的 `rollout_options.memory_enabled` 与 summary 顶层记录 `false`。此时 manifest `memory_snapshot_id`、summary 的 `input_memory_snapshot_id` 与 `output_memory_snapshot_id` 均为 `null`，`maintenance_rounds_executed` 为 `[]`，也不产生 snapshot 或 maintenance state。fake 无 Memory run 必须完成任务并通过该 artifact、事件和无 `history/` 检查；开启路径的既有 Stage 4 lifecycle 验收保持不变。
+
 对于每个 retail 任务：
 
 1. 根据任务、环境元数据、当前 observation 和可选的 retail 状态提示构造查询。
@@ -148,6 +155,8 @@ Repository 在进程内以字典和 embedding 数组维护活动状态。启动�
 - 层级先验允许对 trajectory、tip、skill 和 tool 记忆采用不同权重。
 
 最终得分 `V(m)` 用作选择、执行、写入和维护决策的特权后见信息。默认过滤记忆分数低于 `0.01` 的监督样本，与论文设置一致。
+
+`memory_enabled=false` 的 run 仅用于无 Memory baseline/ablation 指标比较。Stage 5 attribution 和 OPD dataset builder 必须拒绝将其作为 Memory 生命周期监督来源；这一数据隔离不改变上述 attribution 公式，也不改变 `test_static` 与 `test_streaming` 的隔离协议。
 
 ## 慢循环设计
 
