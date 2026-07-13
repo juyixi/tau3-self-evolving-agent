@@ -13,10 +13,11 @@
 $env:QWEN_BASE_URL = "http://127.0.0.1:8000/v1"
 $env:QWEN_API_KEY = "EMPTY" # 可省略；省略时 CLI 精确使用 EMPTY
 $env:OPENROUTER_API_KEY = Read-Host "OpenRouter API Key"
+$env:DEEPSEEK_API_KEY = Read-Host "DeepSeek API Key"
 $env:QWEN_MODEL_REVISION = "Qwen/Qwen3.5-9B@<immutable-revision>"
 ```
 
-`OPENROUTER_API_KEY` 供 OpenRouter NL assertion 和默认 simulator 配置使用。如果 `tau2.user_llm` 改用其他 provider，还必须按该 provider 的要求设置 simulator 凭证。凭证不得写入 YAML、命令参数、manifest、事件或 summary。
+`OPENROUTER_API_KEY` 仅供 OpenRouter NL assertions/evaluator 使用。默认 `tau2.user_llm=deepseek/deepseek-v4-pro` simulator 使用 `DEEPSEEK_API_KEY`；如果改用其他 simulator provider，必须另行配置该 provider 的凭证。凭证不得写入 YAML、命令参数、manifest、事件或 summary。
 
 ## 运行命令
 
@@ -41,7 +42,7 @@ python -m scripts.run_fast_loop `
   --task-id 0 --task-id 1 --task-id 2 --task-id 3 --task-id 4 `
   --run-id stage4-train-0-4 `
   --model-revision $env:QWEN_MODEL_REVISION `
-  --adapter-revision adapter@<immutable-revision> `
+  --adapter-revision "adapter@immutable-revision" `
   --completed-train-tasks-before 0
 ```
 

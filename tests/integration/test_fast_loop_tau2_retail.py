@@ -18,6 +18,7 @@ REQUIRED_ENV = (
     "QWEN_BASE_URL",
     "QWEN_MODEL_REVISION",
     "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY",
 )
 MISSING_ENV = tuple(name for name in REQUIRED_ENV if not os.environ.get(name))
 
@@ -26,9 +27,10 @@ pytestmark = [
     pytest.mark.skipif(
         os.environ.get("RUN_FAST_LOOP_TAU2_INTEGRATION") != "1" or bool(MISSING_ENV),
         reason=(
-            "set RUN_FAST_LOOP_TAU2_INTEGRATION=1 and provide "
-            "QWEN_BASE_URL, QWEN_MODEL_REVISION, OPENROUTER_API_KEY, and any "
-            "simulator credentials required by configs/default.yaml"
+            "set RUN_FAST_LOOP_TAU2_INTEGRATION=1 and provide the Qwen endpoint "
+            "(QWEN_BASE_URL, QWEN_MODEL_REVISION), OpenRouter evaluator credential "
+            "(OPENROUTER_API_KEY), and default DeepSeek simulator credential "
+            "(DEEPSEEK_API_KEY)"
         ),
     ),
 ]
@@ -80,6 +82,7 @@ def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stderr
     run_path = output_root / run_id
+    manifest = json.loads((run_path / "manifest.json").read_text("utf-8"))
     summary = json.loads((run_path / "fast_loop_summary.json").read_text("utf-8"))
     events = [
         json.loads(line)
@@ -90,12 +93,17 @@ def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) ->
     assert summary["episode_count"] == 5
     assert summary["successful_task_ids"] == list(task_ids)
     assert len(terminal_events) == 5
+    assert manifest["tau2_commit"] == runtime.git_commit
+    assert manifest["split_hash"] == catalog.split_sha256
+    assert manifest["task_ids"] == list(task_ids)
+    assert manifest["memory_snapshot_id"] == summary["input_memory_snapshot_id"]
 
     required_lifecycle = {
         "EpisodeStarted",
         "MemoryCandidatesRetrieved",
         "MemorySelected",
         "DecisionMade",
+        "EnvironmentStepped",
         "EpisodeFinished",
         "MemoryWriteProposed",
         "MemoryWriteCommitted",
@@ -112,12 +120,17 @@ def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) ->
                 "MemoryCandidatesRetrieved",
                 "MemorySelected",
                 "DecisionMade",
+                "EnvironmentStepped",
                 "EpisodeFinished",
                 "MemoryWriteProposed",
                 "MemoryWriteCommitted",
             )
         ]
         assert lifecycle_positions == sorted(lifecycle_positions)
+        assert all(
+            event["memory_snapshot_id"] == summary["input_memory_snapshot_id"]
+            for event in task_events
+        )
         finished = next(event for event in task_events if event["event_type"] == "EpisodeFinished")
         assert isinstance(finished["final_reward"], (int, float))
         assert isinstance(finished["terminal_evaluation"], dict)
@@ -130,13 +143,21 @@ def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) ->
             for proposal in proposed["proposals"]
         )
 
-    committed_ids = [
+    canonical_written_ids = {
         memory_id
         for event in events
         if event["event_type"] == "MemoryWriteCommitted"
         for memory_id in event["written_memory_ids"]
-    ]
-    if committed_ids:
+        if memory_id not in set(event["replayed_memory_ids"])
+    }
+    maintenance_changed_ids = {
+        memory_id
+        for event in events
+        if event["event_type"] == "MaintenanceCommitted"
+        for field in ("created_ids", "updated_ids")
+        for memory_id in event[field]
+    }
+    if canonical_written_ids or maintenance_changed_ids:
         assert summary["output_memory_snapshot_id"] != summary["input_memory_snapshot_id"]
     else:
         assert summary["output_memory_snapshot_id"] == summary["input_memory_snapshot_id"]

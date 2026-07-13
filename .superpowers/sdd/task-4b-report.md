@@ -104,3 +104,43 @@ git diff --cached --check
 ## Concerns
 
 唯一剩余 concern 是真实五任务 smoke 未在本机执行；它需要完整 pinned tau2 checkout、Qwen endpoint 和 simulator/OpenRouter 凭证，会产生真实模型调用成本。所有无成本单元、调度、全量回归和编译检查均已执行。
+
+## 审查修复追加（2026-07-13）
+
+### Findings 修复
+
+- 五任务 opt-in smoke 的 required environment 增加 `DEEPSEEK_API_KEY`。跳过原因分别标明 Qwen endpoint、OpenRouter evaluator 和默认 DeepSeek simulator；原报告“五任务 Opt-In Smoke”中的环境变量列表以本节为准。
+- 中文指南明确 `OPENROUTER_API_KEY` 仅供 NL assertions/evaluator，默认 `deepseek/deepseek-v4-pro` simulator 使用 `DEEPSEEK_API_KEY`，其他 provider 需要另配凭证。
+- 五任务 PowerShell 命令使用 `--adapter-revision "adapter@immutable-revision"`，不再包含会被 PowerShell 解释的裸 `<...>`。
+- manifest 的 model revision、parent checkpoint、adapter revision 和 memory snapshot ID 在非空校验之外，统一拒绝含 username、password、query 或 fragment 的 HTTP(S) URL；错误不回显输入，baseline schema version 2 精确输出保持不变。
+- opt-in smoke 读取 manifest 并绑定 pinned tau2 commit、官方 split hash、task IDs 和输入 Memory snapshot；所有 episode event 必须携带同一输入 snapshot ID。lifecycle 门禁增加 `EnvironmentStepped` 并校验顺序。
+- snapshot 变化只由每个 `MemoryWriteCommitted` 中 `written_memory_ids - replayed_memory_ids` 的非空结果，或 `MaintenanceCommitted.created_ids/updated_ids` 的非空结果触发。纯 replay/no-op 要求输入输出 snapshot 相等。
+
+### RED
+
+```text
+python -m pytest tests/unit/runs/test_manifest.py -q --basetemp=.pytest-tmp/task4b-review-red
+```
+
+结果：`4 failed, 20 passed in 0.10s`。四个新增用例分别证明 model revision、parent checkpoint、adapter revision 和 memory snapshot ID 的 credential-bearing URL 未被拒绝。
+
+### GREEN 与全量回归
+
+```text
+python -m pytest tests/unit/scripts/test_run_fast_loop.py tests/unit/runs/test_manifest.py tests/integration/test_fast_loop_tau2_retail.py -q --basetemp=.pytest-tmp/task4b-review-green
+python -m pytest -q --basetemp=.pytest-tmp/task4b-review-regression
+python -m compileall -q src scripts tests
+git diff --check
+```
+
+结果：目标集 `36 passed, 1 skipped in 0.46s`；全量 `357 passed, 3 skipped in 6.07s`；compileall 与 diff check 返回 0。真实五任务 smoke 仍因 opt-in 环境未配置而跳过，没有产生模型成本。
+
+### 本轮授权文件
+
+- `src/tau3_retail_evolver/runs/manifest.py`
+- `tests/unit/runs/test_manifest.py`
+- `tests/integration/test_fast_loop_tau2_retail.py`
+- `docs/stage-4-fast-loop-validation.md`
+- `.superpowers/sdd/task-4b-report.md`
+
+未修改 CLI 编排、已审核 fast-loop/memory/environment/model adapter/baseline/configuration 模块，也未触碰其他开发者的未跟踪 implementation plan。

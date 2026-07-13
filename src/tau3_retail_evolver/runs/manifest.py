@@ -93,6 +93,8 @@ def create_manifest(
 def _require_nonblank(field: str, value: str) -> None:
     if not value.strip():
         raise ValueError(f"{field} must not be blank")
+    if _is_credential_bearing_url(value):
+        raise ValueError(f"{field} must not be a credential-bearing URL")
 
 
 def _require_optional_nonblank(field: str, value: str | None) -> None:

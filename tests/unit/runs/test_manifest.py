@@ -159,6 +159,46 @@ def test_rejects_blank_manifest_provenance(
     assert not (tmp_path / "manifest.json").exists()
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("model_revision", "https://user:secret-marker@example.invalid/model"),
+        ("parent_checkpoint", "https://example.invalid/checkpoint?token=secret-marker"),
+        ("adapter_revision", "https://example.invalid/adapter#secret-marker"),
+        ("memory_snapshot_id", "https://user@example.invalid/secret-marker"),
+    ),
+)
+def test_rejects_credential_bearing_manifest_provenance_without_persisting_it(
+    field: str, value: str, tmp_path: Path
+) -> None:
+    arguments = {
+        "run_id": "learn-001",
+        "iteration": 0,
+        "model_revision": "revision-a",
+        "parent_checkpoint": None,
+        "adapter_revision": None,
+        "memory_snapshot_id": None,
+        "tau2_commit": "a" * 40,
+        "split": "train",
+        "split_hash": "b" * 64,
+        "task_ids": ("task-1",),
+        "seed": 17,
+        "user_simulator_config": {},
+        "environment_options": {},
+        "rollout_options": {},
+        "model_serving_contract": {},
+        "evaluation_config": {},
+        "command": ("python",),
+    }
+    arguments[field] = value
+
+    with pytest.raises(ValueError, match=field.replace("_", " ")) as error:
+        create_manifest(tmp_path / "manifest.json", **arguments)
+
+    assert "secret-marker" not in str(error.value)
+    assert not (tmp_path / "manifest.json").exists()
+
+
 def test_refuses_to_overwrite_an_existing_manifest(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text('{"existing":true}\n', encoding="utf-8")
