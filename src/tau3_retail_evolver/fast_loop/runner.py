@@ -36,6 +36,7 @@ from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
 
 @dataclass(frozen=True, slots=True)
 class FastLoopConfig:
+    memory_enabled: bool = True
     retrieve_top_k: int = 50
     max_episode_steps: int = 40
 
@@ -99,13 +100,18 @@ def run_fast_loop_episode(
     task_instruction: str,
     environment: FastLoopEnvironment,
     policy: FastLoopPolicy,
-    repository: MemoryRepository,
-    retriever: Retriever,
+    repository: MemoryRepository | None,
+    retriever: Retriever | None,
     config: FastLoopConfig,
     context: RunContext,
 ) -> EpisodeResult:
     """Run one learning episode and emit the evidence needed by later attribution."""
-    _require_learning_context(context, repository)
+    _require_learning_context(context)
+    _require_memory_dependencies(
+        enabled=config.memory_enabled,
+        repository=repository,
+        retriever=retriever,
+    )
     write_failure_emitted = False
     try:
         reset = environment.reset(seed=context.seed)
@@ -130,67 +136,76 @@ def run_fast_loop_episode(
             tools=public_tools,
         )
 
-        query = _retrieval_query(
-            public_task_instruction,
-            public_policy,
-            public_tools,
-            public_observation,
-        )
-        candidates = retriever.retrieve(
-            query,
-            repository,
-            top_k=config.retrieve_top_k,
-        )
-        candidate_evidence = [_candidate_evidence(candidate) for candidate in candidates]
-        _emit(
-            context,
-            task_id,
-            "MemoryCandidatesRetrieved",
-            query_hash=candidates[0].query_hash if candidates else _query_hash(query),
-            retriever_revision=(
-                candidates[0].retriever_revision
-                if candidates
-                else retriever.provider.model_revision
-            ),
-            candidates=candidate_evidence,
-        )
+        if config.memory_enabled:
+            assert repository is not None
+            assert retriever is not None
+            query = _retrieval_query(
+                public_task_instruction,
+                public_policy,
+                public_tools,
+                public_observation,
+            )
+            candidates = retriever.retrieve(
+                query,
+                repository,
+                top_k=config.retrieve_top_k,
+            )
+            candidate_evidence = [
+                _candidate_evidence(candidate) for candidate in candidates
+            ]
+            _emit(
+                context,
+                task_id,
+                "MemoryCandidatesRetrieved",
+                query_hash=candidates[0].query_hash if candidates else _query_hash(query),
+                retriever_revision=(
+                    candidates[0].retriever_revision
+                    if candidates
+                    else retriever.provider.model_revision
+                ),
+                candidates=candidate_evidence,
+            )
 
-        selection_prompt = build_selection_prompt(
-            task_instruction=public_task_instruction,
-            policy=public_policy,
-            tools=public_tools,
-            observation=public_observation,
-            candidates=candidates,
-        )
-        selection, selection_audit = _generate_decision(
-            policy,
-            selection_prompt,
-            SelectionDecision,
-            candidate_ids=[candidate.memory_id for candidate in candidates],
-            label="selection",
-        )
-        selected_ids = selection.memory_ids
-        selected_set = set(selected_ids)
-        selected = [
-            candidate for candidate in candidates if candidate.memory_id in selected_set
-        ]
-        _emit(
-            context,
-            task_id,
-            "MemorySelected",
-            selected_memory_ids=list(selected_ids),
-            selected=[_candidate_evidence(candidate) for candidate in selected],
-            raw_output_sha256=_output_hash(selection_audit["raw_output"]),
-            repaired_output_sha256=(
-                _output_hash(selection_audit["repaired_output"])
-                if selection_audit["repaired_output"] is not None
-                else None
-            ),
-            parse_failed=selection_audit["error"] is not None,
-            repair_used=selection_audit["repaired_output"] is not None,
-            sampling_params=selection_audit["sampling_params"],
-            latency_s=selection_audit["latency_s"],
-        )
+            selection_prompt = build_selection_prompt(
+                task_instruction=public_task_instruction,
+                policy=public_policy,
+                tools=public_tools,
+                observation=public_observation,
+                candidates=candidates,
+            )
+            selection, selection_audit = _generate_decision(
+                policy,
+                selection_prompt,
+                SelectionDecision,
+                candidate_ids=[candidate.memory_id for candidate in candidates],
+                label="selection",
+            )
+            selected_ids = selection.memory_ids
+            selected_set = set(selected_ids)
+            selected = [
+                candidate for candidate in candidates if candidate.memory_id in selected_set
+            ]
+            _emit(
+                context,
+                task_id,
+                "MemorySelected",
+                selected_memory_ids=list(selected_ids),
+                selected=[_candidate_evidence(candidate) for candidate in selected],
+                raw_output_sha256=_output_hash(selection_audit["raw_output"]),
+                repaired_output_sha256=(
+                    _output_hash(selection_audit["repaired_output"])
+                    if selection_audit["repaired_output"] is not None
+                    else None
+                ),
+                parse_failed=selection_audit["error"] is not None,
+                repair_used=selection_audit["repaired_output"] is not None,
+                sampling_params=selection_audit["sampling_params"],
+                latency_s=selection_audit["latency_s"],
+            )
+        else:
+            selected: list[MemoryCandidate] = []
+            selected_ids = ()
+            _emit(context, task_id, "MemoryDisabled", reason="config")
 
         observation = public_observation
         trajectory: list[dict[str, Any]] = []
@@ -207,6 +222,7 @@ def run_fast_loop_episode(
                 tools=public_tools,
                 observation=observation,
                 memories=selected,
+                include_memory_context=config.memory_enabled,
             )
             action, action_audit = _generate_decision(
                 policy,
@@ -281,61 +297,64 @@ def run_fast_loop_episode(
             project_truncated=project_truncated,
         )
 
-        write_prompt = build_write_prompt(
-            task_instruction=public_task_instruction,
-            policy=public_policy,
-            tools=public_tools,
-            observation=observation,
-            trajectory=trajectory,
-            terminal_evaluation=terminal_evaluation,
-        )
-        write_decision, write_audit = _generate_decision(
-            policy,
-            write_prompt,
-            WriteDecision,
-            validator=_validate_write_decision,
-            label="write",
-        )
-        proposals = [
-            _write_proposal(memory, task_id, context, final_reward, selected_ids)
-            for memory in write_decision.memories
-        ]
-        _emit(
-            context,
-            task_id,
-            "MemoryWriteProposed",
-            proposals=[proposal["evidence"] for proposal in proposals],
-            repair_used=write_audit["repaired_output"] is not None,
-            sampling_params=write_audit["sampling_params"],
-            latency_s=write_audit["latency_s"],
-        )
-        try:
-            written_ids, replayed_ids = _persist_proposals(repository, proposals)
-        except BaseException as error:
-            committed_ids = getattr(error, "_fast_loop_committed_ids", ())
-            replayed_ids = getattr(error, "_fast_loop_replayed_ids", ())
-            write_failure_emitted = True
+        written_ids: tuple[str, ...] = ()
+        if config.memory_enabled:
+            assert repository is not None
+            write_prompt = build_write_prompt(
+                task_instruction=public_task_instruction,
+                policy=public_policy,
+                tools=public_tools,
+                observation=observation,
+                trajectory=trajectory,
+                terminal_evaluation=terminal_evaluation,
+            )
+            write_decision, write_audit = _generate_decision(
+                policy,
+                write_prompt,
+                WriteDecision,
+                validator=_validate_write_decision,
+                label="write",
+            )
+            proposals = [
+                _write_proposal(memory, task_id, context, final_reward, selected_ids)
+                for memory in write_decision.memories
+            ]
+            _emit(
+                context,
+                task_id,
+                "MemoryWriteProposed",
+                proposals=[proposal["evidence"] for proposal in proposals],
+                repair_used=write_audit["repaired_output"] is not None,
+                sampling_params=write_audit["sampling_params"],
+                latency_s=write_audit["latency_s"],
+            )
             try:
-                _emit(
-                    context,
-                    task_id,
-                    "MemoryWriteFailed",
-                    committed_memory_ids=list(committed_ids),
-                    replayed_memory_ids=list(replayed_ids),
-                    error=_sanitized_error(error),
-                )
-            except Exception as evidence_error:
-                error.add_note(
-                    f"Fast-loop write failure evidence also failed: {evidence_error}"
-                )
-            raise
-        _emit(
-            context,
-            task_id,
-            "MemoryWriteCommitted",
-            written_memory_ids=list(written_ids),
-            replayed_memory_ids=list(replayed_ids),
-        )
+                written_ids, replayed_ids = _persist_proposals(repository, proposals)
+            except BaseException as error:
+                committed_ids = getattr(error, "_fast_loop_committed_ids", ())
+                replayed_ids = getattr(error, "_fast_loop_replayed_ids", ())
+                write_failure_emitted = True
+                try:
+                    _emit(
+                        context,
+                        task_id,
+                        "MemoryWriteFailed",
+                        committed_memory_ids=list(committed_ids),
+                        replayed_memory_ids=list(replayed_ids),
+                        error=_sanitized_error(error),
+                    )
+                except Exception as evidence_error:
+                    error.add_note(
+                        f"Fast-loop write failure evidence also failed: {evidence_error}"
+                    )
+                raise
+            _emit(
+                context,
+                task_id,
+                "MemoryWriteCommitted",
+                written_memory_ids=list(written_ids),
+                replayed_memory_ids=list(replayed_ids),
+            )
         result = EpisodeResult(
             task_id=task_id,
             final_reward=final_reward,
@@ -360,16 +379,26 @@ def run_fast_loop_episode(
     return result
 
 
-def _require_learning_context(
-    context: RunContext,
-    repository: MemoryRepository,
-) -> None:
+def _require_learning_context(context: RunContext) -> None:
     if context.split != "train":
         raise ValueError("fast-loop learning requires the train split")
     if context.mode != RunMode.LEARN:
         raise ValueError("fast-loop learning requires LEARN mode")
-    if not isinstance(repository, MemoryRepository) or repository.is_read_only:
-        raise ValueError("fast-loop learning requires a mutable MemoryRepository")
+
+
+def _require_memory_dependencies(
+    *,
+    enabled: bool,
+    repository: MemoryRepository | None,
+    retriever: Retriever | None,
+) -> None:
+    if enabled:
+        if not isinstance(repository, MemoryRepository) or repository.is_read_only:
+            raise ValueError("fast-loop learning requires a mutable MemoryRepository")
+        if retriever is None:
+            raise ValueError("enabled memory requires a retriever")
+    elif repository is not None or retriever is not None:
+        raise ValueError("disabled memory requires no repository or retriever")
 
 
 def _public_reset_info(info: Mapping[str, Any]) -> tuple[Any, list[Any]]:

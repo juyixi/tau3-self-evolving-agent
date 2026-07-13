@@ -195,6 +195,78 @@ def _run(
     )
 
 
+def test_disabled_memory_bypasses_the_memory_lifecycle() -> None:
+    events = EventCollector()
+    environment = FakeEnvironment(_reset(), [_terminal_step()])
+    policy = ScriptedLifecyclePolicy(['{"action":"finish"}'])
+
+    result = run_fast_loop_episode(
+        task_id="provenance-task-923",
+        task_instruction="Help the customer complete a refund",
+        environment=environment,
+        policy=policy,
+        repository=None,
+        retriever=None,
+        config=FastLoopConfig(memory_enabled=False),
+        context=_context(events),
+    )
+
+    event_types = {event["event_type"] for event in events.events}
+    forbidden_memory_events = {
+        "MemoryCandidatesRetrieved",
+        "MemorySelected",
+        "MemoryWriteProposed",
+        "MemoryWriteCommitted",
+        "MemoryWriteFailed",
+    }
+    assert [prompt.kind for prompt in policy.prompts] == ["action"]
+    assert "memories" not in policy.prompts[0].payload
+    assert result.selected_memory_ids == ()
+    assert result.written_memory_ids == ()
+    assert [event["event_type"] for event in events.events].count("MemoryDisabled") == 1
+    assert not forbidden_memory_events.intersection(event_types)
+
+
+@pytest.mark.parametrize(
+    ("memory_enabled", "repository", "retriever"),
+    [
+        (True, None, Retriever(DeterministicEmbeddings())),
+        (True, MemoryRepository, None),
+        (False, MemoryRepository, None),
+        (False, None, Retriever(DeterministicEmbeddings())),
+    ],
+)
+def test_memory_dependency_contract_fails_before_reset(
+    tmp_path: Path,
+    memory_enabled: bool,
+    repository: MemoryRepository | type[MemoryRepository] | None,
+    retriever: Retriever | None,
+) -> None:
+    events = EventCollector()
+    environment = FakeEnvironment(_reset())
+    policy = ScriptedLifecyclePolicy([])
+    resolved_repository = (
+        repository(tmp_path / "memory") if repository is MemoryRepository else repository
+    )
+
+    with pytest.raises(ValueError):
+        run_fast_loop_episode(
+            task_id="provenance-task-923",
+            task_instruction="Help the customer complete a refund",
+            environment=environment,
+            policy=policy,
+            repository=resolved_repository,
+            retriever=retriever,
+            config=FastLoopConfig(memory_enabled=memory_enabled),
+            context=_context(events),
+        )
+
+    assert environment.reset_calls == 0
+    assert environment.close_calls == 0
+    assert policy.prompts == []
+    assert events.events == []
+
+
 def test_happy_path_emits_canonical_evidence_and_persists_provenance(
     tmp_path: Path,
 ) -> None:
