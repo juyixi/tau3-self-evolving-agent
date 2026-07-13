@@ -46,3 +46,13 @@ Status: DONE_WITH_CONCERNS
 
 - The default pytest temp directory is inaccessible in this environment, so focused verification required `--basetemp .pytest-tmp`. This is an environment permission issue, not a test failure in the task changes.
 - Git needed elevated permission to create the worktree index lock during commit.
+
+## Reviewer Fix
+
+- Replaced direct `ProjectConfig.model_validate` strictness coverage with temporary YAML files loaded through `load_config`.
+- `test_memory_config_accepts_yaml_false` now writes and reads a temporary YAML file containing `enabled: false`.
+- Added YAML loader boundary coverage for `enabled: "false"` and `enabled: 0`, both expecting `ValidationError`.
+- Production files were not modified.
+- Test command: `python -m pytest --basetemp .pytest-tmp tests/unit/test_config.py tests/unit/fast_loop/test_prompts.py -q`
+- Exact result: `48 passed in 0.37s`
+- Fix commit: `f932c3028196fd36f7fb17c3cd2c80e5149db91e`
