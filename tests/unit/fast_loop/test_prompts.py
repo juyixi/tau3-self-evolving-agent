@@ -92,6 +92,16 @@ def test_selection_and_action_prompts_project_only_public_memory_data() -> None:
         }
 
 
+def test_action_prompt_can_exclude_memory_context() -> None:
+    prompt = build_action_prompt(
+        **_public_context(),
+        memories=(_candidate(),),
+        include_memory_context=False,
+    )
+
+    assert "memories" not in prompt.payload
+
+
 def test_write_prompt_allows_terminal_public_evaluation_but_rejects_hidden_criteria() -> None:
     prompt = build_write_prompt(
         **_public_context(),

@@ -132,19 +132,20 @@ def build_action_prompt(
     observation: str,
     history: Sequence[Mapping[str, Any]] = (),
     memories: Sequence[MemoryCandidate | MemoryItem | Mapping[str, Any]] = (),
+    include_memory_context: bool = True,
 ) -> LifecyclePrompt:
+    payload = project_public_context(
+        task_instruction=task_instruction,
+        policy=policy,
+        tools=tools,
+        observation=observation,
+        history=history,
+    )
+    if include_memory_context:
+        payload["memories"] = [_public_memory(memory) for memory in memories]
     return LifecyclePrompt(
         kind="action",
-        payload={
-            **project_public_context(
-                task_instruction=task_instruction,
-                policy=policy,
-                tools=tools,
-                observation=observation,
-                history=history,
-            ),
-            "memories": [_public_memory(memory) for memory in memories],
-        },
+        payload=payload,
         command_schemas=(),
     )
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import tomllib
 
 import pytest
+from pydantic import ValidationError
 
 from tau3_retail_evolver.config import ProjectConfig, load_config
 
@@ -35,7 +36,9 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.rollout.top_p == 0.95
     assert config.rollout.max_episode_steps == 40
     assert config.memory.agent_id == "retail"
+    assert config.memory.enabled is True
     assert config.memory.model_dump() == {
+        "enabled": True,
         "agent_id": "retail",
         "tiers": ("trajectory", "tip", "skill", "tool"),
         "retrieve_top_k": 50,
@@ -53,6 +56,33 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
     assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}
     assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
+
+
+@pytest.mark.parametrize("enabled", ("false", 0))
+def test_memory_config_rejects_non_strict_enabled_values(enabled: object) -> None:
+    with pytest.raises(ValidationError):
+        ProjectConfig.model_validate(
+            {
+                "tau2": {
+                    "repo_path": "external/tau2-bench",
+                    "domain": "retail",
+                    "train_split": "train",
+                    "eval_split": "test",
+                    "user_llm": "test-user",
+                },
+                "model": {"base_model": "Qwen/Qwen3.5-9B"},
+                "memory": {"enabled": enabled},
+            }
+        )
+
+
+def test_memory_config_accepts_yaml_false() -> None:
+    config = load_config(
+        PROJECT_ROOT / "configs" / "default.yaml",
+        overrides=("memory.enabled=false",),
+    )
+
+    assert config.memory.enabled is False
 
 
 @pytest.mark.parametrize(

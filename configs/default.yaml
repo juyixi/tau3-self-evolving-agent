@@ -22,6 +22,7 @@ rollout:
   top_p: 0.95
   max_episode_steps: 40
 memory:
+  enabled: true
   agent_id: retail
   tiers: [trajectory, tip, skill, tool]
   retrieve_top_k: 50

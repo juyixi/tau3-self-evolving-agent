@@ -6,7 +6,7 @@ import re
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from tau3_retail_evolver.credential_policy import is_credential_key
 
@@ -47,6 +47,7 @@ class RolloutConfig(_ConfigModel):
 
 
 class MemoryConfig(_ConfigModel):
+    enabled: StrictBool = True
     agent_id: str = "retail"
     tiers: tuple[Literal["trajectory", "tip", "skill", "tool"], ...] = (
         "trajectory",
