@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any
+import unicodedata
 
 from tau3_retail_evolver.fast_loop.decisions import (
     MaintenanceDecision,
@@ -275,6 +277,25 @@ def _validate_commands(
             raise ValueError(
                 "maintenance command updated_round must equal maintenance_round"
             )
+        if isinstance(command, MergeCommand):
+            _reject_attribution_score(command.metadata)
+
+
+def _reject_attribution_score(value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            normalized_key = unicodedata.normalize("NFKC", str(key)).casefold()
+            normalized_key = "".join(
+                character for character in normalized_key if character.isalnum()
+            )
+            if "attributionscore" in normalized_key:
+                raise ValueError(
+                    "maintenance merge metadata must not contain attribution score"
+                )
+            _reject_attribution_score(nested)
+    elif isinstance(value, (list, tuple)):
+        for nested in value:
+            _reject_attribution_score(nested)
 
 
 def _load_state(path: Path, current_round: int) -> MaintenanceState:

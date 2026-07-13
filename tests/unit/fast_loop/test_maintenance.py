@@ -370,6 +370,122 @@ def test_same_tier_merge_and_soft_delete_use_current_round(tmp_path: Path) -> No
     assert repository.get(tool.id).status == MemoryStatus.RETIRED
 
 
+def test_nested_camelcase_attribution_triggers_clean_repair(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    first, second, _ = _seed(repository)
+    events = EventCollector()
+    sentinel = "maintenance-attribution-sentinel"
+    base_command = {
+        "operation": "merge",
+        "source_ids": [first.id, second.id],
+        "content": "Verify identity and confirmation before refund.",
+        "updated_round": 1,
+    }
+    policy = ScriptedPolicy(
+        [
+            json.dumps(
+                {
+                    "commands": [
+                        {
+                            **base_command,
+                            "metadata": {
+                                "audit": {"attributionScore": sentinel}
+                            },
+                        }
+                    ]
+                }
+            )
+        ],
+        repairs=[
+            json.dumps(
+                {
+                    "commands": [
+                        {
+                            **base_command,
+                            "metadata": {"audit": {"reason": "deduplicate"}},
+                        }
+                    ]
+                }
+            )
+        ],
+    )
+
+    result = _run(repository, policy, events)
+
+    assert len(policy.repair_calls) == 1
+    assert events.events[1]["event_type"] == "MaintenanceProposed"
+    assert events.events[1]["repair_used"] is True
+    assert sentinel not in repr(events.events)
+    merged = repository.get(result.created_ids[0])
+    assert merged is not None
+    assert merged.metadata == {
+        "audit": {"reason": "deduplicate"},
+        "merged_from": sorted([first.id, second.id]),
+    }
+    assert sentinel not in repr(merged.metadata)
+
+
+def test_attribution_separator_variant_after_repair_fails_without_mutation(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    first, second, _ = _seed(repository)
+    events = EventCollector()
+    sentinel = "maintenance-attribution-sentinel"
+    base_command = {
+        "operation": "merge",
+        "source_ids": [first.id, second.id],
+        "content": "Verify identity and confirmation before refund.",
+        "updated_round": 1,
+    }
+    policy = ScriptedPolicy(
+        [
+            json.dumps(
+                {
+                    "commands": [
+                        {
+                            **base_command,
+                            "metadata": {
+                                "audit": {"attributionScore": sentinel}
+                            },
+                        }
+                    ]
+                }
+            )
+        ],
+        repairs=[
+            json.dumps(
+                {
+                    "commands": [
+                        {
+                            **base_command,
+                            "metadata": {
+                                "audit": {"attribution.score": sentinel}
+                            },
+                        }
+                    ]
+                }
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="attribution score"):
+        _run(repository, policy, events)
+
+    assert len(policy.repair_calls) == 1
+    assert [event["event_type"] for event in events.events] == [
+        "MaintenanceStarted",
+        "MaintenanceFailed",
+    ]
+    assert sentinel not in repr(events.events)
+    assert repository.get(first.id).status == MemoryStatus.ACTIVE
+    assert repository.get(second.id).status == MemoryStatus.ACTIVE
+    assert len(repository.list(tier=MemoryTier.TIP)) == 2
+    assert not (repository.root / "maintenance_state.json").exists()
+
+
 def test_empty_decision_completes_noop_round(tmp_path: Path) -> None:
     repository = MemoryRepository(tmp_path / "memory")
     result = _run(repository, ScriptedPolicy(["{\"commands\":[]}"]))
@@ -617,12 +733,55 @@ def test_event_failure_does_not_replace_original_error(tmp_path: Path) -> None:
     assert any("event sink failed" in note for note in error.value.__notes__)
 
 
-def test_two_threads_execute_same_round_only_once(tmp_path: Path) -> None:
+def test_two_threads_execute_same_round_only_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from tau3_retail_evolver.fast_loop import maintenance
+
     root = tmp_path / "memory"
     MemoryRepository(root)
     policy = BlockingPolicy()
     first_events = EventCollector()
     second_events = EventCollector()
+    second_lock_attempt = threading.Event()
+    attempts_guard = threading.Lock()
+    scheduler_lock_attempts = 0
+    application_calls = 0
+    actual_lock_factory = maintenance.reentrant_process_lock
+    actual_apply_batch = maintenance.MemoryOperations.apply_batch
+
+    class TrackingLock:
+        def __init__(self, actual_lock: Any) -> None:
+            self.actual_lock = actual_lock
+
+        def __enter__(self):
+            nonlocal scheduler_lock_attempts
+            with attempts_guard:
+                scheduler_lock_attempts += 1
+                if scheduler_lock_attempts == 2:
+                    second_lock_attempt.set()
+            self.actual_lock.__enter__()
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            self.actual_lock.__exit__(*args)
+
+    def tracking_lock_factory(resource: Path, *, namespace: str):
+        return TrackingLock(actual_lock_factory(resource, namespace=namespace))
+
+    def tracking_apply_batch(self: Any, commands: Any):
+        nonlocal application_calls
+        with attempts_guard:
+            application_calls += 1
+        return actual_apply_batch(self, commands)
+
+    monkeypatch.setattr(maintenance, "reentrant_process_lock", tracking_lock_factory)
+    monkeypatch.setattr(
+        maintenance.MemoryOperations,
+        "apply_batch",
+        tracking_apply_batch,
+    )
 
     def invoke(events: EventCollector):
         return _run(MemoryRepository(root), policy, events)
@@ -631,10 +790,13 @@ def test_two_threads_execute_same_round_only_once(tmp_path: Path) -> None:
         first_future = executor.submit(invoke, first_events)
         assert policy.entered.wait(timeout=5)
         second_future = executor.submit(invoke, second_events)
+        assert second_lock_attempt.wait(timeout=5)
         policy.release.set()
         results = (first_future.result(timeout=5), second_future.result(timeout=5))
 
     assert sorted(result.executed for result in results) == [False, True]
+    assert scheduler_lock_attempts == 2
     assert len(policy.prompts) == 1
+    assert application_calls == 1
     assert sum(len(events.events) for events in (first_events, second_events)) == 3
     assert _state_payload(MemoryRepository(root))["completed_rounds"] == [1]

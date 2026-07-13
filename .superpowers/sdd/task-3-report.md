@@ -157,3 +157,72 @@ MaintenanceCommitted
 - Contention is exercised with two threads and separate repository instances,
   using the same existing process-lock implementation used across processes.
   No external policy, real Qwen endpoint, or multi-process CI worker was run.
+
+## Fix Review Findings
+
+### RED Evidence
+
+The two attribution regressions were added before the production edit and run
+with:
+
+```text
+python -m pytest tests/unit/fast_loop/test_maintenance.py::test_nested_camelcase_attribution_triggers_clean_repair tests/unit/fast_loop/test_maintenance.py::test_attribution_separator_variant_after_repair_fails_without_mutation -q --basetemp=.pytest-tmp/task3-review-red-attribution
+```
+
+Both tests failed for the reviewed behavior:
+
+- Nested `attributionScore` was accepted and persisted without a repair call.
+- A repaired nested `attribution.score` was accepted instead of raising, so
+  the maintenance round and merge were committed.
+
+The replacement contention test was also run before the production edit:
+
+```text
+python -m pytest tests/unit/fast_loop/test_maintenance.py::test_two_threads_execute_same_round_only_once -q --basetemp=.pytest-tmp/task3-review-lock
+```
+
+It passed while wrapping, rather than replacing, the actual scheduler lock.
+The wrapper signals immediately before each real lock `__enter__`; the main
+thread now waits for the second attempt signal before releasing the first
+policy call. A delegating `apply_batch` wrapper counts real applications.
+
+### Minimal Fix
+
+- Maintenance semantic validation now recursively visits merge metadata
+  mappings and sequences, normalizes each key with Unicode NFKC, case folding,
+  and removal of non-alphanumeric separators, and rejects any normalized key
+  containing `attributionscore`.
+- Rejection happens inside the existing decision validator, so initial invalid
+  metadata receives exactly one repair opportunity. Invalid repaired metadata
+  fails before `MaintenanceProposed`, memory operations, or state completion.
+- Attribution is rejected rather than removed. Valid repaired metadata is the
+  only metadata emitted and persisted.
+- The contention test tracks two real scheduler-lock entry attempts and waits
+  deterministically without sleeps. It asserts two attempts, one policy call,
+  one real operation application, one three-event sequence, and one completed
+  round.
+
+### GREEN And Regression Evidence
+
+Targeted review tests:
+
+```text
+3 passed in 0.29s
+```
+
+Task 3 suite:
+
+```text
+python -m pytest tests/unit/fast_loop/test_maintenance.py -q --basetemp=.pytest-tmp/task3-review
+62 passed in 1.27s
+```
+
+Fast-loop and memory regression:
+
+```text
+python -m pytest tests/unit/fast_loop tests/unit/memory -q --basetemp=.pytest-tmp/task3-review-regression
+190 passed in 5.70s
+```
+
+Changed-module compilation and `git diff --check` completed with exit code 0.
+The review fix is committed in the commit containing this section.
