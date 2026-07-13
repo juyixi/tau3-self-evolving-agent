@@ -9,9 +9,15 @@ import pytest
 
 from scripts import run_fast_loop
 from tau3_retail_evolver.fast_loop.events import RunContext, RunMode
-from tau3_retail_evolver.fast_loop.runner import EpisodeResult, LifecycleResponse
+from tau3_retail_evolver.envs.base import ResetResult, StepResult
+from tau3_retail_evolver.fast_loop.runner import (
+    EpisodeResult,
+    FastLoopConfig,
+    LifecycleResponse,
+)
 from tau3_retail_evolver.io.jsonl import JsonlWriter
 from tau3_retail_evolver.memory.repository import MemoryRepository
+from tau3_retail_evolver.memory.retrieval import Retriever
 
 
 def _config(tmp_path: Path, *, memory_enabled: bool = True) -> SimpleNamespace:
@@ -50,6 +56,164 @@ def _episode(task_id: str, reward: float = 1.0) -> EpisodeResult:
         written_memory_ids=(),
         truncated=False,
     )
+
+
+def _run_context(tmp_path: Path, *, events: list[dict[str, Any]] | None = None) -> RunContext:
+    return RunContext(
+        run_id="memory-switch-test",
+        iteration=0,
+        split="train",
+        model_revision="revision-a",
+        adapter_revision=None,
+        memory_snapshot_id=None,
+        seed=17,
+        event_writer=events if events is not None else JsonlWriter(tmp_path / "events.jsonl"),
+        mode=RunMode.LEARN,
+        default_task_group="retail",
+    )
+
+
+class _UnusedEmbeddingProvider:
+    model_revision = "unused-embedding@1"
+    dimension = 2
+
+    def embed(self, text: str) -> tuple[float, float]:
+        raise AssertionError("retriever must not be used")
+
+    def embed_batch(self, texts: list[str]) -> list[tuple[float, float]]:
+        raise AssertionError("retriever must not be used")
+
+
+@pytest.mark.parametrize(
+    ("memory_enabled", "use_repository", "use_retriever"),
+    (
+        (True, False, True),
+        (True, True, False),
+        (False, False, True),
+        (False, True, False),
+    ),
+)
+def test_run_requested_tasks_rejects_mismatched_memory_dependencies_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    memory_enabled: bool,
+    use_repository: bool,
+    use_retriever: bool,
+) -> None:
+    snapshot_calls: list[None] = []
+    environment_calls: list[str] = []
+    maintenance_calls: list[dict[str, Any]] = []
+
+    class SnapshotRecordingRepository(MemoryRepository):
+        def snapshot(self):  # type: ignore[no-untyped-def]
+            snapshot_calls.append(None)
+            return super().snapshot()
+
+    repository = SnapshotRecordingRepository(tmp_path / "memory") if use_repository else None
+    retriever = Retriever(_UnusedEmbeddingProvider()) if use_retriever else None
+    monkeypatch.setattr(
+        run_fast_loop,
+        "run_due_maintenance",
+        lambda **kwargs: maintenance_calls.append(kwargs),
+    )
+
+    with pytest.raises(
+        ValueError, match="memory dependencies do not match memory_enabled"
+    ):
+        run_fast_loop._run_requested_tasks(
+            task_ids=("task-1",),
+            env_factory=lambda task_id: environment_calls.append(task_id),
+            policy=object(),
+            repository=repository,
+            retriever=retriever,
+            fast_loop_config=FastLoopConfig(memory_enabled=memory_enabled),
+            context=_run_context(tmp_path),
+            completed_train_tasks_before=0,
+            maintenance_period=30,
+        )
+
+    assert snapshot_calls == []
+    assert environment_calls == []
+    assert maintenance_calls == []
+
+
+def test_run_requested_tasks_disabled_uses_real_episode_without_memory_access(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    events: list[dict[str, Any]] = []
+    environments: list[Any] = []
+
+    class FakeEnvironment:
+        def reset(self, *, seed: int) -> ResetResult:
+            return ResetResult(
+                observation="Customer asks for a refund",
+                info={"policy": {"text": "Verify identity"}, "tools": []},
+            )
+
+        def step(self, action: str) -> StepResult:
+            return StepResult(
+                observation="Refund complete",
+                reward=1.0,
+                done=True,
+                terminated=True,
+                truncated=False,
+                info={
+                    "parse_error": None,
+                    "reward_info": '{"score":1.0}',
+                    "simulation_run": '{"status":"complete"}',
+                },
+            )
+
+        def close(self) -> None:
+            return None
+
+    class ActionPolicy:
+        def __init__(self) -> None:
+            self.prompts: list[Any] = []
+
+        def generate(self, prompt: Any) -> LifecycleResponse:
+            self.prompts.append(prompt)
+            return LifecycleResponse(
+                raw_output='{"action":"finish"}',
+                sampling_params={"temperature": 0.0, "top_p": 1.0},
+                latency_s=0.0,
+            )
+
+        def repair(self, prompt: Any, raw_output: str, error: str) -> LifecycleResponse:
+            raise AssertionError("valid action must not need repair")
+
+    policy = ActionPolicy()
+    monkeypatch.setattr(
+        run_fast_loop,
+        "run_due_maintenance",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("maintenance must not run")),
+    )
+    results, maintenance_rounds = run_fast_loop._run_requested_tasks(
+        task_ids=("task-1",),
+        env_factory=lambda task_id: environments.append(FakeEnvironment()) or environments[-1],
+        policy=policy,
+        repository=None,
+        retriever=None,
+        fast_loop_config=FastLoopConfig(memory_enabled=False),
+        context=_run_context(tmp_path, events=events),
+        completed_train_tasks_before=0,
+        maintenance_period=30,
+    )
+
+    memory_event_types = {
+        "MemoryCandidatesRetrieved",
+        "MemorySelected",
+        "MemoryWriteProposed",
+        "MemoryWriteCommitted",
+        "MemoryWriteFailed",
+    }
+    assert environments
+    assert maintenance_rounds == ()
+    assert results[0].selected_memory_ids == ()
+    assert results[0].written_memory_ids == ()
+    assert [prompt.kind for prompt in policy.prompts] == ["action"]
+    assert "memories" not in policy.prompts[0].payload
+    assert not memory_event_types.intersection(event["event_type"] for event in events)
 
 
 def _install_main_dependencies(
@@ -673,8 +837,8 @@ def test_thirty_successful_tasks_execute_exactly_maintenance_round_one(
         env_factory=lambda task_id: object(),
         policy=policy,
         repository=repository,
-        retriever=object(),
-        fast_loop_config=object(),
+        retriever=Retriever(_UnusedEmbeddingProvider()),
+        fast_loop_config=FastLoopConfig(),
         context=context,
         completed_train_tasks_before=0,
         maintenance_period=30,

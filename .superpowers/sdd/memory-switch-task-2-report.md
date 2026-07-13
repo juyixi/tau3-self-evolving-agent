@@ -9,7 +9,7 @@ lifecycles while preserving the existing action, failure, and close behavior.
 
 - `src/tau3_retail_evolver/fast_loop/runner.py`
 - `tests/unit/fast_loop/test_runner.py`
-- `.superpowers/sdd/task-2-report.md`
+- `.superpowers/sdd/memory-switch-task-2-report.md`
 
 ## RED
 

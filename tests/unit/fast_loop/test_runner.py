@@ -173,6 +173,20 @@ def _terminal_step(reward: float = 0.8) -> StepResult:
     )
 
 
+def test_fast_loop_config_preserves_positional_limit_arguments() -> None:
+    config = FastLoopConfig(7, 4)
+
+    assert config.retrieve_top_k == 7
+    assert config.max_episode_steps == 4
+    assert config.memory_enabled is True
+
+
+@pytest.mark.parametrize("memory_enabled", ("false", 0, 1, None))
+def test_fast_loop_config_rejects_non_boolean_memory_enabled(memory_enabled: Any) -> None:
+    with pytest.raises(ValueError, match="memory_enabled must be a bool"):
+        FastLoopConfig(memory_enabled=memory_enabled)
+
+
 def _run(
     *,
     repository: MemoryRepository,

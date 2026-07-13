@@ -58,7 +58,7 @@ Result: `40 passed, 1 skipped in 0.54s`.
 - `scripts/run_fast_loop.py`
 - `tests/unit/scripts/test_run_fast_loop.py`
 - `tests/integration/test_fast_loop_tau2_retail.py`
-- `.superpowers/sdd/task-3-report.md`
+- `.superpowers/sdd/memory-switch-task-3-report.md`
 
 ## Self-Check
 

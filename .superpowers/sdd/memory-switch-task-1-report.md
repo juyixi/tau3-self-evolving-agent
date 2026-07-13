@@ -9,7 +9,7 @@ Status: DONE_WITH_CONCERNS
 - `src/tau3_retail_evolver/fast_loop/prompts.py`
 - `tests/unit/test_config.py`
 - `tests/unit/fast_loop/test_prompts.py`
-- `.superpowers/sdd/task-1-report.md`
+- `.superpowers/sdd/memory-switch-task-1-report.md`
 
 ## RED
 

@@ -36,11 +36,13 @@ from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
 
 @dataclass(frozen=True, slots=True)
 class FastLoopConfig:
-    memory_enabled: bool = True
     retrieve_top_k: int = 50
     max_episode_steps: int = 40
+    memory_enabled: bool = True
 
     def __post_init__(self) -> None:
+        if type(self.memory_enabled) is not bool:
+            raise ValueError("memory_enabled must be a bool")
         if self.retrieve_top_k < 1 or self.max_episode_steps < 1:
             raise ValueError("fast-loop limits must be positive")
 

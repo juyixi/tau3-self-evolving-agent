@@ -103,7 +103,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         probe.close()
 
-    if config.memory.enabled:
+    fast_loop_config = FastLoopConfig(
+        retrieve_top_k=config.memory.retrieve_top_k,
+        max_episode_steps=config.rollout.max_episode_steps,
+        memory_enabled=config.memory.enabled,
+    )
+    if fast_loop_config.memory_enabled:
         repository = open_training_memory(config.memory, root=args.project_root)
         embedding_provider = build_embedding_provider(config.memory, repository.root)
         retriever = Retriever(embedding_provider)
@@ -148,7 +153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "temperature": config.rollout.temperature,
             "top_p": config.rollout.top_p,
             "max_episode_steps": config.rollout.max_episode_steps,
-            "memory_enabled": config.memory.enabled,
+            "memory_enabled": fast_loop_config.memory_enabled,
         },
         model_serving_contract=MODEL_SERVING_CONTRACT,
         evaluation_config={"nl_assertions": evaluation_provenance},
@@ -169,11 +174,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         top_p=config.rollout.top_p,
         default_task_group="retail",
     )
-    fast_loop_config = FastLoopConfig(
-        memory_enabled=config.memory.enabled,
-        retrieve_top_k=config.memory.retrieve_top_k,
-        max_episode_steps=config.rollout.max_episode_steps,
-    )
     results, maintenance_rounds = _run_requested_tasks(
         task_ids=tuple(args.task_ids),
         env_factory=lambda task_id: Tau2RetailEnv(
@@ -189,9 +189,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         completed_train_tasks_before=args.completed_train_tasks_before,
         maintenance_period=config.memory.maintenance_period,
     )
-    output_memory_snapshot_id = (
-        repository.snapshot().memory_snapshot_id if repository is not None else None
-    )
+    if fast_loop_config.memory_enabled:
+        assert repository is not None
+        output_memory_snapshot_id = repository.snapshot().memory_snapshot_id
+    else:
+        output_memory_snapshot_id = None
     summary = {
         "run_id": args.run_id,
         "episode_count": len(results),
@@ -200,7 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "maintenance_rounds_executed": list(maintenance_rounds),
         "completed_train_tasks_before": args.completed_train_tasks_before,
         "completed_train_tasks_after": args.completed_train_tasks_before + len(results),
-        "memory_enabled": config.memory.enabled,
+        "memory_enabled": fast_loop_config.memory_enabled,
         "input_memory_snapshot_id": input_memory_snapshot_id,
         "output_memory_snapshot_id": output_memory_snapshot_id,
     }
@@ -216,16 +218,22 @@ def _run_requested_tasks(
     env_factory: Callable[[str], Any],
     policy: Any,
     repository: MemoryRepository | None,
-    retriever: Any | None,
-    fast_loop_config: Any,
+    retriever: Retriever | None,
+    fast_loop_config: FastLoopConfig,
     context: RunContext,
     completed_train_tasks_before: int,
     maintenance_period: int,
 ) -> tuple[tuple[EpisodeResult, ...], tuple[int, ...]]:
     results: list[EpisodeResult] = []
     maintenance_rounds: list[int] = []
+    if fast_loop_config.memory_enabled:
+        if repository is None or retriever is None:
+            raise ValueError("memory dependencies do not match memory_enabled")
+    elif repository is not None or retriever is not None:
+        raise ValueError("memory dependencies do not match memory_enabled")
     for index, task_id in enumerate(task_ids, start=1):
-        if repository is not None:
+        if fast_loop_config.memory_enabled:
+            assert repository is not None
             episode_context = replace(
                 context,
                 memory_snapshot_id=repository.snapshot().memory_snapshot_id,
@@ -243,7 +251,8 @@ def _run_requested_tasks(
             context=episode_context,
         )
         results.append(result)
-        if repository is not None:
+        if fast_loop_config.memory_enabled:
+            assert repository is not None
             maintenance_context = replace(
                 context,
                 memory_snapshot_id=repository.snapshot().memory_snapshot_id,
