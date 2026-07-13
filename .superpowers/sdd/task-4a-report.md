@@ -63,3 +63,36 @@ No reviewed runner, decisions, prompts, maintenance, action codec, HTTP client c
 
 - A pre-existing untracked `docs/superpowers/plans/2026-07-13-stage-4-fast-loop.md` belongs to other work and was intentionally neither modified nor committed.
 - No live Qwen endpoint was called; behavior is verified against exact OpenAI-compatible client calls and representative Qwen response shapes.
+
+## Review Remediation
+
+### Findings Addressed
+
+- Action extraction, Qwen tool parsing, and `Tau2ActionCodec` decoding now share one failure boundary. Any failure returns canonical `{"invalid_action_output":"action decoding failed"}` with no legal top-level `action`, forcing runner repair.
+- The bypass case where raw output was itself `{"action":"{\"name\":\"unknown\",...}"}` is covered and cannot be accepted as `ActionDecision`.
+- Missing/null/empty `tool_calls` with null content, malformed mapping/string calls, and non-JSON-serializable structured messages all become parser-invalid action responses instead of adapter exceptions.
+- Selection, write, and maintenance use a fast-loop-only structured-call guard. Any present `tool_calls` value other than `None` or an empty list rejects mixed valid content, including list, mapping, string, and scalar shapes.
+- The shared baseline `_raw_output`, baseline policy, reviewed runner, decisions, prompts, maintenance, and codec were not changed.
+
+### Review TDD Evidence
+
+- RED: `python -m pytest tests/unit/models/test_policy.py -q --basetemp=.pytest-tmp/task4a-review-red`
+- RED result: `18 failed, 28 passed`; failures reproduced the accepted action shell, premature action extraction exceptions, accepted non-action mixed content, and environment execution of the invalid `unknown` action.
+- GREEN: `python -m pytest tests/unit/models/test_policy.py -q --basetemp=.pytest-tmp/task4a-review-green`
+- GREEN result: `46 passed in 0.30s`.
+- Regression: `python -m pytest tests/unit/models tests/unit/fast_loop -q --basetemp=.pytest-tmp/task4a-review-regression`
+- Regression result: `176 passed in 1.46s`.
+- Compile and `git diff --check` passed.
+
+### Runner Integration Evidence
+
+The integration unit test runs `run_fast_loop_episode` with a real mutable `MemoryRepository` and `Retriever`. The action generate response is codec-invalid but has a syntactically valid `ActionDecision` shell; repair returns one valid structured Qwen call. Assertions prove:
+
+- The environment executes only canonical `find_order` from repair.
+- Exactly two client requests carry action tools: generate plus one repair.
+- The complete episode uses four client calls: selection, action generate, action repair, and write.
+- Audited events contain neither the invalid `unknown` raw action nor the internal invalid-action wrapper.
+
+### Review Commit
+
+- `e75d397 Force repair for invalid fast-loop actions`
