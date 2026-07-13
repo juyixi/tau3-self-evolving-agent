@@ -6,7 +6,16 @@ from typing import Any
 
 import pytest
 
+from tau3_retail_evolver.fast_loop.decisions import ActionDecision, parse_decision
+from tau3_retail_evolver.fast_loop.prompts import (
+    LifecyclePrompt,
+    build_action_prompt,
+    build_maintenance_prompt,
+    build_selection_prompt,
+    build_write_prompt,
+)
 from tau3_retail_evolver.models.openai_compatible import (
+    OpenAICompatibleFastLoopPolicy,
     OpenAICompatibleHttpClient,
     OpenAICompatibleQwenPolicy,
 )
@@ -36,6 +45,88 @@ class FakeClock:
 
     def __call__(self) -> float:
         return next(self._values)
+
+
+SELECTION_SYSTEM = (
+    'Return exactly one strict JSON object matching SelectionDecision: '
+    '{"memory_ids":[...]}. Use only candidate IDs from the user payload. '
+    'Do not use tools or include any other text.'
+)
+ACTION_SYSTEM = (
+    "Choose exactly one Tau2 action using the official policy and public context. "
+    "Use at most one provided tool call, or return a valid Tau2 text action. "
+    "Do not include hidden data."
+)
+WRITE_SYSTEM = (
+    'Return exactly one strict JSON object matching WriteDecision: {"memories":[...]}. '
+    "Attribution fields are not allowed. Do not use tools or include any other text."
+)
+MAINTENANCE_SYSTEM = (
+    "Return exactly one strict JSON object matching MaintenanceDecision: "
+    '{"commands":[...]}. Use only the provided command schemas and diagnostics. '
+    "Do not use external tools or include any other text."
+)
+
+
+def _public_context() -> dict[str, object]:
+    return {
+        "task_instruction": "Help the customer update an order.",
+        "policy": {"rule": "Verify the order first."},
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "find_order",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"order_id": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+        "observation": "Please check order 123.",
+        "history": [{"role": "user", "content": "My name is Ada."}],
+    }
+
+
+def _lifecycle_prompts() -> dict[str, LifecyclePrompt]:
+    context = _public_context()
+    return {
+        "selection": build_selection_prompt(
+            **context,
+            candidates=(
+                {"id": "memory-1", "tier": "tip", "content": "Verify first.", "version": 1},
+            ),
+        ),
+        "action": build_action_prompt(
+            **context,
+            memories=(
+                {"id": "memory-1", "tier": "tip", "content": "Verify first.", "version": 1},
+            ),
+        ),
+        "write": build_write_prompt(
+            **context,
+            trajectory=({"observation": "start", "action": "find_order"},),
+            terminal_evaluation={"reward": 1.0},
+        ),
+        "maintenance": build_maintenance_prompt(
+            diagnostics={
+                tier: {"items": []}
+                for tier in ("trajectory", "tip", "skill", "tool")
+            }
+        ),
+    }
+
+
+def _canonical(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _completion(content: str | None, *, tool_calls: object = None) -> dict[str, object]:
+    message: dict[str, object] = {"role": "assistant", "content": content}
+    if tool_calls is not None:
+        message["tool_calls"] = tool_calls
+    return {"choices": [{"message": message}]}
 
 
 def _request() -> DecisionRequest:
@@ -209,6 +300,260 @@ def test_default_parser_rejects_multiple_structured_tool_calls() -> None:
 
     with pytest.raises(ValueError, match="exactly one"):
         policy.generate(_request())
+
+
+@pytest.mark.parametrize(
+    ("kind", "system_instruction", "output"),
+    (
+        ("selection", SELECTION_SYSTEM, '{"memory_ids":["memory-1"]}'),
+        ("write", WRITE_SYSTEM, '{"memories":[]}'),
+        ("maintenance", MAINTENANCE_SYSTEM, '{"commands":[]}'),
+    ),
+)
+def test_fast_loop_non_action_requests_use_exact_public_json_and_no_tools(
+    kind: str,
+    system_instruction: str,
+    output: str,
+) -> None:
+    prompt = _lifecycle_prompts()[kind]
+    client = FakeClient(_completion(output))
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=client,
+        temperature=0.7,
+        top_p=0.9,
+        clock=FakeClock(3.0, 3.2),
+    )
+
+    response = policy.generate(prompt)
+
+    public_request = dict(prompt.payload)
+    if kind == "maintenance":
+        public_request["command_schemas"] = list(prompt.command_schemas)
+    assert client.calls == [
+        {
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": _canonical(public_request)},
+            ],
+            "tools": [],
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }
+    ]
+    assert response.raw_output == output
+    assert response.sampling_params == {"temperature": 0.7, "top_p": 0.9}
+    assert response.latency_s == pytest.approx(0.2)
+    assert "task_id" not in client.calls[0]["messages"][1]["content"]
+    assert "attribution" not in client.calls[0]["messages"][1]["content"]
+
+
+def test_fast_loop_action_passes_exact_official_tools_and_converts_qwen_tool_call() -> None:
+    prompt = _lifecycle_prompts()["action"]
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "find_order", "arguments": '{"order_id":"123"}'},
+        }
+    ]
+    client = FakeClient(_completion(None, tool_calls=tool_calls))
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=client,
+        temperature=0.6,
+        top_p=0.8,
+        clock=FakeClock(5.0, 4.5),
+    )
+
+    response = policy.generate(prompt)
+
+    assert client.calls == [
+        {
+            "messages": [
+                {"role": "system", "content": ACTION_SYSTEM},
+                {"role": "user", "content": _canonical(prompt.payload)},
+            ],
+            "tools": prompt.payload["tools"],
+            "temperature": 0.6,
+            "top_p": 0.8,
+        }
+    ]
+    assert response.raw_output == (
+        '{"action":"{\\"arguments\\":{\\"order_id\\":\\"123\\"},'
+        '\\"name\\":\\"find_order\\"}"}'
+    )
+    assert response.sampling_params == {"temperature": 0.6, "top_p": 0.8}
+    assert response.latency_s == 0.0
+
+
+def test_fast_loop_action_converts_valid_assistant_text_to_canonical_action_json() -> None:
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=FakeClient(_completion("I can help with that.")),
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.generate(_lifecycle_prompts()["action"])
+
+    assert response.raw_output == '{"action":"I can help with that."}'
+
+
+def test_fast_loop_malformed_action_is_returned_invalid_for_runner_repair() -> None:
+    malformed = '{"name":"find_order","arguments":"order_id=123"}'
+    client = FakeClient(_completion(malformed))
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=client,
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.generate(_lifecycle_prompts()["action"])
+    parsed = parse_decision(response.raw_output, ActionDecision)
+
+    assert response.raw_output == malformed
+    assert parsed.decision is None
+    assert parsed.error is not None
+    assert len(client.calls) == 1
+
+
+def test_fast_loop_malformed_structured_action_is_returned_for_runner_repair() -> None:
+    message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": {"function": {"name": "find_order", "arguments": "{}"}},
+    }
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=FakeClient({"choices": [{"message": message}]}),
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.generate(_lifecycle_prompts()["action"])
+
+    assert response.raw_output == _canonical(message)
+    assert parse_decision(response.raw_output, ActionDecision).decision is None
+
+
+@pytest.mark.parametrize("kind", ("selection", "write", "maintenance"))
+def test_fast_loop_non_action_rejects_structured_tool_calls(kind: str) -> None:
+    message = {
+        "role": "assistant",
+        "content": '{"commands":[]}',
+        "tool_calls": [
+            {"type": "function", "function": {"name": "hidden_tool", "arguments": "{}"}}
+        ],
+    }
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=FakeClient({"choices": [{"message": message}]}),
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.generate(_lifecycle_prompts()[kind])
+
+    assert response.raw_output == _canonical(message)
+
+
+def test_fast_loop_repair_sends_only_public_prompt_invalid_output_and_error() -> None:
+    prompt = _lifecycle_prompts()["selection"]
+    client = FakeClient(_completion('{"memory_ids":["memory-1"]}'))
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=client,
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.repair(prompt, "not json", "invalid JSON: secret-free error")
+
+    repair_request = {
+        "prompt": prompt.model_dump(mode="json"),
+        "invalid_output": "not json",
+        "validation_error": "invalid JSON: secret-free error",
+    }
+    assert client.calls == [
+        {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Repair the invalid selection response. " + SELECTION_SYSTEM
+                    ),
+                },
+                {"role": "user", "content": _canonical(repair_request)},
+            ],
+            "tools": [],
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }
+    ]
+    assert response.raw_output == '{"memory_ids":["memory-1"]}'
+    serialized = client.calls[0]["messages"][1]["content"]
+    assert "task_id" not in serialized
+    assert "run_id" not in serialized
+    assert "attribution" not in serialized
+
+
+def test_fast_loop_action_repair_retains_tools_and_converts_structured_action() -> None:
+    prompt = _lifecycle_prompts()["action"]
+    client = FakeClient(
+        _completion(
+            None,
+            tool_calls=[
+                {
+                    "type": "function",
+                    "function": {"name": "find_order", "arguments": {"order_id": "123"}},
+                }
+            ],
+        )
+    )
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=client,
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.repair(prompt, "bad action", "invalid action")
+
+    assert client.calls[0]["tools"] is prompt.payload["tools"]
+    assert response.raw_output == (
+        '{"action":"{\\"arguments\\":{\\"order_id\\":\\"123\\"},'
+        '\\"name\\":\\"find_order\\"}"}'
+    )
+
+
+@pytest.mark.parametrize(
+    ("temperature", "top_p"),
+    ((float("nan"), 0.9), (0.7, float("inf")), (float("-inf"), 0.9)),
+)
+def test_fast_loop_rejects_nonfinite_sampling_values(
+    temperature: float, top_p: float
+) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        OpenAICompatibleFastLoopPolicy(
+            client=FakeClient(_completion("unused")),
+            temperature=temperature,
+            top_p=top_p,
+        )
+
+
+def test_fast_loop_sanitizes_client_exceptions_and_repr() -> None:
+    secret = "api-key-and-raw-transport-body"
+
+    class FailingClient:
+        def create_chat_completion(self, **kwargs: Any) -> object:
+            raise RuntimeError(secret)
+
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=FailingClient(),
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    with pytest.raises(RuntimeError, match="fast-loop policy request failed") as error:
+        policy.generate(_lifecycle_prompts()["selection"])
+
+    assert secret not in repr(policy)
+    assert secret not in str(error.value)
+    assert error.value.__cause__ is None
 
 
 def test_http_client_posts_openai_compatible_request_with_generation_settings() -> None:
