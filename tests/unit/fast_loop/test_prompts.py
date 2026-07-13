@@ -52,6 +52,24 @@ def _public_context() -> dict[str, object]:
     }
 
 
+def _diagnostic_item(index: int = 1) -> dict[str, object]:
+    return {
+        "id": f"memory-{index}",
+        "content": "Confirm the order before changing it.",
+        "version": 1,
+        "usage_count": 2,
+        "success_count": 1,
+        "last_used": "2026-07-13T00:00:00Z",
+    }
+
+
+def _maintenance_diagnostics() -> dict[str, object]:
+    return {
+        tier: {"items": [_diagnostic_item()]}
+        for tier in ("trajectory", "tip", "skill", "tool")
+    }
+
+
 def test_selection_and_action_prompts_project_only_public_memory_data() -> None:
     selection = build_selection_prompt(**_public_context(), candidates=(_candidate(),))
     action = build_action_prompt(**_public_context(), memories=(_candidate(),))
@@ -92,16 +110,48 @@ def test_write_prompt_allows_terminal_public_evaluation_but_rejects_hidden_crite
 
 
 def test_maintenance_prompt_keeps_only_caller_diagnostics_and_command_schemas() -> None:
-    prompt = build_maintenance_prompt(
-        diagnostics={"stale_count": 2, "tier": "tip"},
-    )
+    diagnostics = _maintenance_diagnostics()
 
-    assert prompt.payload == {"diagnostics": {"stale_count": 2, "tier": "tip"}}
+    prompt = build_maintenance_prompt(diagnostics=diagnostics)
+
+    assert prompt.payload == {"diagnostics": diagnostics}
     assert {schema["operation"] for schema in prompt.command_schemas} == {
         "lookup",
         "merge",
         "delete",
     }
+
+
+def test_maintenance_prompt_requires_exactly_four_tier_item_lists() -> None:
+    diagnostics = _maintenance_diagnostics()
+    del diagnostics["tool"]
+
+    with pytest.raises(ValueError):
+        build_maintenance_prompt(diagnostics=diagnostics)
+
+
+def test_maintenance_prompt_rejects_unknown_item_fields() -> None:
+    diagnostics = _maintenance_diagnostics()
+    diagnostics["tip"]["items"][0]["arbitrary"] = "hidden"
+
+    with pytest.raises(ValueError):
+        build_maintenance_prompt(diagnostics=diagnostics)
+
+
+def test_maintenance_prompt_rejects_unknown_top_level_fields() -> None:
+    diagnostics = _maintenance_diagnostics()
+    diagnostics["summary"] = {"items": []}
+
+    with pytest.raises(ValueError):
+        build_maintenance_prompt(diagnostics=diagnostics)
+
+
+def test_maintenance_prompt_rejects_tier_lists_over_the_bound() -> None:
+    diagnostics = _maintenance_diagnostics()
+    diagnostics["tip"]["items"] = [_diagnostic_item(index) for index in range(101)]
+
+    with pytest.raises(ValueError, match="at most"):
+        build_maintenance_prompt(diagnostics=diagnostics)
 
 
 def test_lifecycle_prompt_is_json_safe_and_rejects_non_json_payloads() -> None:
@@ -120,9 +170,75 @@ def test_lifecycle_prompt_is_json_safe_and_rejects_non_json_payloads() -> None:
         )
 
 
+def test_lifecycle_prompt_scans_json_safe_nested_tuples_for_hidden_fields() -> None:
+    with pytest.raises(ValueError, match="forbidden"):
+        LifecyclePrompt(
+            kind="selection",
+            payload={"policy": ({"Attribution-Score": 0.9},)},
+            command_schemas=(),
+        )
+
+
 def test_public_prompt_rejects_forbidden_evaluation_and_metadata_fields() -> None:
     context = _public_context()
     context["policy"] = {"official": "public", "evaluation_criteria": "private"}
 
     with pytest.raises(ValueError, match="forbidden"):
         build_selection_prompt(**context, candidates=())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("policy", {"outer": {"attributionScore": 0.9}}),
+        ("tools", [{"function": {"TEST-TASK-ID": "secret"}}]),
+    ),
+)
+def test_public_context_rejects_nested_forbidden_key_variants(
+    field: str, value: object
+) -> None:
+    context = _public_context()
+    context[field] = value
+
+    with pytest.raises(ValueError, match="forbidden"):
+        build_selection_prompt(**context, candidates=())
+
+
+def test_history_uses_an_explicit_role_and_content_whitelist() -> None:
+    context = _public_context()
+    context["history"] = [{"role": "user", "content": "Hello", "testTaskId": "secret"}]
+
+    with pytest.raises(ValueError, match="history"):
+        build_action_prompt(**context, memories=())
+
+
+@pytest.mark.parametrize(
+    ("trajectory", "terminal_evaluation"),
+    (
+        (
+            [{"role": "assistant", "content": "done", "privileged-hindsight": True}],
+            {"reward": 1.0},
+        ),
+        (
+            [{"role": "assistant", "content": "done"}],
+            {"official": {"evaluatorMetadata": "secret"}},
+        ),
+    ),
+)
+def test_write_prompt_rejects_nested_forbidden_key_variants(
+    trajectory: list[dict[str, object]], terminal_evaluation: dict[str, object]
+) -> None:
+    with pytest.raises(ValueError, match="forbidden"):
+        build_write_prompt(
+            **_public_context(),
+            trajectory=trajectory,
+            terminal_evaluation=terminal_evaluation,
+        )
+
+
+def test_maintenance_diagnostics_reject_nested_forbidden_key_variants() -> None:
+    diagnostics = _maintenance_diagnostics()
+    diagnostics["tip"]["items"][0]["attribution.Score"] = 0.9
+
+    with pytest.raises(ValueError, match="forbidden"):
+        build_maintenance_prompt(diagnostics=diagnostics)

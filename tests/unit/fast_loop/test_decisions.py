@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -32,11 +33,29 @@ def test_selection_parse_validates_all_ids_against_candidates() -> None:
     result = parse_decision(
         '{"memory_ids": ["memory-1", "not-a-candidate"]}',
         SelectionDecision,
-        validator=lambda decision: decision.validate_candidates({"memory-1"}),
+        candidate_ids={"memory-1"},
     )
 
     assert result.decision is None
     assert "not a candidate" in (result.error or "")
+
+
+def test_selection_parse_requires_candidate_ids() -> None:
+    result = parse_decision('{"memory_ids": ["memory-1"]}', SelectionDecision)
+
+    assert result.decision is None
+    assert "candidate_ids is required" in (result.error or "")
+
+
+def test_selection_parse_accepts_only_ids_from_the_required_candidate_set() -> None:
+    result = parse_decision(
+        '{"memory_ids": ["memory-2", "memory-1"]}',
+        SelectionDecision,
+        candidate_ids={"memory-1", "memory-2"},
+    )
+
+    assert result.decision == SelectionDecision(memory_ids=("memory-2", "memory-1"))
+    assert result.error is None
 
 
 def test_action_and_write_decisions_validate_text_and_json_metadata() -> None:
@@ -86,6 +105,28 @@ def test_maintenance_decision_parses_only_known_typed_commands() -> None:
     assert isinstance(decision.commands[2], DeleteCommand)
     with pytest.raises(ValidationError):
         MaintenanceDecision.model_validate({"commands": [{"operation": "invent"}]})
+
+
+@pytest.mark.parametrize("updated_round", ("3", 3.0, True))
+def test_maintenance_parse_rejects_coerced_updated_round_scalars(updated_round: object) -> None:
+    result = parse_decision(
+        json.dumps(
+            {
+                "commands": [
+                    {
+                        "operation": "delete",
+                        "memory_ids": ["memory-1"],
+                        "updated_round": updated_round,
+                        "reason": "stale",
+                    }
+                ]
+            }
+        ),
+        MaintenanceDecision,
+    )
+
+    assert result.decision is None
+    assert result.error
 
 
 def test_parse_decision_returns_failure_without_silently_creating_a_command() -> None:

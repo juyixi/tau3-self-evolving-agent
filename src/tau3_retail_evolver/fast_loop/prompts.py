@@ -3,16 +3,19 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import json
 from typing import Any, Literal
+import unicodedata
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from tau3_retail_evolver.memory.operations import DeleteCommand, LookupCommand, MergeCommand
+from tau3_retail_evolver.fast_loop.decisions import maintenance_command_schemas
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate
 from tau3_retail_evolver.memory.types import MemoryItem
 
 
 PromptKind = Literal["selection", "action", "write", "maintenance"]
-_FORBIDDEN_PUBLIC_KEYS = frozenset(
+MAX_DIAGNOSTIC_ITEMS_PER_TIER = 100
+MAX_DIAGNOSTIC_CONTENT_CHARS = 8_000
+_FORBIDDEN_PUBLIC_KEY_NAMES = frozenset(
     {
         "attribution_score",
         "embeddings",
@@ -28,6 +31,52 @@ _FORBIDDEN_PUBLIC_KEYS = frozenset(
 )
 
 
+def _normalize_key(key: str) -> str:
+    normalized = unicodedata.normalize("NFKC", key).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
+_FORBIDDEN_PUBLIC_KEYS = frozenset(
+    _normalize_key(key) for key in _FORBIDDEN_PUBLIC_KEY_NAMES
+)
+
+
+class _PromptModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class MaintenanceDiagnosticItem(_PromptModel):
+    id: str = Field(min_length=1, max_length=256)
+    content: str = Field(min_length=1, max_length=MAX_DIAGNOSTIC_CONTENT_CHARS)
+    version: int = Field(ge=1)
+    usage_count: int = Field(default=0, ge=0)
+    success_count: int = Field(default=0, ge=0)
+    last_used: str | None = Field(default=None, max_length=128)
+
+    @field_validator("id", "content", "last_used")
+    @classmethod
+    def text_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("diagnostic text must not be blank")
+        return value
+
+
+class MaintenanceTierDiagnostics(_PromptModel):
+    items: tuple[MaintenanceDiagnosticItem, ...] = Field(
+        max_length=MAX_DIAGNOSTIC_ITEMS_PER_TIER
+    )
+
+
+class MaintenanceDiagnostics(_PromptModel):
+    trajectory: MaintenanceTierDiagnostics
+    tip: MaintenanceTierDiagnostics
+    skill: MaintenanceTierDiagnostics
+    tool: MaintenanceTierDiagnostics
+
+
 class LifecyclePrompt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -35,9 +84,16 @@ class LifecyclePrompt(BaseModel):
     payload: dict[str, Any]
     command_schemas: tuple[dict[str, Any], ...]
 
-    @field_validator("payload", "command_schemas")
+    @field_validator("payload")
     @classmethod
-    def value_must_be_json_safe(cls, value: Any) -> Any:
+    def payload_must_be_public_and_json_safe(cls, value: Any) -> Any:
+        _require_json_safe(value, "lifecycle prompt")
+        _reject_forbidden_fields(value, "lifecycle prompt")
+        return value
+
+    @field_validator("command_schemas")
+    @classmethod
+    def command_schemas_must_be_json_safe(cls, value: Any) -> Any:
         _require_json_safe(value, "lifecycle prompt")
         return value
 
@@ -127,14 +183,16 @@ def build_write_prompt(
 def build_maintenance_prompt(*, diagnostics: Mapping[str, Any]) -> LifecyclePrompt:
     normalized_diagnostics = _json_copy(diagnostics, "diagnostics")
     _reject_forbidden_fields(normalized_diagnostics, "diagnostics")
+    try:
+        validated_diagnostics = MaintenanceDiagnostics.model_validate_json(
+            json.dumps(normalized_diagnostics, allow_nan=False)
+        )
+    except ValidationError as error:
+        raise ValueError(f"invalid maintenance diagnostics: {error}") from error
     return LifecyclePrompt(
         kind="maintenance",
-        payload={"diagnostics": normalized_diagnostics},
-        command_schemas=(
-            {"operation": "lookup", "schema": LookupCommand.model_json_schema()},
-            {"operation": "merge", "schema": MergeCommand.model_json_schema()},
-            {"operation": "delete", "schema": DeleteCommand.model_json_schema()},
-        ),
+        payload={"diagnostics": validated_diagnostics.model_dump(mode="json")},
+        command_schemas=maintenance_command_schemas(),
     )
 
 
@@ -152,12 +210,16 @@ def _public_context(
         raise ValueError("observation must be a nonblank string")
     if isinstance(tools, (str, bytes)) or isinstance(history, (str, bytes)):
         raise ValueError("tools and history must be sequences")
+    normalized_policy = _json_copy(policy, "policy")
+    normalized_tools = _json_copy(list(tools), "tools")
+    _reject_forbidden_fields(normalized_policy, "policy")
+    _reject_forbidden_fields(normalized_tools, "tools")
     context = {
         "task_instruction": task_instruction.strip(),
-        "policy": _json_copy(policy, "policy"),
-        "tools": _json_copy(list(tools), "tools"),
+        "policy": normalized_policy,
+        "tools": normalized_tools,
         "observation": observation.strip(),
-        "history": _json_copy(list(history), "history"),
+        "history": _public_history(history),
     }
     _reject_forbidden_fields(context, "public prompt")
     return context
@@ -206,12 +268,25 @@ def _require_json_safe(value: Any, label: str) -> None:
         raise ValueError(f"{label} must be JSON serializable") from error
 
 
+def _public_history(history: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for message in history:
+        if not isinstance(message, Mapping) or set(message) != {"role", "content"}:
+            raise ValueError("history messages may contain only role and content")
+        role = message["role"]
+        content = message["content"]
+        if not isinstance(role, str) or not isinstance(content, str):
+            raise ValueError("history role and content must be strings")
+        messages.append({"role": role, "content": content})
+    return messages
+
+
 def _reject_forbidden_fields(value: Any, label: str) -> None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
-            if isinstance(key, str) and key.lower() in _FORBIDDEN_PUBLIC_KEYS:
+            if isinstance(key, str) and _normalize_key(key) in _FORBIDDEN_PUBLIC_KEYS:
                 raise ValueError(f"forbidden hidden field in {label}: {key}")
             _reject_forbidden_fields(nested, label)
-    elif isinstance(value, list):
+    elif isinstance(value, (list, tuple)):
         for nested in value:
             _reject_forbidden_fields(nested, label)

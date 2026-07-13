@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection
 import json
-from typing import Annotated, Any, Generic, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from tau3_retail_evolver.memory.operations import (
     DeleteCommand,
@@ -79,8 +87,54 @@ class WriteDecision(_DecisionModel):
     memories: tuple[MemoryWrite, ...]
 
 
+class _StrictLookupCommand(_DecisionModel):
+    operation: Literal["lookup"] = "lookup"
+    memory_ids: tuple[str, ...] = Field(min_length=1)
+
+
+class _StrictMergeCommand(_DecisionModel):
+    operation: Literal["merge"] = "merge"
+    source_ids: tuple[str, ...] = Field(min_length=2)
+    content: str
+    updated_round: int = Field(ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class _StrictDeleteCommand(_DecisionModel):
+    operation: Literal["delete"] = "delete"
+    memory_ids: tuple[str, ...] = Field(min_length=1)
+    updated_round: int = Field(ge=0)
+    reason: str
+
+
+_StrictMemoryCommand = Annotated[
+    _StrictLookupCommand | _StrictMergeCommand | _StrictDeleteCommand,
+    Field(discriminator="operation"),
+]
+_STRICT_COMMAND_ADAPTER = TypeAdapter(_StrictMemoryCommand)
+
+
 class MaintenanceDecision(_DecisionModel):
     commands: tuple[Annotated[MemoryCommand, Field(discriminator="operation")], ...]
+
+    @model_validator(mode="before")
+    @classmethod
+    def commands_must_use_strict_input_types(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or not isinstance(
+            value.get("commands"), (list, tuple)
+        ):
+            return value
+        commands = []
+        for command in value["commands"]:
+            payload = (
+                command.model_dump(mode="python")
+                if isinstance(command, BaseModel)
+                else command
+            )
+            encoded = json.dumps(payload, allow_nan=False)
+            strict_command = _STRICT_COMMAND_ADAPTER.validate_json(encoded)
+            commands.append(strict_command.model_dump(mode="python"))
+        return {**value, "commands": tuple(commands)}
 
 
 Decision = SelectionDecision | ActionDecision | WriteDecision | MaintenanceDecision
@@ -101,9 +155,16 @@ def parse_decision(
     decision_type: type[DecisionT],
     validator: Validator[DecisionT] | None = None,
     repair: Repair | None = None,
+    *,
+    candidate_ids: Collection[str] | None = None,
 ) -> DecisionParseResult[DecisionT]:
     """Parse exactly one JSON object, with at most one caller-provided repair."""
-    parsed, error = _parse_once(raw_output, decision_type, validator)
+    if issubclass(decision_type, SelectionDecision) and candidate_ids is None:
+        return DecisionParseResult(
+            raw_output=raw_output,
+            error="candidate_ids is required when parsing SelectionDecision",
+        )
+    parsed, error = _parse_once(raw_output, decision_type, validator, candidate_ids)
     if error is None:
         return DecisionParseResult(decision=parsed, raw_output=raw_output)
     if repair is None:
@@ -122,7 +183,12 @@ def parse_decision(
             error="repair did not return a string",
         )
 
-    repaired, repaired_error = _parse_once(repaired_output, decision_type, validator)
+    repaired, repaired_error = _parse_once(
+        repaired_output,
+        decision_type,
+        validator,
+        candidate_ids,
+    )
     if repaired_error is None:
         return DecisionParseResult(
             decision=repaired,
@@ -140,6 +206,7 @@ def _parse_once(
     raw_output: str,
     decision_type: type[DecisionT],
     validator: Validator[DecisionT] | None,
+    candidate_ids: Collection[str] | None,
 ) -> tuple[DecisionT | None, str | None]:
     if not isinstance(raw_output, str):
         return None, "model output must be a string"
@@ -151,6 +218,10 @@ def _parse_once(
         return None, "decision output must be one JSON object"
     try:
         decision = decision_type.model_validate_json(json.dumps(payload, allow_nan=False))
+        if isinstance(decision, SelectionDecision):
+            if candidate_ids is None:
+                raise ValueError("candidate_ids is required when parsing SelectionDecision")
+            decision.validate_candidates(candidate_ids)
         if validator is not None:
             validator(decision)
     except (TypeError, ValueError, ValidationError) as error:
@@ -163,3 +234,11 @@ def _require_json_safe(value: Any, label: str) -> None:
         json.dumps(value, allow_nan=False)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{label} must be JSON serializable") from error
+
+
+def maintenance_command_schemas() -> tuple[dict[str, Any], ...]:
+    return (
+        {"operation": "lookup", "schema": _StrictLookupCommand.model_json_schema()},
+        {"operation": "merge", "schema": _StrictMergeCommand.model_json_schema()},
+        {"operation": "delete", "schema": _StrictDeleteCommand.model_json_schema()},
+    )
