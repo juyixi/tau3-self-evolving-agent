@@ -15,6 +15,7 @@ from tau3_retail_evolver.fast_loop.maintenance import (
     bounded_diagnostics,
     run_due_maintenance,
 )
+from tau3_retail_evolver.fast_loop.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
 from tau3_retail_evolver.fast_loop.runner import LifecycleResponse
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
@@ -271,6 +272,28 @@ def test_bounded_diagnostics_are_public_active_complete_and_deterministic(
     assert "do-not-log" not in json.dumps(diagnostics)
 
 
+def test_bounded_diagnostics_truncate_content_without_mutating_memory(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    original_content = "x" * (MAX_DIAGNOSTIC_CONTENT_CHARS + 37)
+    item = repository.add(
+        tier="tip",
+        content=original_content,
+        source_task_ids=("hidden-source-task",),
+        created_round=0,
+        metadata={"api_token": "must-not-appear"},
+    )
+
+    diagnostics = bounded_diagnostics(repository, per_tier_limit=1)
+
+    diagnostic = diagnostics["tip"]["items"][0]
+    assert diagnostic["content"] == original_content[:MAX_DIAGNOSTIC_CONTENT_CHARS]
+    assert repository.get(item.id).content == original_content
+    assert "hidden-source-task" not in json.dumps(diagnostics)
+    assert "must-not-appear" not in json.dumps(diagnostics)
+
+
 @pytest.mark.parametrize("limit", [0, 101])
 def test_bounded_diagnostics_reject_invalid_limits(tmp_path: Path, limit: int) -> None:
     with pytest.raises(ValueError, match="per_tier_limit"):
@@ -305,6 +328,7 @@ def test_lookup_command_returns_ids_and_emits_canonical_events(tmp_path: Path) -
         "skill": 0,
         "tool": 1,
     }
+    assert started["diagnostics"] == policy.prompts[0].payload["diagnostics"]
     assert proposed["commands"] == [
         {"operation": "lookup", "memory_ids": [first.id]}
     ]

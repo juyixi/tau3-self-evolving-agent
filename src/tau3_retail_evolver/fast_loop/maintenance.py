@@ -13,6 +13,7 @@ from tau3_retail_evolver.fast_loop.decisions import (
 )
 from tau3_retail_evolver.fast_loop.events import RunContext, RunMode
 from tau3_retail_evolver.fast_loop.prompts import (
+    MAX_DIAGNOSTIC_CONTENT_CHARS,
     MAX_DIAGNOSTIC_ITEMS_PER_TIER,
     build_maintenance_prompt,
 )
@@ -86,7 +87,7 @@ def bounded_diagnostics(
                 "items": [
                     {
                         "id": item.id,
-                        "content": item.content,
+                        "content": item.content[:MAX_DIAGNOSTIC_CONTENT_CHARS],
                         "version": item.version,
                         "usage_count": item.usage_count,
                         "success_count": item.success_count,
@@ -161,12 +162,16 @@ def _execute_round(
     state: MaintenanceState,
     state_path: Path,
 ) -> MaintenanceResult:
-    diagnostics = bounded_diagnostics(
-        repository,
-        per_tier_limit=per_tier_limit,
-    )
     task_key = f"maintenance-round-{maintenance_round}"
     try:
+        diagnostics = sanitize_artifact_data(
+            bounded_diagnostics(
+                repository,
+                per_tier_limit=per_tier_limit,
+            )
+        )
+        prompt = build_maintenance_prompt(diagnostics=diagnostics)
+        public_diagnostics = prompt.payload["diagnostics"]
         _emit(
             context,
             task_key,
@@ -176,10 +181,10 @@ def _execute_round(
             period=period,
             per_tier_counts={
                 tier: len(tier_diagnostics["items"])
-                for tier, tier_diagnostics in diagnostics.items()
+                for tier, tier_diagnostics in public_diagnostics.items()
             },
+            diagnostics=public_diagnostics,
         )
-        prompt = build_maintenance_prompt(diagnostics=diagnostics)
         decision, repair_used = _generate_decision(
             policy,
             prompt,

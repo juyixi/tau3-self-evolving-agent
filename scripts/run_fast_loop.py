@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -157,6 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=config.training.seed,
         event_writer=JsonlWriter(run_path / "rollouts" / "events.jsonl"),
         mode=RunMode.LEARN,
+        task_groups={task_id: "retail" for task_id in args.task_ids},
         temperature=config.rollout.temperature,
         top_p=config.rollout.top_p,
     )
@@ -212,6 +214,11 @@ def _run_requested_tasks(
     results: list[EpisodeResult] = []
     maintenance_rounds: list[int] = []
     for index, task_id in enumerate(task_ids, start=1):
+        episode_snapshot = repository.snapshot()
+        episode_context = replace(
+            context,
+            memory_snapshot_id=episode_snapshot.memory_snapshot_id,
+        )
         result = run_fast_loop_episode(
             task_id=task_id,
             task_instruction=TASK_INSTRUCTION,
@@ -220,15 +227,20 @@ def _run_requested_tasks(
             repository=repository,
             retriever=retriever,
             config=fast_loop_config,
-            context=context,
+            context=episode_context,
         )
         results.append(result)
+        maintenance_snapshot = repository.snapshot()
+        maintenance_context = replace(
+            context,
+            memory_snapshot_id=maintenance_snapshot.memory_snapshot_id,
+        )
         maintenance = run_due_maintenance(
             completed_train_tasks=completed_train_tasks_before + index,
             period=maintenance_period,
             repository=repository,
             policy=policy,
-            context=context,
+            context=maintenance_context,
         )
         if maintenance.executed:
             maintenance_rounds.append(maintenance.maintenance_round)

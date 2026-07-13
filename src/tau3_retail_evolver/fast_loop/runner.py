@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
 from typing import Any, Protocol, TypeVar
+import unicodedata
 
+from tau3_retail_evolver.credential_policy import is_credential_key
 from tau3_retail_evolver.envs.base import ResetResult, StepResult
 from tau3_retail_evolver.fast_loop.decisions import (
     ActionDecision,
@@ -20,6 +22,7 @@ from tau3_retail_evolver.fast_loop.prompts import (
     build_action_prompt,
     build_selection_prompt,
     build_write_prompt,
+    project_public_context,
 )
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate, Retriever
@@ -106,21 +109,32 @@ def run_fast_loop_episode(
     write_failure_emitted = False
     try:
         reset = environment.reset(seed=context.seed)
-        public_policy, public_tools = _public_reset_info(reset.info)
+        reset_policy, reset_tools = _public_reset_info(reset.info)
+        public_context = project_public_context(
+            task_instruction=task_instruction,
+            policy=reset_policy,
+            tools=reset_tools,
+            observation=reset.observation,
+            history=(),
+        )
+        public_task_instruction = public_context["task_instruction"]
+        public_policy = public_context["policy"]
+        public_tools = public_context["tools"]
+        public_observation = public_context["observation"]
         _emit(
             context,
             task_id,
             "EpisodeStarted",
-            observation=reset.observation,
+            observation=public_observation,
             policy=public_policy,
             tools=public_tools,
         )
 
         query = _retrieval_query(
-            task_instruction,
+            public_task_instruction,
             public_policy,
             public_tools,
-            reset.observation,
+            public_observation,
         )
         candidates = retriever.retrieve(
             query,
@@ -142,10 +156,10 @@ def run_fast_loop_episode(
         )
 
         selection_prompt = build_selection_prompt(
-            task_instruction=task_instruction,
+            task_instruction=public_task_instruction,
             policy=public_policy,
             tools=public_tools,
-            observation=reset.observation,
+            observation=public_observation,
             candidates=candidates,
         )
         selection, selection_audit = _generate_decision(
@@ -164,11 +178,21 @@ def run_fast_loop_episode(
             context,
             task_id,
             "MemorySelected",
+            selected_memory_ids=list(selected_ids),
             selected=[_candidate_evidence(candidate) for candidate in selected],
-            **selection_audit,
+            raw_output_sha256=_output_hash(selection_audit["raw_output"]),
+            repaired_output_sha256=(
+                _output_hash(selection_audit["repaired_output"])
+                if selection_audit["repaired_output"] is not None
+                else None
+            ),
+            parse_failed=selection_audit["error"] is not None,
+            repair_used=selection_audit["repaired_output"] is not None,
+            sampling_params=selection_audit["sampling_params"],
+            latency_s=selection_audit["latency_s"],
         )
 
-        observation = reset.observation
+        observation = public_observation
         trajectory: list[dict[str, Any]] = []
         terminal_evaluation: Mapping[str, Any] = {}
         simulation_result: Mapping[str, Any] = {}
@@ -178,7 +202,7 @@ def run_fast_loop_episode(
         steps = 0
         while steps < config.max_episode_steps:
             action_prompt = build_action_prompt(
-                task_instruction=task_instruction,
+                task_instruction=public_task_instruction,
                 policy=public_policy,
                 tools=public_tools,
                 observation=observation,
@@ -258,7 +282,7 @@ def run_fast_loop_episode(
         )
 
         write_prompt = build_write_prompt(
-            task_instruction=task_instruction,
+            task_instruction=public_task_instruction,
             policy=public_policy,
             tools=public_tools,
             observation=observation,
@@ -269,6 +293,7 @@ def run_fast_loop_episode(
             policy,
             write_prompt,
             WriteDecision,
+            validator=_validate_write_decision,
             label="write",
         )
         proposals = [
@@ -288,6 +313,7 @@ def run_fast_loop_episode(
             written_ids, replayed_ids = _persist_proposals(repository, proposals)
         except BaseException as error:
             committed_ids = getattr(error, "_fast_loop_committed_ids", ())
+            replayed_ids = getattr(error, "_fast_loop_replayed_ids", ())
             write_failure_emitted = True
             try:
                 _emit(
@@ -295,6 +321,7 @@ def run_fast_loop_episode(
                     task_id,
                     "MemoryWriteFailed",
                     committed_memory_ids=list(committed_ids),
+                    replayed_memory_ids=list(replayed_ids),
                     error=_sanitized_error(error),
                 )
             except Exception as evidence_error:
@@ -392,6 +419,10 @@ def _query_hash(query: str) -> str:
     return hashlib.sha256(query.encode("utf-8")).hexdigest()
 
 
+def _output_hash(output: str) -> str:
+    return hashlib.sha256(output.encode("utf-8")).hexdigest()
+
+
 def _candidate_evidence(candidate: MemoryCandidate) -> dict[str, Any]:
     return {
         "memory_id": candidate.memory_id,
@@ -408,12 +439,14 @@ def _generate_decision(
     decision_type: type[DecisionT],
     *,
     candidate_ids: Sequence[str] | None = None,
+    validator: Callable[[DecisionT], Any] | None = None,
     label: str,
 ) -> tuple[DecisionT, dict[str, Any]]:
     response = policy.generate(prompt)
     result = parse_decision(
         response.raw_output,
         decision_type,
+        validator=validator,
         candidate_ids=candidate_ids,
     )
     repaired_output: str | None = None
@@ -424,6 +457,7 @@ def _generate_decision(
         result = parse_decision(
             repair.raw_output,
             decision_type,
+            validator=validator,
             candidate_ids=candidate_ids,
         )
     if result.decision is None:
@@ -479,7 +513,9 @@ def _write_proposal(
     final_reward: float,
     selected_ids: tuple[str, ...],
 ) -> dict[str, Any]:
-    metadata = _without_attribution(dict(memory.metadata))
+    _validate_write_metadata(memory.metadata)
+    metadata = _without_forbidden_metadata(dict(memory.metadata))
+    _validate_write_metadata(metadata)
     for key in _RESERVED_METADATA_KEYS:
         metadata.pop(key, None)
     metadata.update(
@@ -512,18 +548,47 @@ def _write_proposal(
     }
 
 
-def _without_attribution(value: Any) -> Any:
+def _validate_write_decision(decision: WriteDecision) -> WriteDecision:
+    for memory in decision.memories:
+        _validate_write_metadata(memory.metadata)
+    return decision
+
+
+def _validate_write_metadata(value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            normalized_key = unicodedata.normalize("NFKC", str(key)).casefold()
+            compact_key = "".join(
+                character for character in normalized_key if character.isalnum()
+            )
+            if "attributionscore" in compact_key:
+                raise ValueError("write metadata must not contain attribution score")
+            if is_credential_key(normalized_key):
+                raise ValueError("write metadata must not contain credential fields")
+            _validate_write_metadata(nested)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for nested in value:
+            _validate_write_metadata(nested)
+
+
+def _without_forbidden_metadata(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
-            str(key): _without_attribution(nested)
+            str(key): _without_forbidden_metadata(nested)
             for key, nested in value.items()
-            if "attributionscore" not in "".join(
-                character for character in str(key).casefold() if character.isalnum()
-            )
+            if not _is_forbidden_metadata_key(key)
         }
     if isinstance(value, list):
-        return [_without_attribution(item) for item in value]
+        return [_without_forbidden_metadata(item) for item in value]
     return value
+
+
+def _is_forbidden_metadata_key(key: Any) -> bool:
+    normalized_key = unicodedata.normalize("NFKC", str(key)).casefold()
+    compact_key = "".join(
+        character for character in normalized_key if character.isalnum()
+    )
+    return "attributionscore" in compact_key or is_credential_key(normalized_key)
 
 
 def _persist_proposals(
@@ -531,6 +596,7 @@ def _persist_proposals(
     proposals: Sequence[dict[str, Any]],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     written: list[str] = []
+    committed: list[str] = []
     replayed: list[str] = []
     for proposal in proposals:
         try:
@@ -538,13 +604,15 @@ def _persist_proposals(
         except ValueError as error:
             existing = repository.get(proposal["memory_id"])
             if not _is_safe_replay(existing, proposal):
-                _attach_committed(error, written)
+                _attach_write_progress(error, committed, replayed)
                 raise
             item = existing
             replayed.append(item.id)
         except BaseException as error:
-            _attach_committed(error, written)
+            _attach_write_progress(error, committed, replayed)
             raise
+        else:
+            committed.append(item.id)
         written.append(item.id)
     return tuple(written), tuple(replayed)
 
@@ -561,11 +629,16 @@ def _is_safe_replay(existing: MemoryItem | None, proposal: Mapping[str, Any]) ->
     )
 
 
-def _attach_committed(error: BaseException, committed: Sequence[str]) -> None:
+def _attach_write_progress(
+    error: BaseException,
+    committed: Sequence[str],
+    replayed: Sequence[str],
+) -> None:
     try:
         setattr(error, "_fast_loop_committed_ids", tuple(committed))
+        setattr(error, "_fast_loop_replayed_ids", tuple(replayed))
     except Exception:
-        error.add_note(f"Fast-loop committed memory IDs before failure: {list(committed)}")
+        error.add_note("Fast-loop write progress was recorded before failure")
 
 
 def _emit(

@@ -153,6 +153,7 @@ def _install_main_dependencies(
 
     def maintenance(**kwargs: Any):  # type: ignore[no-untyped-def]
         ordering.append(f"maintenance:{kwargs['completed_train_tasks']}")
+        captured.setdefault("maintenance_contexts", []).append(kwargs["context"])
         return real_maintenance(**kwargs)
 
     monkeypatch.setattr(
@@ -345,6 +346,7 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     captured_tasks: list[str] = []
+    episode_contexts: list[RunContext] = []
 
     def episode_runner(**kwargs: Any) -> EpisodeResult:
         task_id = kwargs["task_id"]
@@ -355,6 +357,7 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         )
         assert task_id not in kwargs["task_instruction"]
         context = kwargs["context"]
+        episode_contexts.append(context)
         repository = kwargs["repository"]
         captured["context"] = context
         repository.add(
@@ -410,9 +413,17 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
 
     assert returncode == 0
     assert captured_tasks == ["task-1", "task-2"]
-    assert captured["context"].mode is RunMode.LEARN
-    assert captured["context"].adapter_revision == "adapter-revision-b"
-    assert captured["context"].memory_snapshot_id == manifest["memory_snapshot_id"]
+    assert all(context.mode is RunMode.LEARN for context in episode_contexts)
+    assert all(context.adapter_revision == "adapter-revision-b" for context in episode_contexts)
+    assert episode_contexts[0].memory_snapshot_id == manifest["memory_snapshot_id"]
+    assert episode_contexts[1].memory_snapshot_id != episode_contexts[0].memory_snapshot_id
+    assert all(
+        context.task_group_for(task_id) == "retail"
+        for context, task_id in zip(episode_contexts, captured_tasks, strict=True)
+    )
+    maintenance_contexts = captured["maintenance_contexts"]
+    assert maintenance_contexts[0].memory_snapshot_id == episode_contexts[1].memory_snapshot_id
+    assert maintenance_contexts[1].memory_snapshot_id == summary["output_memory_snapshot_id"]
     assert manifest["adapter_revision"] == "adapter-revision-b"
     assert manifest["parent_checkpoint"] is None
     assert manifest["task_ids"] == ["task-1", "task-2"]
@@ -454,16 +465,25 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         "client",
         "policy",
         "manifest",
+        "snapshot",
         "environment:task-1",
         "episode:task-1",
         "environment-close",
+        "snapshot",
         "maintenance:26",
+        "snapshot",
         "environment:task-2",
         "episode:task-2",
         "environment-close",
+        "snapshot",
         "maintenance:27",
         "snapshot",
     ]
+    rollout_events = [
+        json.loads(line)
+        for line in (run_path / "rollouts" / "events.jsonl").read_text("utf-8").splitlines()
+    ]
+    assert {event["task_group"] for event in rollout_events} == {"retail"}
     all_artifacts = "\n".join(
         path.read_text(encoding="utf-8")
         for path in tmp_path.rglob("*")

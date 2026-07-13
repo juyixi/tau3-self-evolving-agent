@@ -113,6 +113,7 @@ def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) ->
         text=True,
         check=False,
         env=os.environ.copy(),
+        timeout=1800,
     )
 
     assert result.returncode == 0, result.stderr
@@ -162,14 +163,36 @@ def test_real_fast_loop_collects_five_official_train_episodes(tmp_path: Path) ->
             )
         ]
         assert lifecycle_positions == sorted(lifecycle_positions)
-        assert all(
-            event["memory_snapshot_id"] == summary["input_memory_snapshot_id"]
+        task_snapshot_ids = {event["memory_snapshot_id"] for event in task_events}
+        assert len(task_snapshot_ids) == 1
+        if task_id == task_ids[0]:
+            assert task_snapshot_ids == {summary["input_memory_snapshot_id"]}
+        retrieved = next(
+            event
             for event in task_events
+            if event["event_type"] == "MemoryCandidatesRetrieved"
         )
+        selected = next(
+            event for event in task_events if event["event_type"] == "MemorySelected"
+        )
+        assert set(selected["selected_memory_ids"]) <= {
+            candidate["memory_id"] for candidate in retrieved["candidates"]
+        }
         finished = next(event for event in task_events if event["event_type"] == "EpisodeFinished")
         assert isinstance(finished["final_reward"], (int, float))
-        assert isinstance(finished["terminal_evaluation"], dict)
-        assert isinstance(finished["simulation_result"], dict)
+        assert isinstance(finished["terminal_evaluation"], dict) and finished[
+            "terminal_evaluation"
+        ]
+        assert isinstance(finished["simulation_result"], dict) and finished[
+            "simulation_result"
+        ]
+        terminal_step = [
+            event
+            for event in task_events
+            if event["event_type"] == "EnvironmentStepped"
+        ][-1]
+        assert terminal_step["done"] is True
+        assert terminal_step["reward"] == finished["final_reward"]
         proposed = next(
             event for event in task_events if event["event_type"] == "MemoryWriteProposed"
         )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -96,14 +97,15 @@ class ScriptedLifecyclePolicy:
         return _response(output)
 
 
-class FailOnSecondAddRepository(MemoryRepository):
+class FailOnNthAddRepository(MemoryRepository):
     def __init__(self, root: Path) -> None:
         super().__init__(root)
         self.runner_add_calls = 0
+        self.fail_on_add = 2
 
     def add(self, **kwargs: Any):
         self.runner_add_calls += 1
-        if self.runner_add_calls == 2:
+        if self.runner_add_calls == self.fail_on_add:
             raise OSError("database password=super-secret")
         return super().add(**kwargs)
 
@@ -209,7 +211,6 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
                             "metadata": {
                                 "note": "learned",
                                 "source_run_id": "model-override",
-                                "attribution_score": 0.99,
                             },
                         }
                     ]
@@ -255,11 +256,17 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
             "similarity": pytest.approx(1.0),
         }
     ]
-    assert events.events[2]["raw_output"] == json.dumps(
-        {"memory_ids": [candidate.id]}
-    )
-    assert events.events[2]["repaired_output"] is None
-    assert events.events[2]["error"] is None
+    selection_output = json.dumps({"memory_ids": [candidate.id]})
+    assert events.events[2]["selected_memory_ids"] == [candidate.id]
+    assert events.events[2]["raw_output_sha256"] == hashlib.sha256(
+        selection_output.encode("utf-8")
+    ).hexdigest()
+    assert events.events[2]["repaired_output_sha256"] is None
+    assert events.events[2]["parse_failed"] is False
+    assert events.events[2]["repair_used"] is False
+    assert "raw_output" not in events.events[2]
+    assert "repaired_output" not in events.events[2]
+    assert "error" not in events.events[2]
     assert environment.actions == ["lookup_order(order_id='123')"]
     assert events.events[3]["parsed_action"] == environment.actions[0]
     assert events.events[4]["public_info"] == {"parse_error": None}
@@ -382,7 +389,7 @@ def test_selection_unknown_id_with_failed_repair_emits_failure(tmp_path: Path) -
     assert environment.close_calls == 1
 
 
-def test_repaired_selection_keeps_raw_repaired_and_error_provenance(
+def test_repaired_selection_records_hashes_without_persisting_invalid_text(
     tmp_path: Path,
 ) -> None:
     repository = MemoryRepository(tmp_path / "memory")
@@ -394,7 +401,15 @@ def test_repaired_selection_keeps_raw_repaired_and_error_provenance(
         embedding=(1.0, 0.0),
         embedding_model_revision="fake-embedding@1",
     )
-    raw_output = '{"memory_ids":["unknown"]}'
+    attribution_sentinel = "selection-attribution-sentinel"
+    credential_sentinel = "selection-credential-sentinel"
+    raw_output = json.dumps(
+        {
+            "memory_ids": ["unknown"],
+            "attributionScore": attribution_sentinel,
+            "apiToken": credential_sentinel,
+        }
+    )
     repaired_output = json.dumps({"memory_ids": [candidate.id]})
     events = EventCollector()
     environment = FakeEnvironment(_reset(), [_terminal_step()])
@@ -408,9 +423,201 @@ def test_repaired_selection_keeps_raw_repaired_and_error_provenance(
     selected = next(
         event for event in events.events if event["event_type"] == "MemorySelected"
     )
-    assert selected["raw_output"] == raw_output
-    assert selected["repaired_output"] == repaired_output
-    assert "unknown" in selected["error"]
+    assert selected["selected_memory_ids"] == [candidate.id]
+    assert selected["raw_output_sha256"] == hashlib.sha256(
+        raw_output.encode("utf-8")
+    ).hexdigest()
+    assert selected["repaired_output_sha256"] == hashlib.sha256(
+        repaired_output.encode("utf-8")
+    ).hexdigest()
+    assert selected["parse_failed"] is True
+    assert selected["repair_used"] is True
+    serialized_events = json.dumps(events.events)
+    serialized_memory = json.dumps(
+        [item.model_dump(mode="json") for item in repository.list()]
+    )
+    for sentinel in (attribution_sentinel, credential_sentinel, "unknown"):
+        assert sentinel not in serialized_events
+        assert sentinel not in serialized_memory
+
+
+@pytest.mark.parametrize(
+    "reset_info",
+    [
+        {
+            "policy": {"nested": {"evaluatorMetadata": "forbidden-policy-value"}},
+            "tools": [{"name": "lookup", "schema": {}}],
+        },
+        {
+            "policy": {"text": "public"},
+            "tools": [
+                {
+                    "name": "lookup",
+                    "schema": {"ｔｅｓｔＴａｓｋＩｄ": "forbidden-tool-value"},
+                }
+            ],
+        },
+    ],
+)
+def test_public_boundary_rejects_nested_forbidden_reset_fields_before_side_effects(
+    tmp_path: Path,
+    reset_info: dict[str, Any],
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    environment = FakeEnvironment(
+        ResetResult(observation="Public observation", info=reset_info)
+    )
+    policy = ScriptedLifecyclePolicy([])
+    embeddings = DeterministicEmbeddings()
+
+    with pytest.raises(ValueError, match="forbidden"):
+        run_fast_loop_episode(
+            task_id="safe-task",
+            task_instruction="Public instruction",
+            environment=environment,
+            policy=policy,
+            repository=repository,
+            retriever=Retriever(embeddings),
+            config=FastLoopConfig(),
+            context=_context(events),
+        )
+
+    assert [event["event_type"] for event in events.events] == ["EpisodeFailed"]
+    assert "forbidden" not in json.dumps(events.events)
+    assert embeddings.embedded == []
+    assert policy.prompts == []
+    assert environment.close_calls == 1
+
+
+def test_public_boundary_redacts_credentials_before_events_retrieval_and_policy(
+    tmp_path: Path,
+) -> None:
+    credential_sentinel = "reset-credential-sentinel"
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    embeddings = DeterministicEmbeddings()
+    environment = FakeEnvironment(
+        ResetResult(
+            observation="Public observation",
+            info={
+                "policy": {
+                    "text": "Public policy",
+                    "nested": {"apiToken": credential_sentinel},
+                },
+                "tools": [{"name": "lookup"}],
+            },
+        ),
+        [_terminal_step()],
+    )
+    policy = ScriptedLifecyclePolicy(
+        ['{"memory_ids":[]}', '{"action":"finish"}', '{"memories":[]}']
+    )
+
+    run_fast_loop_episode(
+        task_id="safe-task",
+        task_instruction="Public instruction",
+        environment=environment,
+        policy=policy,
+        repository=repository,
+        retriever=Retriever(embeddings),
+        config=FastLoopConfig(),
+        context=_context(events),
+    )
+
+    assert credential_sentinel not in json.dumps(events.events)
+    assert all(credential_sentinel not in text for text in embeddings.embedded)
+    assert all(credential_sentinel not in prompt.model_dump_json() for prompt in policy.prompts)
+    assert "[REDACTED]" in json.dumps(events.events)
+
+
+@pytest.mark.parametrize("forbidden_key", ["ａｔｔｒｉｂｕｔｉｏｎ＿ｓｃｏｒｅ", "apiToken"])
+def test_forbidden_write_metadata_receives_one_clean_repair_without_leakage(
+    tmp_path: Path,
+    forbidden_key: str,
+) -> None:
+    sentinel = "write-metadata-secret"
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    environment = FakeEnvironment(_reset(), [_terminal_step()])
+    invalid_write = json.dumps(
+        {
+            "memories": [
+                {
+                    "tier": "tip",
+                    "content": "Clean public memory",
+                    "metadata": {"nested": {forbidden_key: sentinel}},
+                }
+            ]
+        }
+    )
+    repaired_write = json.dumps(
+        {
+            "memories": [
+                {
+                    "tier": "tip",
+                    "content": "Clean public memory",
+                    "metadata": {"note": "public"},
+                }
+            ]
+        }
+    )
+    policy = ScriptedLifecyclePolicy(
+        ['{"memory_ids":[]}', '{"action":"finish"}', invalid_write],
+        [repaired_write],
+    )
+
+    result = _run(
+        repository=repository,
+        environment=environment,
+        policy=policy,
+        events=events,
+    )
+
+    assert len(policy.repair_calls) == 1
+    assert result.written_memory_ids
+    assert sentinel not in json.dumps(events.events)
+    assert sentinel not in json.dumps(
+        [item.model_dump(mode="json") for item in repository.list()]
+    )
+
+
+def test_full_width_attribution_failed_repair_stops_before_proposal_or_persistence(
+    tmp_path: Path,
+) -> None:
+    forbidden_key = "ａｔｔｒｉｂｕｔｉｏｎ＿ｓｃｏｒｅ"
+    sentinel = "failed-repair-attribution-sentinel"
+    invalid_write = json.dumps(
+        {
+            "memories": [
+                {
+                    "tier": "tip",
+                    "content": "Must not persist",
+                    "metadata": {forbidden_key: sentinel},
+                }
+            ]
+        }
+    )
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    environment = FakeEnvironment(_reset(), [_terminal_step()])
+    policy = ScriptedLifecyclePolicy(
+        ['{"memory_ids":[]}', '{"action":"finish"}', invalid_write],
+        [invalid_write],
+    )
+
+    with pytest.raises(ValueError, match="write decision after repair"):
+        _run(
+            repository=repository,
+            environment=environment,
+            policy=policy,
+            events=events,
+        )
+
+    assert len(policy.repair_calls) == 1
+    assert not any(event["event_type"] == "MemoryWriteProposed" for event in events.events)
+    assert repository.list() == []
+    assert sentinel not in json.dumps(events.events)
 
 
 def test_invalid_action_with_failed_repair_never_steps_environment(tmp_path: Path) -> None:
@@ -612,7 +819,7 @@ def test_official_environment_truncation_is_not_labeled_project_truncation(
 def test_repository_partial_write_failure_reports_committed_ids_and_raises(
     tmp_path: Path,
 ) -> None:
-    repository = FailOnSecondAddRepository(tmp_path / "memory")
+    repository = FailOnNthAddRepository(tmp_path / "memory")
     events = EventCollector()
     environment = FakeEnvironment(_reset(), [_terminal_step()])
     policy = ScriptedLifecyclePolicy(
@@ -639,6 +846,47 @@ def test_repository_partial_write_failure_reports_committed_ids_and_raises(
     assert "super-secret" not in repr(failed)
     assert not any(event["event_type"] == "MemoryWriteCommitted" for event in events.events)
     assert environment.close_calls == 1
+
+
+def test_partial_write_failure_separates_replays_from_new_commits(
+    tmp_path: Path,
+) -> None:
+    repository = FailOnNthAddRepository(tmp_path / "memory")
+    repository.fail_on_add = 99
+    existing = repository.add(
+        tier="tip",
+        content="Existing replay",
+        source_task_ids=("provenance-task-923",),
+        created_round=0,
+    )
+    repository.runner_add_calls = 0
+    repository.fail_on_add = 3
+    events = EventCollector()
+    environment = FakeEnvironment(_reset(), [_terminal_step()])
+    policy = ScriptedLifecyclePolicy(
+        [
+            '{"memory_ids":[]}',
+            '{"action":"finish"}',
+            json.dumps(
+                {
+                    "memories": [
+                        {"tier": "tip", "content": "Existing replay"},
+                        {"tier": "skill", "content": "New committed"},
+                        {"tier": "tool", "content": "Third fails"},
+                    ]
+                }
+            ),
+        ]
+    )
+
+    with pytest.raises(OSError, match="super-secret"):
+        _run(repository=repository, environment=environment, policy=policy, events=events)
+
+    failed = events.events[-1]
+    new_item = next(item for item in repository.list() if item.content == "New committed")
+    assert failed["event_type"] == "MemoryWriteFailed"
+    assert failed["committed_memory_ids"] == [new_item.id]
+    assert failed["replayed_memory_ids"] == [existing.id]
 
 
 def test_duplicate_write_is_accepted_only_as_safe_stable_id_replay(tmp_path: Path) -> None:

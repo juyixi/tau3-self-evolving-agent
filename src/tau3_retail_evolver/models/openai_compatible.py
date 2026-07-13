@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 import json
 from math import isfinite
 from time import monotonic
@@ -70,6 +71,7 @@ class OpenAICompatibleHttpClient:
         api_key: str,
         max_tokens: int | None = None,
         generation_settings: Mapping[str, Any] | None = None,
+        request_timeout_s: float = 120.0,
         transport: HttpTransport | None = None,
     ) -> None:
         if not base_url:
@@ -78,6 +80,13 @@ class OpenAICompatibleHttpClient:
             raise ValueError("model is required")
         if not api_key:
             raise ValueError("api_key is required")
+        if (
+            isinstance(request_timeout_s, bool)
+            or not isinstance(request_timeout_s, (int, float))
+            or not isfinite(request_timeout_s)
+            or request_timeout_s <= 0
+        ):
+            raise ValueError("request timeout must be finite and positive")
         self._endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self._model = model
         self._api_key = api_key
@@ -86,7 +95,11 @@ class OpenAICompatibleHttpClient:
         reserved = {"model", "messages", "tools", "temperature", "top_p", "max_tokens"}
         if reserved.intersection(self._generation_settings):
             raise ValueError("generation settings must not override chat completion fields")
-        self._transport = transport if transport is not None else _stdlib_transport
+        self._transport = (
+            transport
+            if transport is not None
+            else partial(_stdlib_transport, timeout=float(request_timeout_s))
+        )
 
     def __repr__(self) -> str:
         return f"OpenAICompatibleHttpClient(model={self._model!r})"
@@ -422,10 +435,16 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def _stdlib_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+def _stdlib_transport(
+    url: str,
+    headers: dict[str, str],
+    body: bytes,
+    *,
+    timeout: float,
+) -> tuple[int, bytes]:
     request = Request(url, data=body, headers=headers, method="POST")
     try:
-        with urlopen(request) as response:
+        with urlopen(request, timeout=timeout) as response:
             return response.status, response.read()
     except HTTPError as error:
         return error.code, error.read()

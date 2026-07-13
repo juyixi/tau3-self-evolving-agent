@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from tau3_retail_evolver.fast_loop.decisions import maintenance_command_schemas
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate
 from tau3_retail_evolver.memory.types import MemoryItem
+from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
 
 
 PromptKind = Literal["selection", "action", "write", "maintenance"]
@@ -110,7 +111,7 @@ def build_selection_prompt(
     return LifecyclePrompt(
         kind="selection",
         payload={
-            **_public_context(
+            **project_public_context(
                 task_instruction=task_instruction,
                 policy=policy,
                 tools=tools,
@@ -135,7 +136,7 @@ def build_action_prompt(
     return LifecyclePrompt(
         kind="action",
         payload={
-            **_public_context(
+            **project_public_context(
                 task_instruction=task_instruction,
                 policy=policy,
                 tools=tools,
@@ -158,7 +159,7 @@ def build_write_prompt(
     trajectory: Sequence[Mapping[str, Any]],
     terminal_evaluation: Mapping[str, Any],
 ) -> LifecyclePrompt:
-    context = _public_context(
+    context = project_public_context(
         task_instruction=task_instruction,
         policy=policy,
         tools=tools,
@@ -196,7 +197,7 @@ def build_maintenance_prompt(*, diagnostics: Mapping[str, Any]) -> LifecycleProm
     )
 
 
-def _public_context(
+def project_public_context(
     *,
     task_instruction: str,
     policy: Any,
@@ -210,15 +211,15 @@ def _public_context(
         raise ValueError("observation must be a nonblank string")
     if isinstance(tools, (str, bytes)) or isinstance(history, (str, bytes)):
         raise ValueError("tools and history must be sequences")
-    normalized_policy = _json_copy(policy, "policy")
-    normalized_tools = _json_copy(list(tools), "tools")
+    normalized_policy = _json_copy(sanitize_artifact_data(policy), "policy")
+    normalized_tools = _json_copy(sanitize_artifact_data(list(tools)), "tools")
     _reject_forbidden_fields(normalized_policy, "policy")
     _reject_forbidden_fields(normalized_tools, "tools")
     context = {
-        "task_instruction": task_instruction.strip(),
+        "task_instruction": sanitize_artifact_data(task_instruction).strip(),
         "policy": normalized_policy,
         "tools": normalized_tools,
-        "observation": observation.strip(),
+        "observation": sanitize_artifact_data(observation).strip(),
         "history": _public_history(history),
     }
     _reject_forbidden_fields(context, "public prompt")

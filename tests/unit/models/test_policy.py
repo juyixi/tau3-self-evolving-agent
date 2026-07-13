@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from tau3_retail_evolver.models import openai_compatible
 from tau3_retail_evolver.envs.base import ResetResult, StepResult
 from tau3_retail_evolver.fast_loop.decisions import ActionDecision, parse_decision
 from tau3_retail_evolver.fast_loop.events import RunContext, RunMode
@@ -818,6 +819,55 @@ def test_http_client_posts_openai_compatible_request_with_generation_settings() 
         )
     ]
     assert response == {"choices": [{"message": {"role": "assistant", "content": "Done."}}]}
+
+
+def test_http_client_default_transport_forwards_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeouts: list[float] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"choices":[{"message":{"content":"Done."}}]}'
+
+    def fake_urlopen(request: object, *, timeout: float) -> Response:
+        observed_timeouts.append(timeout)
+        return Response()
+
+    monkeypatch.setattr(openai_compatible, "urlopen", fake_urlopen)
+    client = OpenAICompatibleHttpClient(
+        base_url="https://qwen.example/v1",
+        model="Qwen/Qwen3.5-9B",
+        api_key="test-api-key",
+    )
+
+    client.create_chat_completion(messages=[], tools=[], temperature=1.0, top_p=0.95)
+
+    assert observed_timeouts == [120.0]
+
+
+@pytest.mark.parametrize(
+    "request_timeout_s",
+    [0.0, -1.0, float("inf"), float("nan"), True, "120"],
+)
+def test_http_client_rejects_nonpositive_or_nonfinite_timeout(
+    request_timeout_s: object,
+) -> None:
+    with pytest.raises(ValueError, match="request timeout"):
+        OpenAICompatibleHttpClient(
+            base_url="https://qwen.example/v1",
+            model="Qwen/Qwen3.5-9B",
+            api_key="test-api-key",
+            request_timeout_s=request_timeout_s,  # type: ignore[arg-type]
+        )
 
 
 def test_http_client_does_not_expose_api_key_in_repr_or_errors() -> None:

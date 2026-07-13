@@ -65,6 +65,8 @@ python -m scripts.run_fast_loop `
 
 maintenance 只在 episode 成功后调度。episode 失败时保留已有 rollout evidence，原异常继续抛出，不写 `fast_loop_summary.json`。
 
+Qwen HTTP 请求默认使用 120 秒有限超时。可选的五任务真实集成 smoke 对整个 CLI 子进程使用 1800 秒上限，超时会直接使测试失败，避免 CI 无限等待。
+
 ## 输出与检查
 
 默认输出如下：
