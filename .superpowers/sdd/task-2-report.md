@@ -79,3 +79,28 @@ Output: `90 passed in 0.78s`.
   so focused and regression verification use `--basetemp` inside the worktree.
 - An unrelated untracked `.pytest-tmp-review/` directory was already present
   and was not modified or staged.
+
+## Reviewer Fix: MemoryDisabled Reason Assertion
+
+Finding: the disabled-memory test counted `MemoryDisabled` events but did not
+directly assert its required `reason` field.
+
+Change: `test_disabled_memory_bypasses_the_memory_lifecycle` now retrieves the
+emitted `MemoryDisabled` event and asserts `memory_disabled["reason"] ==
+"config"`. No production code was modified.
+
+Focused verification:
+
+```text
+python -m pytest tests/unit/fast_loop/test_runner.py::test_disabled_memory_bypasses_the_memory_lifecycle -q --basetemp=.pytest-tmp/task-2-review-fix-focused
+```
+
+Output: `1 passed in 0.25s`.
+
+Runner regression:
+
+```text
+python -m pytest tests/unit/fast_loop/test_runner.py -q --basetemp=.pytest-tmp/task-2-review-fix-regression
+```
+
+Output: `37 passed in 0.68s`.

@@ -224,6 +224,10 @@ def test_disabled_memory_bypasses_the_memory_lifecycle() -> None:
     assert result.selected_memory_ids == ()
     assert result.written_memory_ids == ()
     assert [event["event_type"] for event in events.events].count("MemoryDisabled") == 1
+    memory_disabled = next(
+        event for event in events.events if event["event_type"] == "MemoryDisabled"
+    )
+    assert memory_disabled["reason"] == "config"
     assert not forbidden_memory_events.intersection(event_types)
 
 
