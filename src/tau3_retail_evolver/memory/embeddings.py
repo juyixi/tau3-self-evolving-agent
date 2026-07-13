@@ -9,6 +9,7 @@ from typing import Protocol
 
 from tau3_retail_evolver.config import MemoryConfig
 from tau3_retail_evolver.memory.json_store import write_bytes_atomic
+from tau3_retail_evolver.memory.locking import reentrant_process_lock
 
 
 class EmbeddingProvider(Protocol):
@@ -23,7 +24,9 @@ class EmbeddingProvider(Protocol):
 class JsonEmbeddingCache:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._entries = self._load()
+        self._lock = reentrant_process_lock(path, namespace="embedding-cache")
+        with self._lock:
+            self._entries = self._load()
 
     def get(self, model_revision: str, text: str) -> tuple[float, ...] | None:
         value = self._entries.get(_cache_key(model_revision, text))
@@ -34,20 +37,22 @@ class JsonEmbeddingCache:
         model_revision: str,
         values: Sequence[tuple[str, Sequence[float]]],
     ) -> None:
-        replacement = dict(self._entries)
-        for text, embedding in values:
-            vector = validate_embedding(embedding)
-            replacement[_cache_key(model_revision, text)] = list(vector)
-        payload = {
-            "schema_version": 1,
-            "count": len(replacement),
-            "entries": dict(sorted(replacement.items())),
-        }
-        serialized = (
-            json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
-        ).encode("utf-8")
-        write_bytes_atomic(self.path, serialized)
-        self._entries = replacement
+        with self._lock:
+            replacement = self._load()
+            for text, embedding in values:
+                vector = validate_embedding(embedding)
+                replacement[_cache_key(model_revision, text)] = list(vector)
+            payload = {
+                "schema_version": 1,
+                "count": len(replacement),
+                "entries": dict(sorted(replacement.items())),
+            }
+            serialized = (
+                json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+                + "\n"
+            ).encode("utf-8")
+            write_bytes_atomic(self.path, serialized)
+            self._entries = replacement
 
     def _load(self) -> dict[str, list[float]]:
         if not self.path.exists():
@@ -65,9 +70,16 @@ class JsonEmbeddingCache:
 
 
 class CachedEmbeddingProvider:
-    def __init__(self, provider: EmbeddingProvider, cache: JsonEmbeddingCache) -> None:
+    def __init__(
+        self,
+        provider: EmbeddingProvider,
+        cache: JsonEmbeddingCache,
+        *,
+        write_cache: bool = True,
+    ) -> None:
         self.provider = provider
         self.cache = cache
+        self._write_cache = write_cache
 
     @property
     def model_revision(self) -> str:
@@ -84,6 +96,9 @@ class CachedEmbeddingProvider:
         prepare = getattr(self.provider, "prepare", None)
         if callable(prepare):
             prepare()
+
+    def read_only_view(self) -> CachedEmbeddingProvider:
+        return CachedEmbeddingProvider(self.provider, self.cache, write_cache=False)
 
     def embed_batch(self, texts: list[str]) -> list[tuple[float, ...]]:
         if not texts:
@@ -109,7 +124,8 @@ class CachedEmbeddingProvider:
                 vector = validate_embedding(embedding, dimension=self.dimension)
                 resolved[text] = vector
                 additions.append((text, vector))
-            self.cache.put_many(model_revision, additions)
+            if self._write_cache:
+                self.cache.put_many(model_revision, additions)
         return [resolved[text] for text in texts]
 
 

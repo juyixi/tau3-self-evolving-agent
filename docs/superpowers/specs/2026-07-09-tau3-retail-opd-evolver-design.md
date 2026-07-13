@@ -119,7 +119,7 @@ Memory 持久化遵循 OPD-Evolver 官方仓库的文件式实现思路，不使
 history/agents/retail/memory/
 ```
 
-同一个 `agent_id` 的所有 fast loop、slow loop 和训练轮次持续读取并更新同一份权威 Memory，使经验能够跨轮次累积。`run_id` 仅标识日志、OPD 数据、checkpoint 和 manifest，不得参与训练 Memory 路径。未来扩展 airline 时使用 `history/agents/airline/memory/`，不同 Agent namespace 之间禁止隐式读取、合并或迁移 Memory。`agent_id` 只允许 ASCII 字母、数字、连字符和下划线，必须拒绝空值、`.`、`..`、路径分隔符和其他路径穿越形式。
+同一个 `agent_id` 的所有 fast loop、slow loop 和训练轮次持续读取并更新同一份权威 Memory，使经验能够跨轮次累积。`run_id` 仅标识日志、OPD 数据、checkpoint 和 manifest，不得参与训练 Memory 路径。未来扩展 airline 时使用 `history/agents/airline/memory/`，不同 Agent namespace 之间禁止隐式读取、合并或迁移 Memory。`agent_id` 和评测 `run_id` 只允许小写 ASCII 字母、数字、连字符和下划线，必须拒绝大写或其他非规范形式、空值、`.`、`..`、路径分隔符和其他路径穿越形式。
 
 Memory 路径必须相对项目根目录解析，不能依赖进程启动时的当前工作目录。程序首次打开某个 Agent namespace 时自动创建目录；仓库不提交 `.gitkeep` 或任何运行时 Memory。已有其他路径下的 Memory 不自动迁移或合并，迁移必须由显式工具完成并记录来源 snapshot。
 

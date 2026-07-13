@@ -12,7 +12,7 @@ from tau3_retail_evolver.credential_policy import is_credential_key
 
 
 _ENVIRONMENT_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_AGENT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+_AGENT_ID = re.compile(r"^[a-z0-9_-]+$")
 
 
 class _ConfigModel(BaseModel):
@@ -70,7 +70,9 @@ class MemoryConfig(_ConfigModel):
     @classmethod
     def agent_id_must_be_a_safe_slug(cls, value: str) -> str:
         if not _AGENT_ID.fullmatch(value) or value in {".", ".."}:
-            raise ValueError("agent_id must contain only ASCII letters, digits, '-' or '_'")
+            raise ValueError(
+                "agent_id must contain only lowercase ASCII letters, digits, '-' or '_'"
+            )
         return value
 
 

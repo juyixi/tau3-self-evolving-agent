@@ -52,10 +52,21 @@ def test_default_project_root_does_not_depend_on_current_working_directory(
     assert project_root() == expected
 
 
-@pytest.mark.parametrize("agent_id", ("", ".", "..", "retail/other", r"retail\\other"))
+@pytest.mark.parametrize(
+    "agent_id", ("", ".", "..", "RETAIL", "retail/other", r"retail\\other")
+)
 def test_path_resolver_rejects_unsafe_agent_id(tmp_path: Path, agent_id: str) -> None:
     with pytest.raises(ValueError, match="agent_id"):
         training_memory_root(agent_id, root=tmp_path)
+
+
+def test_uppercase_namespaces_fail_before_history_directory_creation(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="agent_id"):
+        training_memory_root("Retail", root=tmp_path)
+    with pytest.raises(ValueError, match="run_id"):
+        evaluation_quarantine_root("EVAL-0001", "retail", root=tmp_path)
+
+    assert not (tmp_path / "history").exists()
 
 
 def test_streaming_evaluation_uses_quarantine(tmp_path: Path) -> None:

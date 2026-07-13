@@ -13,7 +13,7 @@
 - Default `agent_id` is exactly `retail`.
 - Training Memory root is exactly `history/agents/<agent_id>/memory/` beneath the project root.
 - `run_id` must not be accepted by the training Memory path or factory API.
-- `agent_id` and evaluation `run_id` allow only ASCII letters, digits, `-`, and `_`.
+- `agent_id` and evaluation `run_id` use the canonical lowercase form `^[a-z0-9_-]+$`; uppercase input is rejected rather than normalized.
 - `/history/` is ignored by Git; no `.gitkeep` or generated Memory is committed.
 - The same Agent namespace accumulates experience across all training rounds.
 - Different Agent namespaces never share or implicitly merge Memory.
@@ -49,7 +49,9 @@ assert config.memory.agent_id == "retail"
 Add explicit validation tests:
 
 ```python
-@pytest.mark.parametrize("agent_id", ("", ".", "..", "retail/other", r"retail\\other", "零售"))
+@pytest.mark.parametrize(
+    "agent_id", ("", ".", "..", "RETAIL", "retail/other", r"retail\\other", "零售")
+)
 def test_memory_config_rejects_unsafe_agent_id(agent_id: str) -> None:
     with pytest.raises(ValueError, match="agent_id"):
         ProjectConfig.model_validate(
@@ -82,7 +84,7 @@ Expected: FAIL because `MemoryConfig` has no `agent_id` field or rejects the new
 In `src/tau3_retail_evolver/config.py`, add `_AGENT_ID` beside the existing environment-variable regex and replace `MemoryConfig` with:
 
 ```python
-_AGENT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+_AGENT_ID = re.compile(r"^[a-z0-9_-]+$")
 
 
 class MemoryConfig(_ConfigModel):
@@ -109,7 +111,9 @@ class MemoryConfig(_ConfigModel):
     @classmethod
     def agent_id_must_be_a_safe_slug(cls, value: str) -> str:
         if not _AGENT_ID.fullmatch(value) or value in {".", ".."}:
-            raise ValueError("agent_id must contain only ASCII letters, digits, '-' or '_'")
+            raise ValueError(
+                "agent_id must contain only lowercase ASCII letters, digits, '-' or '_'"
+            )
         return value
 ```
 
@@ -181,10 +185,21 @@ def test_default_project_root_does_not_depend_on_current_working_directory(
     assert project_root() == expected
 
 
-@pytest.mark.parametrize("agent_id", ("", ".", "..", "retail/other", r"retail\\other"))
+@pytest.mark.parametrize(
+    "agent_id", ("", ".", "..", "RETAIL", "retail/other", r"retail\\other")
+)
 def test_path_resolver_rejects_unsafe_agent_id(tmp_path: Path, agent_id: str) -> None:
     with pytest.raises(ValueError, match="agent_id"):
         training_memory_root(agent_id, root=tmp_path)
+
+
+def test_uppercase_namespaces_fail_before_history_directory_creation(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="agent_id"):
+        training_memory_root("Retail", root=tmp_path)
+    with pytest.raises(ValueError, match="run_id"):
+        evaluation_quarantine_root("EVAL-0001", "retail", root=tmp_path)
+
+    assert not (tmp_path / "history").exists()
 
 
 def test_streaming_evaluation_uses_quarantine(tmp_path: Path) -> None:
@@ -221,7 +236,7 @@ from pathlib import Path
 import re
 
 
-_SAFE_SLUG = re.compile(r"^[A-Za-z0-9_-]+$")
+_SAFE_SLUG = re.compile(r"^[a-z0-9_-]+$")
 
 
 def project_root() -> Path:
@@ -248,7 +263,9 @@ def evaluation_quarantine_root(
 
 def _validated_slug(value: str, *, field: str) -> str:
     if not _SAFE_SLUG.fullmatch(value) or value in {".", ".."}:
-        raise ValueError(f"{field} must contain only ASCII letters, digits, '-' or '_'")
+        raise ValueError(
+            f"{field} must contain only lowercase ASCII letters, digits, '-' or '_'"
+        )
     return value
 ```
 

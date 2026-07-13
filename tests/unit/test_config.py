@@ -55,7 +55,10 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
 
 
-@pytest.mark.parametrize("agent_id", ("", ".", "..", "retail/other", r"retail\\other", "零售"))
+@pytest.mark.parametrize(
+    "agent_id",
+    ("", ".", "..", "RETAIL", "retail/other", r"retail\\other", "零售"),
+)
 def test_memory_config_rejects_unsafe_agent_id(agent_id: str) -> None:
     with pytest.raises(ValueError, match="agent_id"):
         ProjectConfig.model_validate(

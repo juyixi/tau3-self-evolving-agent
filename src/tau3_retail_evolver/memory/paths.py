@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 
 
-_SAFE_SLUG = re.compile(r"^[A-Za-z0-9_-]+$")
+_SAFE_SLUG = re.compile(r"^[a-z0-9_-]+$")
 
 
 def project_root() -> Path:
@@ -31,5 +31,7 @@ def evaluation_quarantine_root(
 
 def _validated_slug(value: str, *, field: str) -> str:
     if not _SAFE_SLUG.fullmatch(value) or value in {".", ".."}:
-        raise ValueError(f"{field} must contain only ASCII letters, digits, '-' or '_'")
+        raise ValueError(
+            f"{field} must contain only lowercase ASCII letters, digits, '-' or '_'"
+        )
     return value

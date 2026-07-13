@@ -59,16 +59,21 @@ class Retriever:
         top_k: int,
         event_context: dict[str, Any] | None,
     ) -> list[MemoryCandidate]:
+        provider = self.provider
+        if repository.is_read_only:
+            read_only_view = getattr(provider, "read_only_view", None)
+            if callable(read_only_view):
+                provider = read_only_view()
         query = query.strip()
         if not query:
             raise ValueError("retrieval query must not be blank")
         if top_k < 1:
             raise ValueError("top_k must be positive")
-        prepare = getattr(self.provider, "prepare", None)
+        prepare = getattr(provider, "prepare", None)
         if callable(prepare):
             prepare()
-        model_revision = self.provider.model_revision
-        dimension = self.provider.dimension
+        model_revision = provider.model_revision
+        dimension = provider.dimension
         query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
         tier_order = {tier: index for index, tier in enumerate(MEMORY_TIERS)}
         items = sorted(
@@ -83,8 +88,8 @@ class Retriever:
             or not _is_valid_embedding(item.embedding, dimension)
         ]
         if stale:
-            generated = self.provider.embed_batch([item.retrieval_text for item in stale])
-            _assert_provider_identity(self.provider, model_revision, dimension)
+            generated = provider.embed_batch([item.retrieval_text for item in stale])
+            _assert_provider_identity(provider, model_revision, dimension)
             if len(generated) != len(stale):
                 raise ValueError("embedding provider returned the wrong batch size")
             updates = {
@@ -108,11 +113,11 @@ class Retriever:
                 repository.update_embeddings(updates)
                 items = [repository.get(item.id) for item in items]
         query_embedding = (
-            validate_embedding(self.provider.embed(query), dimension=dimension)
+            validate_embedding(provider.embed(query), dimension=dimension)
             if items
             else ()
         )
-        _assert_provider_identity(self.provider, model_revision, dimension)
+        _assert_provider_identity(provider, model_revision, dimension)
         ranked = sorted(
             (
                 (_cosine(query_embedding, item.embedding or ()), item)

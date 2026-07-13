@@ -9,6 +9,7 @@ from threading import Event
 import pytest
 
 from tau3_retail_evolver.io.jsonl import JsonlWriter
+from tau3_retail_evolver.memory.embeddings import CachedEmbeddingProvider, JsonEmbeddingCache
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import Retriever
@@ -179,6 +180,35 @@ def test_read_only_snapshot_retrieves_without_persisting_missing_embeddings(
     assert [candidate.memory_id for candidate in candidates] == [item.id]
     assert candidates[0].item.embedding == (1.0, 0.0)
     assert tip_path.read_bytes() == original
+
+
+def test_read_only_retrieval_uses_cache_hits_without_persisting_misses(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    item = repository.add(
+        tier="tip",
+        content="Verify identity before refund",
+        source_task_ids=("task-1",),
+        created_round=0,
+    )
+    snapshot = repository.snapshot()
+    cache = JsonEmbeddingCache(tmp_path / "embedding_cache.json")
+    cache.put_many(
+        FakeEmbeddingProvider.model_revision,
+        [(item.retrieval_text, (1.0, 0.0))],
+    )
+    original_cache = cache.path.read_bytes()
+    provider = FakeEmbeddingProvider({"refund request": (1.0, 0.0)})
+
+    candidates = Retriever(CachedEmbeddingProvider(provider, cache)).retrieve(
+        "refund request",
+        ReadOnlyMemoryRepository(snapshot.path),
+    )
+
+    assert [candidate.memory_id for candidate in candidates] == [item.id]
+    assert provider.batches == [["refund request"]]
+    assert cache.path.read_bytes() == original_cache
 
 
 def test_retrieval_holds_a_consistent_view_during_embedding_backfill(

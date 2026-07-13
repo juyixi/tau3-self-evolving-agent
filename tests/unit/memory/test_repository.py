@@ -2,14 +2,52 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import multiprocessing
 from pathlib import Path
 from threading import Event, Lock
+from typing import Any
 
 import pytest
 
 from tau3_retail_evolver.memory.repository import MemoryRepository
-from tau3_retail_evolver.memory.types import MEMORY_TIERS, MemoryStatus
+from tau3_retail_evolver.memory.types import MEMORY_TIERS, MemoryStatus, MemoryTier
 import tau3_retail_evolver.memory.json_store as json_store
+
+
+def _add_memory_in_process(
+    root: str,
+    content: str,
+    started: Any,
+    finished: Any,
+    results: Any,
+    entered_write: Any | None = None,
+    release_write: Any | None = None,
+) -> None:
+    started.set()
+    try:
+        repository = MemoryRepository(Path(root))
+        if entered_write is not None and release_write is not None:
+            store = repository._stores[MemoryTier.TIP]
+            original_write = store.write
+
+            def blocking_write(items: object) -> None:
+                entered_write.set()
+                if not release_write.wait(timeout=10):
+                    raise TimeoutError("timed out waiting to release first process write")
+                original_write(items)  # type: ignore[arg-type]
+
+            store.write = blocking_write  # type: ignore[method-assign]
+        repository.add(
+            tier="tip",
+            content=content,
+            source_task_ids=(content,),
+            created_round=0,
+        )
+        results.put(None)
+    except BaseException as error:
+        results.put(f"{type(error).__name__}: {error}")
+    finally:
+        finished.set()
 
 
 def test_persists_all_tiers_with_stable_ids_and_provenance(tmp_path: Path) -> None:
@@ -40,6 +78,36 @@ def test_persists_all_tiers_with_stable_ids_and_provenance(tmp_path: Path) -> No
         assert payload["tier"] == tier
         assert payload["count"] == 1
         assert payload["items"][0]["id"].startswith(f"mem_{tier}_")
+
+
+def test_fresh_repository_initializes_all_canonical_tier_files(tmp_path: Path) -> None:
+    root = tmp_path / "memory"
+
+    MemoryRepository(root)
+
+    assert sorted(path.name for path in root.glob("*_memory.json")) == [
+        "skill_memory.json",
+        "tip_memory.json",
+        "tool_memory.json",
+        "trajectory_memory.json",
+    ]
+    for tier in MemoryTier:
+        payload = json.loads((root / f"{tier.value}_memory.json").read_text(encoding="utf-8"))
+        assert payload == {
+            "schema_version": 1,
+            "tier": tier.value,
+            "count": 0,
+            "items": [],
+        }
+
+
+def test_repository_rejects_missing_canonical_tier_files(tmp_path: Path) -> None:
+    root = tmp_path / "memory"
+    root.mkdir()
+    (root / "tip_memory.json").write_bytes(json_store.serialize_tier(MemoryTier.TIP, []))
+
+    with pytest.raises(ValueError, match="missing memory tier files"):
+        MemoryRepository(root)
 
 
 def test_rejects_duplicate_content_without_changing_file(tmp_path: Path) -> None:
@@ -199,6 +267,66 @@ def test_repository_instances_do_not_overwrite_each_others_updates(tmp_path: Pat
 
     assert len(first.list(tier="tip")) == 2
     assert len(second.list(tier="tip")) == 2
+    assert len(MemoryRepository(root).list(tier="tip")) == 2
+
+
+def test_processes_do_not_overwrite_each_others_updates(tmp_path: Path) -> None:
+    context = multiprocessing.get_context("spawn")
+    root = tmp_path / "memory"
+    first_started = context.Event()
+    first_finished = context.Event()
+    first_entered_write = context.Event()
+    release_first_write = context.Event()
+    second_started = context.Event()
+    second_finished = context.Event()
+    results = context.Queue()
+    first = context.Process(
+        target=_add_memory_in_process,
+        args=(
+            str(root),
+            "Confirm the order number before a return.",
+            first_started,
+            first_finished,
+            results,
+            first_entered_write,
+            release_first_write,
+        ),
+    )
+    second = context.Process(
+        target=_add_memory_in_process,
+        args=(
+            str(root),
+            "Confirm the item before an exchange.",
+            second_started,
+            second_finished,
+            results,
+        ),
+    )
+
+    processes = [first]
+    timed_out: list[int | None] = []
+    first.start()
+    try:
+        assert first_started.wait(timeout=5)
+        assert first_entered_write.wait(timeout=5)
+        second.start()
+        processes.append(second)
+        assert second_started.wait(timeout=5)
+        second_finished.wait(timeout=2)
+    finally:
+        release_first_write.set()
+        for process in processes:
+            process.join(timeout=5)
+            if process.is_alive():
+                timed_out.append(process.pid)
+                process.terminate()
+                process.join(timeout=5)
+
+    assert not timed_out, f"child processes did not exit: {timed_out}"
+    for process in processes:
+        assert process.exitcode == 0
+
+    assert [results.get(timeout=2) for _ in range(2)] == [None, None]
     assert len(MemoryRepository(root).list(tier="tip")) == 2
 
 

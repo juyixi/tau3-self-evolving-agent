@@ -7,11 +7,11 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-import threading
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from tau3_retail_evolver.io.jsonl import _fsync_directory
 from tau3_retail_evolver.memory.json_store import JsonTierStore, serialize_tier
+from tau3_retail_evolver.memory.locking import reentrant_process_lock
 from tau3_retail_evolver.memory.types import (
     MEMORY_TIERS,
     MemoryItem,
@@ -22,16 +22,12 @@ from tau3_retail_evolver.memory.types import (
 )
 
 
-_ROOT_LOCKS_GUARD = threading.Lock()
-_ROOT_LOCKS: dict[Path, threading.RLock] = {}
-
-
 class MemoryRepository:
     is_read_only = False
 
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
-        self._lock = _root_lock(self.root)
+        self._lock = reentrant_process_lock(self.root, namespace="memory-repository")
         self.root.mkdir(parents=True, exist_ok=True)
         self._stores = {
             tier: JsonTierStore(self.root / f"{tier.value}_memory.json", tier)
@@ -43,11 +39,19 @@ class MemoryRepository:
 
     def _reload(self) -> None:
         items: dict[str, MemoryItem] = {}
-        for store in self._stores.values():
+        existing = [store for store in self._stores.values() if store.path.exists()]
+        missing = [store for store in self._stores.values() if not store.path.exists()]
+        for store in existing:
             for item in store.load():
                 if item.id in items:
                     raise ValueError(f"duplicate memory id across tiers: {item.id}")
                 items[item.id] = item
+        if not existing:
+            for store in self._stores.values():
+                store.write([])
+        elif missing:
+            names = ", ".join(sorted(store.path.name for store in missing))
+            raise ValueError(f"missing memory tier files: {names}")
         self._items = items
 
     def add(
@@ -274,8 +278,3 @@ class MemoryRepository:
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
-
-
-def _root_lock(root: Path) -> threading.RLock:
-    with _ROOT_LOCKS_GUARD:
-        return _ROOT_LOCKS.setdefault(root, threading.RLock())

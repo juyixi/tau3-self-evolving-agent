@@ -74,6 +74,21 @@ def test_cache_key_isolated_by_model_revision(tmp_path: Path) -> None:
     assert json.loads(cache.path.read_text(encoding="utf-8"))["count"] == 2
 
 
+def test_cache_instances_merge_updates_against_authoritative_file(tmp_path: Path) -> None:
+    cache_path = tmp_path / "embedding_cache.json"
+    first = JsonEmbeddingCache(cache_path)
+    second = JsonEmbeddingCache(cache_path)
+
+    first.put_many("embedding@rev-a", [("refund", (1.0, 0.0))])
+    second.put_many("embedding@rev-a", [("exchange", (0.0, 1.0))])
+
+    reopened = JsonEmbeddingCache(cache_path)
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert reopened.get("embedding@rev-a", "refund") == (1.0, 0.0)
+    assert reopened.get("embedding@rev-a", "exchange") == (0.0, 1.0)
+    assert payload["count"] == len(payload["entries"]) == 2
+
+
 def test_cache_hit_must_match_provider_dimension(tmp_path: Path) -> None:
     cache = JsonEmbeddingCache(tmp_path / "embedding_cache.json")
     cache.put_many("embedding@rev-a", [("refund", (1.0, 0.0, 0.0))])
