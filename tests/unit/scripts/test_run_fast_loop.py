@@ -766,6 +766,69 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         assert secret not in stdout
 
 
+def test_main_validates_enabled_memory_dependencies_before_input_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    episode_calls: list[str] = []
+
+    def episode_runner(**kwargs: Any) -> EpisodeResult:
+        episode_calls.append(kwargs["task_id"])
+        return _episode(kwargs["task_id"])
+
+    ordering, captured = _install_main_dependencies(
+        monkeypatch,
+        tmp_path,
+        episode_runner=episode_runner,
+    )
+    mutable = MemoryRepository(tmp_path / "seed-memory")
+    read_only = ReadOnlyMemoryRepository(mutable.snapshot().path)
+    snapshot_calls: list[None] = []
+    monkeypatch.setattr(
+        read_only,
+        "snapshot",
+        lambda: snapshot_calls.append(None)
+        or SimpleNamespace(memory_snapshot_id="invalid-input-snapshot"),
+    )
+    monkeypatch.setattr(
+        run_fast_loop,
+        "open_training_memory",
+        lambda memory_config, *, root=None: read_only,
+    )
+    monkeypatch.setattr(
+        run_fast_loop,
+        "build_embedding_provider",
+        lambda memory_config, memory_root: _UnusedEmbeddingProvider(),
+    )
+
+    with pytest.raises(ValueError, match="mutable MemoryRepository"):
+        run_fast_loop.main(
+            [
+                "--split",
+                "train",
+                "--task-id",
+                "task-1",
+                "--run-id",
+                "read-only-memory",
+                "--output-root",
+                str(tmp_path / "runs"),
+                "--project-root",
+                str(tmp_path / "isolated-project"),
+                "--completed-train-tasks-before",
+                "0",
+                "--qwen-base-url",
+                "http://qwen.invalid/v1",
+                "--model-revision",
+                "model-revision-a",
+            ]
+        )
+
+    assert snapshot_calls == []
+    assert len(captured["environments"]) == 1
+    assert ordering.count("environment:task-1") == 1
+    assert episode_calls == []
+
+
 def test_disables_memory_dependencies_and_records_no_memory_provenance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

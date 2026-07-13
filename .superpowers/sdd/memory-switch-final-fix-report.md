@@ -189,3 +189,70 @@ exit 0 (line-ending advisories only)
 
 The pre-existing `.pytest-tmp-review/` directory remains untouched and is not
 staged.
+
+## Final review wave 3
+
+### Root Cause
+
+`main()` assembled the enabled repository and retriever, then immediately
+called `repository.snapshot()` to create `input_memory_snapshot_id`. The shared
+`validate_fast_loop_dependencies` call existed only inside
+`_run_requested_tasks`, so a read-only or fabricated repository could receive
+an input snapshot call before the fail-closed contract ran.
+
+### TDD Evidence
+
+#### RED
+
+```text
+python -m pytest -q tests/unit/scripts/test_run_fast_loop.py::test_main_validates_enabled_memory_dependencies_before_input_snapshot --basetemp=.pytest-tmp/memory-switch-final-review-wave3-red
+```
+
+Result: `1 failed in 0.33s`. `main()` eventually raised the expected mutable
+repository `ValueError`, and no task episode started, but the snapshot spy
+recorded one call before validation (`[None] != []`).
+
+#### GREEN
+
+```text
+python -m pytest -q tests/unit/scripts/test_run_fast_loop.py::test_main_validates_enabled_memory_dependencies_before_input_snapshot --basetemp=.pytest-tmp/memory-switch-final-review-wave3-green
+```
+
+Result: `1 passed in 0.25s`.
+
+### Changes
+
+- Added a focused `main()` regression test using a real
+  `ReadOnlyMemoryRepository` with a snapshot spy. It verifies the expected
+  `ValueError`, zero input snapshot calls, no task environment construction
+  beyond the existing probe, and zero episode calls.
+- Moved input snapshot creation after an immediate
+  `validate_fast_loop_dependencies` call once enabled/disabled dependencies
+  have been assembled.
+- Retained the same validation at `_run_requested_tasks` entry for defensive
+  direct calls.
+
+### Files
+
+- `scripts/run_fast_loop.py`
+- `tests/unit/scripts/test_run_fast_loop.py`
+- `.superpowers/sdd/memory-switch-final-fix-report.md`
+
+### Verification
+
+```text
+python -m pytest -q tests/unit/scripts/test_run_fast_loop.py --basetemp=.pytest-tmp/memory-switch-final-review-wave3
+24 passed in 0.58s
+
+python -m pytest -q --basetemp=.pytest-tmp/memory-switch-final-review-wave3-full
+407 passed, 3 skipped in 6.96s
+
+python -m compileall -q src scripts tests
+exit 0
+
+git diff --check
+exit 0 (line-ending advisories only)
+```
+
+The pre-existing `.pytest-tmp-review/` directory remains untouched and is not
+staged.

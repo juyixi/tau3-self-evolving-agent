@@ -113,10 +113,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         repository = open_training_memory(config.memory, root=args.project_root)
         embedding_provider = build_embedding_provider(config.memory, repository.root)
         retriever = Retriever(embedding_provider)
-        input_memory_snapshot_id = repository.snapshot().memory_snapshot_id
     else:
         repository = None
         retriever = None
+    validate_fast_loop_dependencies(
+        config=fast_loop_config,
+        repository=repository,
+        retriever=retriever,
+    )
+    if fast_loop_config.memory_enabled:
+        assert repository is not None
+        input_memory_snapshot_id = repository.snapshot().memory_snapshot_id
+    else:
         input_memory_snapshot_id = None
 
     client = OpenAICompatibleHttpClient(
