@@ -23,6 +23,7 @@ from tau3_retail_evolver.fast_loop.runner import (
     EpisodeResult,
     FastLoopConfig,
     run_fast_loop_episode,
+    validate_fast_loop_dependencies,
 )
 from tau3_retail_evolver.io.jsonl import JsonlWriter
 from tau3_retail_evolver.memory.embeddings import build_embedding_provider
@@ -224,13 +225,13 @@ def _run_requested_tasks(
     completed_train_tasks_before: int,
     maintenance_period: int,
 ) -> tuple[tuple[EpisodeResult, ...], tuple[int, ...]]:
+    validate_fast_loop_dependencies(
+        config=fast_loop_config,
+        repository=repository,
+        retriever=retriever,
+    )
     results: list[EpisodeResult] = []
     maintenance_rounds: list[int] = []
-    if fast_loop_config.memory_enabled:
-        if repository is None or retriever is None:
-            raise ValueError("memory dependencies do not match memory_enabled")
-    elif repository is not None or retriever is not None:
-        raise ValueError("memory dependencies do not match memory_enabled")
     for index, task_id in enumerate(task_ids, start=1):
         if fast_loop_config.memory_enabled:
             assert repository is not None

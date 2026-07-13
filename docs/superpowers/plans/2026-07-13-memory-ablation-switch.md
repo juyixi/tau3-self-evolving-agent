@@ -108,7 +108,7 @@ git commit -m "feat: add strict memory feature switch"
 - Modify: `tests/unit/fast_loop/test_runner.py`
 
 **Interfaces:**
-- Consumes: `FastLoopConfig(memory_enabled: bool, retrieve_top_k: int, max_episode_steps: int)`
+- Consumes: `FastLoopConfig(retrieve_top_k: int, max_episode_steps: int, memory_enabled: bool)`
 - Produces: `run_fast_loop_episode(..., repository: MemoryRepository | None, retriever: Retriever | None, ...) -> EpisodeResult`
 - Event: `MemoryDisabled(reason="config")`
 
@@ -138,9 +138,9 @@ Expected: FAIL，因为 runner 仍无条件要求并访问 Memory。
 ```python
 @dataclass(frozen=True, slots=True)
 class FastLoopConfig:
-    memory_enabled: bool = True
     retrieve_top_k: int = 50
     max_episode_steps: int = 40
+    memory_enabled: bool = True
 
 def _require_memory_dependencies(*, enabled, repository, retriever):
     if enabled:

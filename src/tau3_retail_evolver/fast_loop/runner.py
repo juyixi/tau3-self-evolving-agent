@@ -108,12 +108,12 @@ def run_fast_loop_episode(
     context: RunContext,
 ) -> EpisodeResult:
     """Run one learning episode and emit the evidence needed by later attribution."""
-    _require_learning_context(context)
-    _require_memory_dependencies(
-        enabled=config.memory_enabled,
+    validate_fast_loop_dependencies(
+        config=config,
         repository=repository,
         retriever=retriever,
     )
+    _require_learning_context(context)
     write_failure_emitted = False
     try:
         reset = environment.reset(seed=context.seed)
@@ -388,17 +388,19 @@ def _require_learning_context(context: RunContext) -> None:
         raise ValueError("fast-loop learning requires LEARN mode")
 
 
-def _require_memory_dependencies(
+def validate_fast_loop_dependencies(
     *,
-    enabled: bool,
+    config: FastLoopConfig,
     repository: MemoryRepository | None,
     retriever: Retriever | None,
 ) -> None:
-    if enabled:
+    if not isinstance(config, FastLoopConfig):
+        raise ValueError("fast-loop config must be a FastLoopConfig")
+    if config.memory_enabled:
         if not isinstance(repository, MemoryRepository) or repository.is_read_only:
             raise ValueError("fast-loop learning requires a mutable MemoryRepository")
-        if retriever is None:
-            raise ValueError("enabled memory requires a retriever")
+        if not isinstance(retriever, Retriever):
+            raise ValueError("enabled memory requires a Retriever")
     elif repository is not None or retriever is not None:
         raise ValueError("disabled memory requires no repository or retriever")
 

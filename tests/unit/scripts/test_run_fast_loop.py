@@ -16,6 +16,7 @@ from tau3_retail_evolver.fast_loop.runner import (
     LifecycleResponse,
 )
 from tau3_retail_evolver.io.jsonl import JsonlWriter
+from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import Retriever
 
@@ -117,9 +118,7 @@ def test_run_requested_tasks_rejects_mismatched_memory_dependencies_before_side_
         lambda **kwargs: maintenance_calls.append(kwargs),
     )
 
-    with pytest.raises(
-        ValueError, match="memory dependencies do not match memory_enabled"
-    ):
+    with pytest.raises(ValueError):
         run_fast_loop._run_requested_tasks(
             task_ids=("task-1",),
             env_factory=lambda task_id: environment_calls.append(task_id),
@@ -127,6 +126,84 @@ def test_run_requested_tasks_rejects_mismatched_memory_dependencies_before_side_
             repository=repository,
             retriever=retriever,
             fast_loop_config=FastLoopConfig(memory_enabled=memory_enabled),
+            context=_run_context(tmp_path),
+            completed_train_tasks_before=0,
+            maintenance_period=30,
+        )
+
+    assert snapshot_calls == []
+    assert environment_calls == []
+    assert maintenance_calls == []
+
+
+@pytest.mark.parametrize(
+    ("fast_loop_config_factory", "repository_factory", "retriever_factory", "error"),
+    (
+        (
+            lambda _tmp_path: object(),
+            lambda _tmp_path: None,
+            lambda: None,
+            "FastLoopConfig",
+        ),
+        (
+            lambda _tmp_path: FastLoopConfig(),
+            lambda tmp_path: ReadOnlyMemoryRepository(
+                MemoryRepository(tmp_path / "memory").snapshot().path
+            ),
+            lambda: Retriever(_UnusedEmbeddingProvider()),
+            "mutable MemoryRepository",
+        ),
+        (
+            lambda _tmp_path: FastLoopConfig(),
+            lambda _tmp_path: SimpleNamespace(
+                snapshot=lambda: SimpleNamespace(memory_snapshot_id="fake-snapshot")
+            ),
+            lambda: Retriever(_UnusedEmbeddingProvider()),
+            "mutable MemoryRepository",
+        ),
+        (
+            lambda _tmp_path: FastLoopConfig(),
+            lambda tmp_path: MemoryRepository(tmp_path / "memory"),
+            lambda: object(),
+            "Retriever",
+        ),
+    ),
+    ids=("invalid-config", "read-only-repository", "fake-repository", "fake-retriever"),
+)
+def test_run_requested_tasks_validates_runtime_contract_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fast_loop_config_factory: Any,
+    repository_factory: Any,
+    retriever_factory: Any,
+    error: str,
+) -> None:
+    snapshot_calls: list[None] = []
+    environment_calls: list[str] = []
+    maintenance_calls: list[dict[str, Any]] = []
+    repository = repository_factory(tmp_path)
+    if hasattr(repository, "snapshot"):
+        original_snapshot = repository.snapshot
+
+        def snapshot():  # type: ignore[no-untyped-def]
+            snapshot_calls.append(None)
+            return original_snapshot()
+
+        monkeypatch.setattr(repository, "snapshot", snapshot)
+    monkeypatch.setattr(
+        run_fast_loop,
+        "run_due_maintenance",
+        lambda **kwargs: maintenance_calls.append(kwargs),
+    )
+
+    with pytest.raises(ValueError, match=error):
+        run_fast_loop._run_requested_tasks(
+            task_ids=("task-1",),
+            env_factory=lambda task_id: environment_calls.append(task_id),
+            policy=object(),
+            repository=repository,
+            retriever=retriever_factory(),
+            fast_loop_config=fast_loop_config_factory(tmp_path),
             context=_run_context(tmp_path),
             completed_train_tasks_before=0,
             maintenance_period=30,

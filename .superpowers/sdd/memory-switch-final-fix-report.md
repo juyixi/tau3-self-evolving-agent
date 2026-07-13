@@ -108,3 +108,84 @@ whitespace errors.
 
 - The pre-existing untracked `.pytest-tmp-review/` directory was left
   untouched and is excluded from staging.
+
+## Final review wave 2
+
+### Root Cause
+
+- `run_fast_loop_episode` accepted any non-`None` retriever. A fabricated
+  object therefore reached `environment.reset()` before failing at
+  `retriever.retrieve()`.
+- `_run_requested_tasks` duplicated a weaker presence-only dependency check.
+  It dereferenced `fast_loop_config.memory_enabled` without verifying the
+  config type, then could snapshot a read-only or fabricated repository or
+  construct an environment before the episode runner rejected the input.
+
+### TDD Evidence
+
+#### RED
+
+The default pytest temporary directory was inaccessible in this environment,
+so the first invocation failed during fixture setup with `PermissionError`.
+The required workspace-local base temp command then ran the new tests:
+
+```text
+python -m pytest -q tests/unit/fast_loop/test_runner.py tests/unit/scripts/test_run_fast_loop.py -k "memory_dependency_contract_fails_before_reset or validates_runtime_contract_before_side_effects" --basetemp=.pytest-tmp/memory-switch-final-review-wave2
+```
+
+Result: `5 failed, 4 passed, 57 deselected in 0.44s`.
+
+- The runner called `reset()` before rejecting a fabricated retriever.
+- Orchestration raised `AttributeError` for a fabricated config, called
+  `snapshot()` on a read-only repository, called `snapshot()` on a fabricated
+  repository, and constructed an environment before rejecting a fabricated
+  retriever.
+
+#### GREEN
+
+```text
+python -m pytest -q tests/unit/fast_loop/test_runner.py tests/unit/scripts/test_run_fast_loop.py --basetemp=.pytest-tmp/memory-switch-final-review-wave2
+```
+
+Result: `66 passed in 1.01s`.
+
+### Changes
+
+- Added reusable `validate_fast_loop_dependencies` in the runner module. It
+  requires an actual `FastLoopConfig`; enabled memory requires a mutable
+  `MemoryRepository` and a `Retriever`; disabled memory requires both
+  dependencies to be `None`.
+- Called that validator at the start of both `run_fast_loop_episode` and
+  `_run_requested_tasks`, before reset, snapshot, environment construction, or
+  maintenance.
+- Added runner coverage for a fabricated retriever and orchestration coverage
+  for fabricated config, read-only repository, fabricated repository, and
+  fabricated retriever. Each case attaches a snapshot spy when available and
+  asserts zero snapshot, environment-factory, and maintenance calls.
+- Corrected both plan references to the canonical `FastLoopConfig` field
+  order: `retrieve_top_k`, `max_episode_steps`, `memory_enabled`.
+
+### Files
+
+- `src/tau3_retail_evolver/fast_loop/runner.py`
+- `scripts/run_fast_loop.py`
+- `tests/unit/fast_loop/test_runner.py`
+- `tests/unit/scripts/test_run_fast_loop.py`
+- `docs/superpowers/plans/2026-07-13-memory-ablation-switch.md`
+- `.superpowers/sdd/memory-switch-final-fix-report.md`
+
+### Verification
+
+```text
+python -m pytest -q --basetemp=.pytest-tmp/memory-switch-final-review-wave2-full
+406 passed, 3 skipped in 6.40s
+
+python -m compileall -q src scripts tests
+exit 0
+
+git diff --check
+exit 0 (line-ending advisories only)
+```
+
+The pre-existing `.pytest-tmp-review/` directory remains untouched and is not
+staged.

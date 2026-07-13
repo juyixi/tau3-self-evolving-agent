@@ -250,6 +250,7 @@ def test_disabled_memory_bypasses_the_memory_lifecycle() -> None:
     [
         (True, None, Retriever(DeterministicEmbeddings())),
         (True, MemoryRepository, None),
+        (True, MemoryRepository, object()),
         (False, MemoryRepository, None),
         (False, None, Retriever(DeterministicEmbeddings())),
     ],
@@ -258,7 +259,7 @@ def test_memory_dependency_contract_fails_before_reset(
     tmp_path: Path,
     memory_enabled: bool,
     repository: MemoryRepository | type[MemoryRepository] | None,
-    retriever: Retriever | None,
+    retriever: Any,
 ) -> None:
     events = EventCollector()
     environment = FakeEnvironment(_reset())
