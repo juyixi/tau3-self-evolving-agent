@@ -56,6 +56,7 @@ _SYSTEM_INSTRUCTIONS = {
     "write": _WRITE_SYSTEM,
     "maintenance": _MAINTENANCE_SYSTEM,
 }
+_MAX_INVALID_OUTPUT_REPR_CHARS = 4_096
 
 
 class OpenAICompatibleHttpClient:
@@ -264,6 +265,7 @@ class OpenAICompatibleFastLoopPolicy:
         completion: object,
         tools: Sequence[Mapping[str, Any]],
     ) -> str:
+        raw_output: str | None = None
         try:
             raw_output = _fast_loop_action_raw_output(completion)
             parser = self._tool_call_parser or parse_openai_qwen_tool_call
@@ -273,7 +275,13 @@ class OpenAICompatibleFastLoopPolicy:
             action = Tau2ActionCodec.decode(tool_call or raw_output, _tool_names(tools))
         except Exception:
             return _canonical_json(
-                {"invalid_action_output": "action decoding failed"}
+                {
+                    "invalid_action_output": (
+                        raw_output
+                        if raw_output is not None
+                        else _safe_completion_output(completion)
+                    )
+                }
             )
         return _canonical_json({"action": action})
 
@@ -344,6 +352,17 @@ def _fast_loop_action_raw_output(completion: object) -> str:
         except (TypeError, ValueError) as error:
             raise ValueError("structured assistant message must be JSON serializable") from error
     return _raw_output(completion)
+
+
+def _safe_completion_output(completion: object) -> str:
+    try:
+        return _canonical_json(completion)
+    except Exception:
+        try:
+            rendered = repr(completion)
+        except Exception:
+            rendered = f"<unrepresentable {type(completion).__name__}>"
+        return rendered[:_MAX_INVALID_OUTPUT_REPR_CHARS]
 
 
 def _fast_loop_non_action_output(completion: object) -> str:

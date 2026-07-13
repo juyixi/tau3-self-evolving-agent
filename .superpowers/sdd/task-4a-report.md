@@ -96,3 +96,21 @@ The integration unit test runs `run_fast_loop_episode` with a real mutable `Memo
 ### Review Commit
 
 - `e75d397 Force repair for invalid fast-loop actions`
+
+## Invalid Output Preservation Follow-Up
+
+The parser-invalid action wrapper now preserves the real assistant output needed by the one runner repair request:
+
+- If action extraction succeeds but Qwen tool parsing or `Tau2ActionCodec` validation fails, `invalid_action_output` contains the extracted raw text or canonical structured assistant message.
+- If normal extraction fails, the adapter first stores canonical JSON for the full completion.
+- If the completion is not JSON serializable, the adapter stores a non-throwing `repr` fallback capped at 4,096 characters.
+- The wrapper still has no top-level `action`, so strict `ActionDecision` parsing must fail.
+
+### Follow-Up TDD Evidence
+
+- RED: `python -m pytest tests/unit/models/test_policy.py -q --basetemp=.pytest-tmp/task4a-preserve-red`
+- RED result: `9 failed, 37 passed`; every failure showed the fixed `action decoding failed` text replacing the required assistant output.
+- GREEN: `python -m pytest tests/unit/models/test_policy.py -q --basetemp=.pytest-tmp/task4a-preserve-green`
+- GREEN result: `46 passed in 0.32s`.
+
+The runner integration test now parses the action repair client's user JSON and proves `invalid_output.invalid_action_output` contains the original nested `unknown` tool/action. The environment executes only the repaired `find_order` action, while emitted events contain neither the original invalid content nor the wrapper.

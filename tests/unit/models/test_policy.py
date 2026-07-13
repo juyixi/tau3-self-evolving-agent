@@ -424,7 +424,7 @@ def test_fast_loop_malformed_action_is_returned_invalid_for_runner_repair() -> N
     response = policy.generate(_lifecycle_prompts()["action"])
     parsed = parse_decision(response.raw_output, ActionDecision)
 
-    assert set(json.loads(response.raw_output)) == {"invalid_action_output"}
+    assert json.loads(response.raw_output) == {"invalid_action_output": malformed}
     assert parsed.decision is None
     assert parsed.error is not None
     assert len(client.calls) == 1
@@ -442,7 +442,9 @@ def test_fast_loop_codec_failure_cannot_bypass_repair_with_action_decision_shell
 
     response = policy.generate(_lifecycle_prompts()["action"])
 
-    assert set(json.loads(response.raw_output)) == {"invalid_action_output"}
+    assert json.loads(response.raw_output) == {
+        "invalid_action_output": nested_invalid_action
+    }
     assert parse_decision(response.raw_output, ActionDecision).decision is None
 
 
@@ -462,18 +464,6 @@ def test_fast_loop_codec_failure_cannot_bypass_repair_with_action_decision_shell
             "content": '{"action":"mixed content"}',
             "tool_calls": "malformed",
         },
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "function": {
-                        "name": "find_order",
-                        "arguments": {"not_json_safe"},
-                    }
-                }
-            ],
-        },
     ),
 )
 def test_fast_loop_action_extraction_failures_return_parser_invalid_wrapper(
@@ -487,7 +477,43 @@ def test_fast_loop_action_extraction_failures_return_parser_invalid_wrapper(
 
     response = policy.generate(_lifecycle_prompts()["action"])
 
-    assert set(json.loads(response.raw_output)) == {"invalid_action_output"}
+    preserved = json.loads(response.raw_output)["invalid_action_output"]
+    tool_calls = message.get("tool_calls")
+    if tool_calls not in (None, []):
+        assert preserved == _canonical(message)
+    else:
+        assert preserved == _canonical({"choices": [{"message": message}]})
+    assert parse_decision(response.raw_output, ActionDecision).decision is None
+
+
+def test_fast_loop_unserializable_action_completion_uses_bounded_safe_output() -> None:
+    class LongRepresentation:
+        def __repr__(self) -> str:
+            return "invalid-structured-output-" + ("x" * 10_000)
+
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [LongRepresentation()],
+                }
+            }
+        ]
+    }
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=FakeClient(completion),
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.generate(_lifecycle_prompts()["action"])
+
+    preserved = json.loads(response.raw_output)["invalid_action_output"]
+    assert preserved.startswith("{'choices':")
+    assert "invalid-structured-output" in preserved
+    assert len(preserved) <= 4_096
     assert parse_decision(response.raw_output, ActionDecision).decision is None
 
 
@@ -710,6 +736,10 @@ def test_fast_loop_runner_repairs_codec_invalid_action_before_environment_step(
     assert environment.actions == [expected_action]
     action_calls = [call for call in client.calls if call["tools"]]
     assert len(action_calls) == 2
+    repair_request = json.loads(action_calls[1]["messages"][1]["content"])
+    invalid_wrapper = json.loads(repair_request["invalid_output"])
+    assert invalid_wrapper == {"invalid_action_output": invalid_action}
+    assert "unknown" in repair_request["invalid_output"]
     assert len(client.calls) == 4
     assert client.completions == []
     serialized_events = _canonical(events.events)
