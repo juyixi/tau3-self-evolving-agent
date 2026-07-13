@@ -133,3 +133,72 @@ MemoryWriteCommitted
 - No external policy or real Tau2 integration test was run; deterministic
   unit tests use the required scripted lifecycle policy and fake Tau2
   environment while exercising the real repository and retriever.
+
+## Fix Review Findings
+
+### RED Evidence
+
+The review regressions were added before production edits and run separately
+to isolate each finding:
+
+```text
+python -m pytest tests/unit/fast_loop/test_runner.py::test_repaired_action_event_does_not_persist_raw_repair_or_error_text -q --basetemp=.pytest-tmp/task2-review-red-1
+```
+
+RED: failed with `KeyError: 'repair_used'`; the existing `DecisionMade` event
+still contained the shared `raw_output`, `repaired_output`, and `error` audit
+fields, including the sensitive attribution sentinel in the invalid raw JSON.
+
+```text
+python -m pytest tests/unit/fast_loop/test_runner.py::test_inconsistent_terminal_flags_are_recorded_before_episode_failure -q --basetemp=.pytest-tmp/task2-review-red-2
+```
+
+RED: event suffix was `MemorySelected -> DecisionMade -> EpisodeFailed`, proving
+the actual environment result was not recorded before terminal flag validation.
+
+```text
+python -m pytest tests/unit/fast_loop/test_runner.py::test_cleanup_base_exception_is_a_note_on_the_primary_exception -q --basetemp=.pytest-tmp/task2-review-red-3
+```
+
+RED: pytest was interrupted by the cleanup `KeyboardInterrupt`, proving it
+replaced the primary policy `TimeoutError` instead of becoming an exception
+note.
+
+### Minimal Fixes
+
+- `EnvironmentStepped` now records the returned observation, reward, terminal
+  flags, and allowlisted `public_info` before flag consistency is validated.
+- Action `DecisionMade` now contains only observation, canonical parsed action,
+  sampling parameters, latency, and `repair_used`; arbitrary action raw,
+  repaired, and parse error text is not persisted.
+- `_close_after_failure` catches `BaseException` so cleanup interrupts are
+  attached to the primary failure as notes.
+- `RunContext` now documents general fast-loop provenance rather than only a
+  no-memory baseline.
+- A repaired-selection regression confirms `MemorySelected` still preserves
+  required `raw_output`, `repaired_output`, and initial `error` provenance.
+
+### GREEN And Regression Evidence
+
+Targeted review tests:
+
+```text
+3 passed in 0.24s
+```
+
+Task 2 plus baseline:
+
+```text
+python -m pytest tests/unit/fast_loop/test_runner.py tests/unit/fast_loop/test_baseline_runner.py -q --basetemp=.pytest-tmp/task2-review
+27 passed in 0.52s
+```
+
+Fast-loop and memory regression:
+
+```text
+python -m pytest tests/unit/fast_loop tests/unit/memory -q --basetemp=.pytest-tmp/task2-review-regression
+128 passed in 4.34s
+```
+
+Changed-module compilation and `git diff --check` both completed with exit
+code 0.

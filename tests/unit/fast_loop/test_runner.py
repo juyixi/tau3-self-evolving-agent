@@ -48,7 +48,7 @@ class FakeEnvironment:
     reset_result: ResetResult
     step_results: list[StepResult] = field(default_factory=list)
     step_error: Exception | None = None
-    close_error: Exception | None = None
+    close_error: BaseException | None = None
     reset_calls: int = 0
     close_calls: int = 0
     actions: list[str] = field(default_factory=list)
@@ -382,6 +382,37 @@ def test_selection_unknown_id_with_failed_repair_emits_failure(tmp_path: Path) -
     assert environment.close_calls == 1
 
 
+def test_repaired_selection_keeps_raw_repaired_and_error_provenance(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    candidate = repository.add(
+        tier="tip",
+        content="Known memory",
+        source_task_ids=("seed",),
+        created_round=0,
+        embedding=(1.0, 0.0),
+        embedding_model_revision="fake-embedding@1",
+    )
+    raw_output = '{"memory_ids":["unknown"]}'
+    repaired_output = json.dumps({"memory_ids": [candidate.id]})
+    events = EventCollector()
+    environment = FakeEnvironment(_reset(), [_terminal_step()])
+    policy = ScriptedLifecyclePolicy(
+        [raw_output, '{"action":"finish"}', '{"memories":[]}'],
+        [repaired_output],
+    )
+
+    _run(repository=repository, environment=environment, policy=policy, events=events)
+
+    selected = next(
+        event for event in events.events if event["event_type"] == "MemorySelected"
+    )
+    assert selected["raw_output"] == raw_output
+    assert selected["repaired_output"] == repaired_output
+    assert "unknown" in selected["error"]
+
+
 def test_invalid_action_with_failed_repair_never_steps_environment(tmp_path: Path) -> None:
     repository = MemoryRepository(tmp_path / "memory")
     events = EventCollector()
@@ -398,6 +429,39 @@ def test_invalid_action_with_failed_repair_never_steps_environment(tmp_path: Pat
     assert environment.actions == []
     assert events.events[-1]["event_type"] == "EpisodeFailed"
     assert environment.close_calls == 1
+
+
+def test_repaired_action_event_does_not_persist_raw_repair_or_error_text(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    environment = FakeEnvironment(_reset(), [_terminal_step()])
+    sentinel = "sentinel-sensitive-attribution"
+    policy = ScriptedLifecyclePolicy(
+        [
+            '{"memory_ids":[]}',
+            json.dumps(
+                {
+                    "action": "",
+                    "attributionScore": sentinel,
+                    "secret": sentinel,
+                }
+            ),
+            '{"memories":[]}',
+        ],
+        [json.dumps({"action": 'lookup_order(order_id="123")'})],
+    )
+
+    _run(repository=repository, environment=environment, policy=policy, events=events)
+
+    decision = next(
+        event for event in events.events if event["event_type"] == "DecisionMade"
+    )
+    assert decision["parsed_action"] == 'lookup_order(order_id="123")'
+    assert decision["repair_used"] is True
+    assert {"raw_output", "repaired_output", "error"}.isdisjoint(decision)
+    assert sentinel not in repr(events.events)
 
 
 def test_policy_timeout_emits_sanitized_failure_and_closes(tmp_path: Path) -> None:
@@ -429,6 +493,45 @@ def test_environment_error_preserves_prior_decision_evidence(tmp_path: Path) -> 
     ]
     assert environment.actions == ["lookup"]
     assert environment.close_calls == 1
+
+
+def test_inconsistent_terminal_flags_are_recorded_before_episode_failure(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    environment = FakeEnvironment(
+        _reset(),
+        [
+            StepResult(
+                observation="inconsistent terminal state",
+                reward=0.35,
+                done=False,
+                terminated=True,
+                truncated=False,
+                info={"parse_error": "public parse detail"},
+            )
+        ],
+    )
+    policy = ScriptedLifecyclePolicy(
+        ['{"memory_ids":[]}', '{"action":"lookup"}']
+    )
+
+    with pytest.raises(RuntimeError, match="terminal flags are inconsistent"):
+        _run(repository=repository, environment=environment, policy=policy, events=events)
+
+    assert [event["event_type"] for event in events.events][-3:] == [
+        "DecisionMade",
+        "EnvironmentStepped",
+        "EpisodeFailed",
+    ]
+    stepped = events.events[-2]
+    assert stepped["observation"] == "inconsistent terminal state"
+    assert stepped["reward"] == 0.35
+    assert stepped["done"] is False
+    assert stepped["terminated"] is True
+    assert stepped["truncated"] is False
+    assert stepped["public_info"] == {"parse_error": "public parse detail"}
 
 
 def test_max_step_boundary_finishes_as_project_truncation(tmp_path: Path) -> None:
@@ -578,6 +681,24 @@ def test_cleanup_failure_is_attached_to_primary_exception(tmp_path: Path) -> Non
 
     assert environment.close_calls == 1
     assert any("cleanup failed" in note for note in error.value.__notes__)
+
+
+def test_cleanup_base_exception_is_a_note_on_the_primary_exception(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    environment = FakeEnvironment(
+        _reset(),
+        close_error=KeyboardInterrupt("cleanup interrupted"),
+    )
+    policy = ScriptedLifecyclePolicy([TimeoutError("policy timeout")])
+
+    with pytest.raises(TimeoutError, match="policy timeout") as error:
+        _run(repository=repository, environment=environment, policy=policy, events=events)
+
+    assert environment.close_calls == 1
+    assert any("cleanup interrupted" in note for note in error.value.__notes__)
 
 
 @pytest.mark.parametrize("field", ["retrieve_top_k", "max_episode_steps"])

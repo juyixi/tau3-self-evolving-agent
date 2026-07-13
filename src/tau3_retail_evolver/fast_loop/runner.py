@@ -197,10 +197,11 @@ def run_fast_loop_episode(
                 turn=steps,
                 observation=observation,
                 parsed_action=action.action,
-                **action_audit,
+                sampling_params=action_audit["sampling_params"],
+                latency_s=action_audit["latency_s"],
+                repair_used=action_audit["repaired_output"] is not None,
             )
             step = environment.step(action.action)
-            _validate_step_boundary(step)
             public_info = _public_step_info(step.info)
             _emit(
                 context,
@@ -215,6 +216,7 @@ def run_fast_loop_episode(
                 truncated=step.truncated,
                 public_info=public_info,
             )
+            _validate_step_boundary(step)
             trajectory.append(
                 {
                     "observation": observation,
@@ -599,5 +601,5 @@ def _close_after_failure(
 ) -> None:
     try:
         environment.close()
-    except Exception as cleanup_error:
+    except BaseException as cleanup_error:
         error.add_note(f"Tau2 cleanup also failed: {cleanup_error}")

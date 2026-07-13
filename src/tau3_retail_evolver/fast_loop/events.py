@@ -22,7 +22,7 @@ class EventWriter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class RunContext:
-    """Stable provenance and output dependencies for a no-memory baseline run."""
+    """Stable provenance and output dependencies for a fast-loop run."""
 
     run_id: str
     iteration: int
