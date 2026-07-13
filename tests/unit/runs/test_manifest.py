@@ -90,6 +90,75 @@ def test_creates_a_no_memory_manifest_atomically_with_sanitized_runtime_data(tmp
     }
 
 
+def test_creates_learning_manifest_with_adapter_and_memory_provenance(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+
+    manifest = create_manifest(
+        path,
+        run_id="learn-001",
+        iteration=4,
+        model_revision="Qwen/Qwen3.5-9B@model-revision",
+        parent_checkpoint="checkpoint-003",
+        adapter_revision="adapter-004",
+        memory_snapshot_id="snapshot-before-run",
+        tau2_commit="a" * 40,
+        split="train",
+        split_hash="b" * 64,
+        task_ids=("task-1",),
+        seed=17,
+        user_simulator_config={},
+        environment_options={},
+        rollout_options={},
+        model_serving_contract={},
+        evaluation_config={},
+        command=("python",),
+    )
+
+    assert manifest["parent_checkpoint"] == "checkpoint-003"
+    assert manifest["adapter_revision"] == "adapter-004"
+    assert manifest["memory_snapshot_id"] == "snapshot-before-run"
+    assert json.loads(path.read_text(encoding="utf-8")) == manifest
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("model_revision", "  "),
+        ("parent_checkpoint", ""),
+        ("adapter_revision", "\t"),
+        ("memory_snapshot_id", "\n"),
+    ),
+)
+def test_rejects_blank_manifest_provenance(
+    field: str, value: str, tmp_path: Path
+) -> None:
+    arguments = {
+        "run_id": "learn-001",
+        "iteration": 0,
+        "model_revision": "revision-a",
+        "parent_checkpoint": None,
+        "adapter_revision": None,
+        "memory_snapshot_id": None,
+        "tau2_commit": "a" * 40,
+        "split": "train",
+        "split_hash": "b" * 64,
+        "task_ids": ("task-1",),
+        "seed": 17,
+        "user_simulator_config": {},
+        "environment_options": {},
+        "rollout_options": {},
+        "model_serving_contract": {},
+        "evaluation_config": {},
+        "command": ("python",),
+    }
+    arguments[field] = value
+
+    with pytest.raises(ValueError, match=field.replace("_", " ")):
+        create_manifest(tmp_path / "manifest.json", **arguments)
+
+    assert not (tmp_path / "manifest.json").exists()
+
+
 def test_refuses_to_overwrite_an_existing_manifest(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text('{"existing":true}\n', encoding="utf-8")

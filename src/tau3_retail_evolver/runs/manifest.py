@@ -21,7 +21,7 @@ def create_manifest(
     run_id: str,
     iteration: int,
     model_revision: str,
-    parent_checkpoint: None,
+    parent_checkpoint: str | None,
     tau2_commit: str,
     split: str,
     split_hash: str,
@@ -33,16 +33,22 @@ def create_manifest(
     model_serving_contract: Mapping[str, Any],
     evaluation_config: Mapping[str, Any],
     command: Sequence[str],
+    adapter_revision: str | None = None,
+    memory_snapshot_id: str | None = None,
 ) -> dict[str, Any]:
-    """Atomically create one immutable, no-memory run manifest."""
+    """Atomically create one immutable run manifest."""
+    _require_nonblank("model revision", model_revision)
+    _require_optional_nonblank("parent checkpoint", parent_checkpoint)
+    _require_optional_nonblank("adapter revision", adapter_revision)
+    _require_optional_nonblank("memory snapshot id", memory_snapshot_id)
     manifest = {
         "schema_version": 2,
         "run_id": run_id,
         "iteration": iteration,
         "model_revision": model_revision,
         "parent_checkpoint": parent_checkpoint,
-        "adapter_revision": None,
-        "memory_snapshot_id": None,
+        "adapter_revision": adapter_revision,
+        "memory_snapshot_id": memory_snapshot_id,
         "tau2_commit": tau2_commit,
         "split": split,
         "split_hash": split_hash,
@@ -82,6 +88,16 @@ def create_manifest(
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
     return manifest
+
+
+def _require_nonblank(field: str, value: str) -> None:
+    if not value.strip():
+        raise ValueError(f"{field} must not be blank")
+
+
+def _require_optional_nonblank(field: str, value: str | None) -> None:
+    if value is not None:
+        _require_nonblank(field, value)
 
 
 def sanitize_artifact_data(value: Any) -> Any:
