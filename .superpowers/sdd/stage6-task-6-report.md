@@ -190,3 +190,55 @@ exit 0
   while pytest cleaned temporary directories. The isolated affected contract
   passed with cache handling disabled; the clean focused and full-suite runs
   above remain the authoritative results.
+
+## Final Preflight Fix
+
+Final implementation commit: `d826bce`
+(`fix: validate resumable adapter artifacts`)
+
+### Findings Resolved
+
+- Resume preflight now requires nonblank `schedule_fingerprint` and
+  `schedule_sha256` fields and rejects any value mismatch. This exactly matches
+  the checkpoint writer and trainer resume contract.
+- A resolved resume adapter directory must contain an
+  `adapter_config.json` file and exactly one supported PEFT weight file:
+  `adapter_model.safetensors` or `adapter_model.bin`.
+- Valid resume fixtures now model the complete writer output. Rejection tests
+  cover a missing adapter directory, missing config, missing weights, and the
+  ambiguous two-weight-file case.
+- All new checks remain in CLI preflight and do not import Torch, PEFT,
+  Transformers, or the trainer.
+
+### Final TDD Evidence
+
+The updated tests were run before production changes and produced six expected
+failures: missing/blank/mismatched schedule fingerprint validation, missing
+adapter config, missing adapter weights, and ambiguous adapter weights.
+
+```text
+conda run -n tau3-bench python -m pytest tests/unit/scripts/test_train_opd_lora.py -q -p no:cacheprovider
+6 failed, 40 passed in 2.38s
+
+conda run -n tau3-bench python -m pytest tests/unit/scripts/test_train_opd_lora.py -q -p no:cacheprovider
+46 passed in 2.30s
+
+conda run -n tau3-bench python -m pytest tests/unit/scripts/test_train_opd_lora.py tests/unit/models/test_lora_config.py tests/unit/slow_loop/test_trainer.py -q -p no:cacheprovider
+92 passed in 3.27s
+
+conda run -n tau3-bench python -m pytest -q -p no:cacheprovider
+607 passed, 5 skipped in 11.71s
+
+conda run -n tau3-bench python -m compileall -q scripts src tests
+exit 0
+
+git diff --check
+exit 0
+```
+
+### Final Concerns
+
+- The five default skips still include the opt-in Qwen GPU smoke. No model
+  download or real Qwen BF16 training was performed in this fix pass.
+- Pytest cache handling remained disabled for verification to avoid the
+  previously documented Windows cache-directory permission issue.
