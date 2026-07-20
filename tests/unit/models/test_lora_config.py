@@ -26,7 +26,10 @@ def _qwen35_module() -> Any:
 
 
 class RecordingLoraConfig:
+    calls: list[dict[str, Any]] = []
+
     def __init__(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
         self.kwargs = kwargs
 
 
@@ -53,8 +56,13 @@ class FakeAdapterModel(nn.Module):
 
     def save_pretrained(self, directory: str | Path, **kwargs: Any) -> None:
         self.save_calls.append({"directory": Path(directory), **kwargs})
-        Path(directory).mkdir(parents=True, exist_ok=True)
-        (Path(directory) / "adapter-model.bin").write_bytes(b"adapter only")
+        selected_adapters = kwargs["selected_adapters"]
+        if selected_adapters != ["shared_policy"]:
+            raise AssertionError("PEFT saves a non-default adapter by selected adapter name")
+        adapter_directory = Path(directory) / selected_adapters[0]
+        adapter_directory.mkdir(parents=True, exist_ok=True)
+        (adapter_directory / "adapter_config.json").write_text("{}", encoding="utf-8")
+        (adapter_directory / "adapter-model.bin").write_bytes(b"adapter only")
 
 
 class FakeAutoModelForCausalLM:
@@ -82,6 +90,7 @@ class FakePeftModule:
     TaskType = SimpleNamespace(CAUSAL_LM="CAUSAL_LM")
     get_peft_calls: list[dict[str, Any]] = []
     load_calls: list[dict[str, Any]] = []
+    state_dict_calls: list[dict[str, Any]] = []
     adapter_state: dict[str, torch.Tensor] = {}
 
     @classmethod
@@ -117,7 +126,15 @@ class FakePeftModule:
             return FakeAdapterModel(model, RecordingLoraConfig(loaded=True))
 
     @classmethod
-    def get_peft_model_state_dict(cls, model: FakeAdapterModel) -> dict[str, torch.Tensor]:
+    def get_peft_model_state_dict(
+        cls,
+        model: FakeAdapterModel,
+        *,
+        adapter_name: str,
+    ) -> dict[str, torch.Tensor]:
+        if adapter_name != "shared_policy":
+            raise AssertionError("adapter state must be requested by its persistent name")
+        cls.state_dict_calls.append({"model": model, "adapter_name": adapter_name})
         return cls.adapter_state or {
             "base_model.model.lora_A.shared_policy.weight": model.lora_A,
             "base_model.model.lora_B.shared_policy.weight": model.lora_B,
@@ -126,11 +143,13 @@ class FakePeftModule:
 
 @pytest.fixture(autouse=True)
 def reset_fakes() -> None:
+    RecordingLoraConfig.calls = []
     FakeAutoModelForCausalLM.calls = []
     FakeAutoModelForCausalLM.model = None
     FakeAutoProcessor.calls = []
     FakePeftModule.get_peft_calls = []
     FakePeftModule.load_calls = []
+    FakePeftModule.state_dict_calls = []
     FakePeftModule.adapter_state = {}
 
 
@@ -163,6 +182,38 @@ def test_build_lora_config_uses_the_project_zero_impact_settings() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("lora_config", "training_config", "match"),
+    (
+        (
+            LoraConfig.model_construct(
+                use_peft=False,
+                lora_r=32,
+                lora_alpha=64,
+                lora_dropout=0.05,
+            ),
+            TrainingConfig(),
+            "use_peft",
+        ),
+        (LoraConfig(lora_r=16), TrainingConfig(), "lora_r=32"),
+        (LoraConfig(lora_alpha=32), TrainingConfig(), "lora_alpha=64"),
+        (LoraConfig(lora_dropout=0.1), TrainingConfig(), "lora_dropout=0.05"),
+        (LoraConfig(), TrainingConfig(target_modules="q_proj"), "target_modules='all-linear'"),
+    ),
+)
+def test_build_lora_config_rejects_values_outside_the_mandatory_stage_6_contract(
+    lora_config: LoraConfig,
+    training_config: TrainingConfig,
+    match: str,
+) -> None:
+    lora = _lora_module()
+
+    with pytest.raises(ValueError, match=match):
+        lora.build_lora_config(lora_config, training_config, peft_module=FakePeftModule)
+
+    assert RecordingLoraConfig.calls == []
+
+
 @pytest.mark.parametrize("initializer", (False, "gaussian", "pissa"))
 def test_build_lora_config_rejects_initializers_that_do_not_preserve_base_output(
     initializer: bool | str,
@@ -176,6 +227,8 @@ def test_build_lora_config_rejects_initializers_that_do_not_preserve_base_output
             init_lora_weights=initializer,
             peft_module=FakePeftModule,
         )
+
+    assert RecordingLoraConfig.calls == []
 
 
 def test_load_shared_policy_creates_one_zero_impact_adapter_and_freezes_base_parameters() -> None:
@@ -259,15 +312,53 @@ def test_save_adapter_checkpoint_writes_only_peft_adapter_tensors(tmp_path: Path
         model, tmp_path / "adapter", peft_module=FakePeftModule
     )
 
-    assert checkpoint == tmp_path / "adapter"
+    assert checkpoint == tmp_path / "adapter" / "shared_policy"
     assert model.save_calls == [
         {
             "directory": tmp_path / "adapter",
-            "state_dict": FakePeftModule.get_peft_model_state_dict(model),
+            "state_dict": {
+                "base_model.model.lora_A.shared_policy.weight": model.lora_A,
+                "base_model.model.lora_B.shared_policy.weight": model.lora_B,
+            },
             "safe_serialization": True,
+            "selected_adapters": ["shared_policy"],
         }
     ]
+    assert FakePeftModule.state_dict_calls == [
+        {"model": model, "adapter_name": "shared_policy"}
+    ]
+    assert (checkpoint / "adapter_config.json").is_file()
     assert (checkpoint / "adapter-model.bin").is_file()
+
+
+def test_save_adapter_checkpoint_returns_the_exact_path_used_for_adapter_reload(
+    tmp_path: Path,
+) -> None:
+    qwen35 = _qwen35_module()
+    lora = _lora_module()
+    model = qwen35.load_shared_qwen35_policy(
+        _model_config(),
+        LoraConfig(),
+        TrainingConfig(),
+        transformers_module=_transformers_module(),
+        peft_module=FakePeftModule,
+    )
+
+    checkpoint = lora.save_adapter_checkpoint(
+        model, tmp_path / "adapter", peft_module=FakePeftModule
+    )
+    qwen35.load_shared_qwen35_policy(
+        _model_config(),
+        LoraConfig(),
+        TrainingConfig(),
+        adapter_path=checkpoint,
+        transformers_module=_transformers_module(),
+        peft_module=FakePeftModule,
+    )
+
+    assert checkpoint == tmp_path / "adapter" / "shared_policy"
+    assert (checkpoint / "adapter_config.json").is_file()
+    assert FakePeftModule.load_calls[-1]["adapter_path"] == checkpoint
 
 
 def test_save_adapter_checkpoint_rejects_a_base_model_tensor(tmp_path: Path) -> None:

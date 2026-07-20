@@ -80,3 +80,59 @@ Observed result: `9 passed, 1 skipped in 1.57s`. The integration test is skipped
 ## Commit
 
 Commit message: `feat: load qwen35 with zero impact lora`
+
+## Fix: Review Findings
+
+### Changes
+
+- `save_adapter_checkpoint` now requests adapter state with
+  `get_peft_model_state_dict(model, adapter_name="shared_policy")`.
+- The checkpoint save explicitly selects `shared_policy`. For PEFT's non-default adapter
+  layout, it now returns `destination/shared_policy`, verifies that this directory contains
+  `adapter_config.json`, and the load path is passed through unchanged to
+  `PeftModel.from_pretrained`.
+- `build_lora_config` now rejects every Stage 6 configuration drift before constructing a PEFT
+  config: `use_peft=True`, `r=32`, `alpha=64`, `dropout=0.05`,
+  `target_modules="all-linear"`, and `init_lora_weights=True` are mandatory.
+
+### Review-Fix TDD Evidence
+
+Red command:
+
+```powershell
+conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py -q
+```
+
+Observed before the fix: `8 failed, 7 passed in 1.55s`.
+
+- Five failures showed that non-mandatory Stage 6 LoRA values were accepted.
+- Three failures showed that `get_peft_model_state_dict` was called without its required
+  `adapter_name` keyword. The test double deliberately rejects that omission.
+
+Green unit command:
+
+```powershell
+conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py -q
+```
+
+Observed after the fix: `15 passed in 1.42s`.
+
+Focused verification command:
+
+```powershell
+conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py tests/integration/test_qwen35_loader.py -q
+```
+
+Observed result: `15 passed, 1 skipped in 1.45s`.
+
+### Self-Review
+
+- The fake PEFT boundary now requires `adapter_name` and emulates PEFT's non-default adapter
+  subdirectory. The unit round trip proves that the exact returned directory is reloaded.
+- Invalid Stage 6 values fail before `RecordingLoraConfig` is constructed.
+- `git diff --check` reported no whitespace errors.
+
+### Remaining Concern
+
+The real PEFT/Qwen integration remains opt-in and skipped by default. It has not been run in
+this environment because `RUN_QWEN35_INTEGRATION` is unset and no model download is allowed.

@@ -11,6 +11,10 @@ from tau3_retail_evolver.config import TrainingConfig
 
 
 _ADAPTER_NAME = "shared_policy"
+_STAGE_6_LORA_R = 32
+_STAGE_6_LORA_ALPHA = 64
+_STAGE_6_LORA_DROPOUT = 0.05
+_STAGE_6_TARGET_MODULES = "all-linear"
 
 
 def build_lora_config(
@@ -25,6 +29,16 @@ def build_lora_config(
         raise TypeError("lora_config must be a LoraConfig")
     if not isinstance(training_config, TrainingConfig):
         raise TypeError("training_config must be a TrainingConfig")
+    if lora_config.use_peft is not True:
+        raise ValueError("Stage 6 requires use_peft=True")
+    if lora_config.lora_r != _STAGE_6_LORA_R:
+        raise ValueError(f"Stage 6 requires lora_r={_STAGE_6_LORA_R}")
+    if lora_config.lora_alpha != _STAGE_6_LORA_ALPHA:
+        raise ValueError(f"Stage 6 requires lora_alpha={_STAGE_6_LORA_ALPHA}")
+    if lora_config.lora_dropout != _STAGE_6_LORA_DROPOUT:
+        raise ValueError(f"Stage 6 requires lora_dropout={_STAGE_6_LORA_DROPOUT}")
+    if training_config.target_modules != _STAGE_6_TARGET_MODULES:
+        raise ValueError(f"Stage 6 requires target_modules='{_STAGE_6_TARGET_MODULES}'")
     if init_lora_weights is not True:
         raise ValueError("zero-impact LoRA requires init_lora_weights=True")
 
@@ -92,7 +106,7 @@ def save_adapter_checkpoint(
 ) -> Path:
     """Save just the adapter tensors, refusing any base-model state."""
     peft = peft_module or _require_peft()
-    adapter_state = peft.get_peft_model_state_dict(model)
+    adapter_state = peft.get_peft_model_state_dict(model, adapter_name=_ADAPTER_NAME)
     if not adapter_state:
         raise ValueError("adapter checkpoint has no LoRA tensors")
     base_tensor_names = [name for name in adapter_state if not _is_lora_parameter(name)]
@@ -105,8 +119,12 @@ def save_adapter_checkpoint(
         destination,
         state_dict=adapter_state,
         safe_serialization=True,
+        selected_adapters=[_ADAPTER_NAME],
     )
-    return destination
+    adapter_directory = destination / _ADAPTER_NAME
+    if not (adapter_directory / "adapter_config.json").is_file():
+        raise RuntimeError(f"PEFT did not write a reloadable adapter to {adapter_directory}")
+    return adapter_directory
 
 
 def _freeze_non_lora_parameters(model: Any) -> None:
