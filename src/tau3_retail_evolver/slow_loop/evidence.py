@@ -63,6 +63,19 @@ class PublicMemoryEvidence(_EvidenceModel):
     status: MemoryStatus
 
 
+class MaintenanceMemoryEvidence(_EvidenceModel):
+    id: str
+    tier: MemoryTier
+    content: str
+    version: int = Field(ge=1)
+    status: MemoryStatus
+    usage_count: int = Field(ge=0)
+    success_count: int = Field(ge=0)
+    last_used: str | None
+    embedding: tuple[float, ...] | None
+    embedding_model_revision: str | None
+
+
 class EpisodeEvidence(_EvidenceModel):
     evidence_schema_version: Literal[1] = 1
     episode_id: str
@@ -113,6 +126,7 @@ class MaintenanceEvidence(_EvidenceModel):
     memory_snapshot_id: str
     prior_episode_ids: tuple[str, ...]
     public_repository: tuple[PublicMemoryEvidence, ...]
+    repository_state: tuple[MaintenanceMemoryEvidence, ...]
     commands: tuple[dict[str, Any], ...]
     looked_up_ids: tuple[str, ...]
     created_ids: tuple[str, ...]
@@ -555,6 +569,7 @@ def _build_maintenance(
     }:
         raise ValueError("maintenance diagnostics must contain exactly four tiers")
     public_repository: list[PublicMemoryEvidence] = []
+    repository_state: list[MaintenanceMemoryEvidence] = []
     for tier in MemoryTier:
         tier_payload = diagnostics[tier.value]
         if not isinstance(tier_payload, Mapping):
@@ -575,6 +590,20 @@ def _build_maintenance(
             ):
                 raise ValueError(f"maintenance public memory mismatch: {public.id}")
             public_repository.append(public)
+            repository_state.append(
+                MaintenanceMemoryEvidence(
+                    id=item.id,
+                    tier=item.tier,
+                    content=item.content,
+                    version=item.version,
+                    status=item.status,
+                    usage_count=item.usage_count,
+                    success_count=item.success_count,
+                    last_used=item.last_used,
+                    embedding=item.embedding,
+                    embedding_model_revision=item.embedding_model_revision,
+                )
+            )
 
     commands = _list_of_mappings(proposed.get("commands"), "maintenance commands")
     return MaintenanceEvidence(
@@ -590,6 +619,7 @@ def _build_maintenance(
         memory_snapshot_id=snapshot_id,
         prior_episode_ids=prior_episode_ids,
         public_repository=tuple(public_repository),
+        repository_state=tuple(repository_state),
         commands=tuple(_json_mapping(command, "maintenance command") for command in commands),
         looked_up_ids=_string_tuple(committed.get("looked_up_ids"), "looked_up_ids"),
         created_ids=_string_tuple(committed.get("created_ids"), "created_ids"),

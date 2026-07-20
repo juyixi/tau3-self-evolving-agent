@@ -445,5 +445,8 @@ def test_maintenance_evidence_uses_public_repository_and_prior_history(
         "version": 1,
         "status": "active",
     }
+    assert maintenance.repository_state[0].id == public_memory_id
+    assert maintenance.repository_state[0].usage_count == 0
+    assert maintenance.repository_state[0].embedding is None
     assert maintenance.commands[0]["operation"] == "merge"
     assert len(maintenance.prior_episode_ids) == 30
