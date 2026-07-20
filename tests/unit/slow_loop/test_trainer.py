@@ -1,0 +1,456 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+import json
+import os
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+import torch
+from torch import nn
+
+from tau3_retail_evolver.config import RolloutConfig, TrainingConfig
+from tau3_retail_evolver.slow_loop.alignment import render_public_prompt
+from tau3_retail_evolver.slow_loop.examples import OPDExample
+from tau3_retail_evolver.slow_loop.opd_step import OPDStepResult
+from tau3_retail_evolver.slow_loop.trainer import OPDTrainer, TrainingRequest
+
+
+KINDS = ("sel", "act", "write", "maint")
+
+
+class ToyTokenizer:
+    def __call__(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool,
+        return_tensors: str | None = None,
+    ) -> dict[str, Any]:
+        assert add_special_tokens is False
+        ids = [ord(character) % 17 + 1 for character in text]
+        if return_tensors == "pt":
+            input_ids = torch.tensor([ids], dtype=torch.long)
+            return {
+                "input_ids": input_ids,
+                "attention_mask": torch.ones_like(input_ids),
+            }
+        return {"input_ids": ids}
+
+
+class ToyPolicy(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.base_weight = nn.Parameter(torch.tensor(0.25), requires_grad=False)
+        self.lora_weight = nn.Parameter(torch.tensor(0.5))
+        self.generate_calls: list[dict[str, Any]] = []
+        self.fail_on_generate_call: int | None = None
+        self.empty_generation = False
+
+    def generate(self, input_ids: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        call_number = len(self.generate_calls) + 1
+        self.generate_calls.append(
+            {
+                "input_ids": input_ids.detach().clone(),
+                "training": self.training,
+                "grad_enabled": torch.is_grad_enabled(),
+                **kwargs,
+            }
+        )
+        if self.fail_on_generate_call == call_number:
+            raise RuntimeError("injected generation failure")
+        if self.empty_generation:
+            return input_ids.detach().clone()
+        response = torch.tensor(
+            [[(call_number % 11) + 1]], dtype=input_ids.dtype, device=input_ids.device
+        )
+        return torch.cat((input_ids, response), dim=1)
+
+    def forward(
+        self, *, input_ids: torch.Tensor, attention_mask: torch.Tensor
+    ) -> SimpleNamespace:
+        assert input_ids.device == self.lora_weight.device
+        assert attention_mask.device == self.lora_weight.device
+        vocabulary = torch.arange(19, device=input_ids.device, dtype=torch.float32)
+        centers = input_ids.to(torch.float32).unsqueeze(-1).remainder(19)
+        logits = -(vocabulary - centers).square() / 20
+        logits = logits + self.lora_weight * (vocabulary / 19)
+        return SimpleNamespace(logits=logits)
+
+
+class RecordingSGD(torch.optim.SGD):
+    def __init__(self, params: Iterable[nn.Parameter], *, lr: float) -> None:
+        materialized = list(params)
+        self.received_parameters = materialized
+        self.step_count = 0
+        super().__init__(materialized, lr=lr)
+
+    def step(self, closure: Any = None) -> Any:
+        self.step_count += 1
+        return super().step(closure)
+
+
+class OptimizerFactory:
+    def __init__(self) -> None:
+        self.optimizers: list[RecordingSGD] = []
+
+    def __call__(self, params: Iterable[nn.Parameter], *, lr: float) -> RecordingSGD:
+        optimizer = RecordingSGD(params, lr=lr)
+        self.optimizers.append(optimizer)
+        return optimizer
+
+
+class ToyCheckpointSaver:
+    def __init__(self) -> None:
+        self.calls: list[Path] = []
+
+    def __call__(self, model: ToyPolicy, destination: Path) -> Path:
+        self.calls.append(destination)
+        adapter = destination / "shared_policy"
+        adapter.mkdir(parents=True)
+        (adapter / "adapter_config.json").write_text("{}\n", encoding="utf-8")
+        torch.save({"lora_weight": model.lora_weight.detach()}, adapter / "adapter_model.bin")
+        return adapter
+
+
+def _example(kind: str, index: int) -> OPDExample:
+    return OPDExample(
+        example_id=f"{kind}-{index}",
+        kind=kind,
+        public_input={"visible": f"{kind}-{index}"},
+        privileged_hindsight={"secret": f"hindsight-{kind}-{index}"},
+        response_schema={"type": "object"},
+        sampling_contract={},
+        provenance={},
+    )
+
+
+def _write_dataset(
+    root: Path,
+    counts: dict[str, int],
+    *,
+    model_revision: str = "model-a",
+    adapter_revision: str | None = "adapter-a",
+) -> dict[str, list[OPDExample]]:
+    datasets = root / "datasets"
+    datasets.mkdir(parents=True)
+    examples: dict[str, list[OPDExample]] = {}
+    for kind in KINDS:
+        examples[kind] = [_example(kind, index) for index in range(counts.get(kind, 0))]
+        (datasets / f"{kind}.jsonl").write_text(
+            "".join(
+                json.dumps(example.model_dump(mode="json"), sort_keys=True) + "\n"
+                for example in examples[kind]
+            ),
+            encoding="utf-8",
+        )
+    (root / "dataset_manifest.json").write_text(
+        json.dumps(
+            {
+                "dataset_schema_version": 1,
+                "dataset_build_id": "dataset-a",
+                "policy_lineage": {
+                    "model_revision": model_revision,
+                    "adapter_revision": adapter_revision,
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return examples
+
+
+def _config(**overrides: Any) -> TrainingConfig:
+    values = {
+        "max_sequence_length": 128,
+        "per_device_batch_size": 1,
+        "gradient_accumulation_steps": 2,
+        "num_train_epochs": 1,
+        "generation_max_new_tokens": 3,
+        "learning_rate": 0.1,
+        **overrides,
+    }
+    return TrainingConfig(**values)
+
+
+def _request(dataset: Path, output: Path, *, resume_from: Path | None = None) -> TrainingRequest:
+    return TrainingRequest(
+        dataset_dir=dataset,
+        output_dir=output,
+        model_revision="model-a",
+        adapter_revision="adapter-a",
+        resume_from=resume_from,
+    )
+
+
+def _rows(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_online_generation_uses_only_public_prompts_and_balances_kinds(tmp_path: Path) -> None:
+    examples = _write_dataset(
+        tmp_path / "dataset", {"sel": 1, "act": 2, "write": 1, "maint": 1}
+    )
+    model = ToyPolicy().train()
+    saver = ToyCheckpointSaver()
+
+    result = OPDTrainer(
+        model,
+        ToyTokenizer(),
+        _config(),
+        RolloutConfig(temperature=0.7, top_p=0.8),
+        checkpoint_saver=saver,
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", tmp_path / "output"))
+
+    generations = _rows(result.output_dir / "training_generations.jsonl")
+    assert [row["kind"] for row in generations] == [*KINDS, *KINDS]
+    assert [row["example_id"] for row in generations] == [
+        "sel-0",
+        "act-0",
+        "write-0",
+        "maint-0",
+        "sel-0",
+        "act-1",
+        "write-0",
+        "maint-0",
+    ]
+    assert len(model.generate_calls) == 8
+    tokenizer = ToyTokenizer()
+    scheduled = [
+        examples[row["kind"]][int(row["example_id"].rsplit("-", 1)[1])]
+        for row in generations
+    ]
+    for call, example in zip(model.generate_calls, scheduled, strict=True):
+        expected = tokenizer(
+            render_public_prompt(example), add_special_tokens=False, return_tensors="pt"
+        )["input_ids"]
+        assert call["input_ids"].tolist() == expected.tolist()
+        assert call["training"] is False
+        assert call["grad_enabled"] is False
+        assert call["max_new_tokens"] == 3
+        assert call["temperature"] == 0.7
+        assert call["top_p"] == 0.8
+    assert model.training is True
+    assert all(row["response_ids"] for row in generations)
+
+
+def test_effective_batch_and_final_partial_average_each_optimizer_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 5})
+    model = ToyPolicy()
+    optimizer_factory = OptimizerFactory()
+
+    def constant_gradient_step(model: ToyPolicy, batch: Any) -> OPDStepResult:
+        del batch
+        loss = model.lora_weight
+        return OPDStepResult(loss=loss, metrics={"forward_kl": loss.detach()})
+
+    monkeypatch.setattr(
+        "tau3_retail_evolver.slow_loop.trainer.shared_policy_opd_step",
+        constant_gradient_step,
+    )
+    result = OPDTrainer(
+        model,
+        ToyTokenizer(),
+        _config(per_device_batch_size=2, gradient_accumulation_steps=2),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=optimizer_factory,
+    ).train(_request(tmp_path / "dataset", tmp_path / "output"))
+
+    optimizer = optimizer_factory.optimizers[0]
+    assert optimizer.received_parameters == [model.lora_weight]
+    assert optimizer.step_count == result.optimizer_steps == 2
+    assert model.lora_weight.item() == pytest.approx(0.3)
+    metrics = _rows(result.output_dir / "training_metrics.jsonl")
+    assert [row["optimizer_window_size"] for row in metrics] == [4, 4, 4, 4, 1]
+
+
+@pytest.mark.parametrize(
+    ("model_revision", "adapter_revision", "match"),
+    (("model-b", "adapter-a", "model_revision"), ("model-a", "adapter-b", "adapter_revision")),
+)
+def test_rejects_source_lineage_mismatch_before_generation(
+    tmp_path: Path,
+    model_revision: str,
+    adapter_revision: str,
+    match: str,
+) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 1})
+    model = ToyPolicy()
+
+    with pytest.raises(ValueError, match=match):
+        OPDTrainer(
+            model,
+            ToyTokenizer(),
+            _config(),
+            RolloutConfig(),
+            checkpoint_saver=ToyCheckpointSaver(),
+            optimizer_factory=OptimizerFactory(),
+        ).train(
+            TrainingRequest(
+                dataset_dir=tmp_path / "dataset",
+                output_dir=tmp_path / "output",
+                model_revision=model_revision,
+                adapter_revision=adapter_revision,
+            )
+        )
+
+    assert model.generate_calls == []
+
+
+def test_checkpoint_contains_adapter_optimizer_and_atomic_json_manifests_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 2})
+    saver = ToyCheckpointSaver()
+    replacements: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def record_replace(source: str | Path, destination: str | Path) -> None:
+        replacements.append((Path(source), Path(destination)))
+        real_replace(source, destination)
+
+    monkeypatch.setattr("tau3_retail_evolver.slow_loop.trainer.os.replace", record_replace)
+    result = OPDTrainer(
+        ToyPolicy(),
+        ToyTokenizer(),
+        _config(),
+        RolloutConfig(),
+        checkpoint_saver=saver,
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", tmp_path / "output"))
+
+    checkpoint = result.latest_checkpoint
+    assert saver.calls == [checkpoint / "adapter"]
+    assert (checkpoint / "adapter" / "shared_policy" / "adapter_config.json").is_file()
+    assert (checkpoint / "optimizer.pt").is_file()
+    assert (checkpoint / "checkpoint_manifest.json").is_file()
+    assert (result.output_dir / "training_manifest.json").is_file()
+    assert not list(result.output_dir.rglob("pytorch_model*"))
+    assert not list(result.output_dir.rglob("*.tmp-*"))
+    replaced_names = [destination.name for _, destination in replacements]
+    assert "checkpoint_manifest.json" in replaced_names
+    assert "training_manifest.json" in replaced_names
+
+
+def test_failed_example_is_not_appended_and_empty_response_is_rejected(tmp_path: Path) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 1})
+    model = ToyPolicy()
+    model.empty_generation = True
+
+    with pytest.raises(ValueError, match="nonempty response suffix"):
+        OPDTrainer(
+            model,
+            ToyTokenizer(),
+            _config(),
+            RolloutConfig(),
+            checkpoint_saver=ToyCheckpointSaver(),
+            optimizer_factory=OptimizerFactory(),
+        ).train(_request(tmp_path / "dataset", tmp_path / "output"))
+
+    generations = tmp_path / "output" / "training_generations.jsonl"
+    metrics = tmp_path / "output" / "training_metrics.jsonl"
+    assert not generations.exists() or generations.read_text(encoding="utf-8") == ""
+    assert not metrics.exists() or metrics.read_text(encoding="utf-8") == ""
+
+
+def test_resume_uses_latest_completed_step_and_removes_uncommitted_rows(tmp_path: Path) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 6})
+    output = tmp_path / "output"
+    model = ToyPolicy()
+    model.fail_on_generate_call = 6
+    trainer = OPDTrainer(
+        model,
+        ToyTokenizer(),
+        _config(per_device_batch_size=2, gradient_accumulation_steps=2),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    )
+
+    with pytest.raises(RuntimeError, match="injected generation failure"):
+        trainer.train(_request(tmp_path / "dataset", output))
+
+    checkpoint = output / "checkpoints" / "step-00000001"
+    assert checkpoint.is_dir()
+    assert [row["sequence_index"] for row in _rows(output / "training_generations.jsonl")] == [
+        0,
+        1,
+        2,
+        3,
+        4,
+    ]
+
+    model.fail_on_generate_call = None
+    result = OPDTrainer(
+        model,
+        ToyTokenizer(),
+        _config(per_device_batch_size=2, gradient_accumulation_steps=2),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", output, resume_from=checkpoint))
+
+    generations = _rows(result.output_dir / "training_generations.jsonl")
+    assert [row["sequence_index"] for row in generations] == list(range(6))
+    assert len({row["sequence_index"] for row in generations}) == 6
+    assert result.completed_examples == 6
+    assert result.optimizer_steps == 2
+
+
+def test_resume_rejects_training_config_mismatch(tmp_path: Path) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 2})
+    output = tmp_path / "output"
+    first = OPDTrainer(
+        ToyPolicy(),
+        ToyTokenizer(),
+        _config(),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", output))
+
+    with pytest.raises(ValueError, match="training config"):
+        OPDTrainer(
+            ToyPolicy(),
+            ToyTokenizer(),
+            _config(learning_rate=0.2),
+            RolloutConfig(),
+            checkpoint_saver=ToyCheckpointSaver(),
+            optimizer_factory=OptimizerFactory(),
+        ).train(_request(tmp_path / "dataset", output, resume_from=first.latest_checkpoint))
+
+
+def test_resume_republishes_a_missing_final_training_manifest(tmp_path: Path) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 2})
+    output = tmp_path / "output"
+    model = ToyPolicy()
+    first = OPDTrainer(
+        model,
+        ToyTokenizer(),
+        _config(),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", output))
+    (output / "training_manifest.json").unlink()
+
+    resumed = OPDTrainer(
+        model,
+        ToyTokenizer(),
+        _config(),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", output, resume_from=first.latest_checkpoint))
+
+    assert resumed.manifest["status"] == "complete"
+    assert resumed.manifest["completed_examples"] == 2
+    assert resumed.manifest["latest_checkpoint"] == "checkpoints/step-00000001"
