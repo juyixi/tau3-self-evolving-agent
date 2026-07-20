@@ -46,6 +46,16 @@ slow_loop:
   max_redundancy_pairs: 50
 training:
   seed: 42
+  dtype: bfloat16
+  target_modules: all-linear
+  max_sequence_length: 8192
+  gradient_checkpointing: true
+  learning_rate: 1.0e-5
+  per_device_batch_size: 2
+  gradient_accumulation_steps: 4
+  num_train_epochs: 3
+  generation_max_new_tokens: 512
+  loss_type: forward_kl
 evaluation:
   nl_assertions:
     model: openrouter/openai/gpt-4.1

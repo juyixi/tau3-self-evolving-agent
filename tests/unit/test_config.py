@@ -19,6 +19,21 @@ def test_project_requires_python_312_through_313() -> None:
     assert project["project"]["requires-python"] == ">=3.12,<3.14"
 
 
+def test_training_dependencies_are_optional() -> None:
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as project_file:
+        project = tomllib.load(project_file)
+
+    training_dependencies = project["project"]["optional-dependencies"]["training"]
+
+    assert {dependency.split(">=", 1)[0] for dependency in training_dependencies} == {
+        "accelerate",
+        "peft",
+        "safetensors",
+        "torch",
+        "transformers",
+    }
+
+
 def test_default_config_has_the_required_retail_environment() -> None:
     config = load_config(PROJECT_ROOT / "configs" / "default.yaml")
 
@@ -61,6 +76,10 @@ def test_default_config_has_the_required_retail_environment() -> None:
     }
     assert config.slow_loop.redundancy_threshold == 0.90
     assert config.slow_loop.max_redundancy_pairs == 50
+    assert config.training.dtype == "bfloat16"
+    assert config.training.max_sequence_length == 8192
+    assert config.training.loss_type == "forward_kl"
+    assert config.training.target_modules == "all-linear"
     assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
     assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}
     assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"

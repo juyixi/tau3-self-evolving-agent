@@ -79,6 +79,16 @@ class MemoryConfig(_ConfigModel):
 
 class TrainingConfig(_ConfigModel):
     seed: int = 42
+    dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16"
+    target_modules: str | tuple[str, ...] = "all-linear"
+    max_sequence_length: int = Field(default=8192, ge=128)
+    gradient_checkpointing: StrictBool = True
+    learning_rate: float = Field(default=1e-5, gt=0)
+    per_device_batch_size: int = Field(default=2, ge=1)
+    gradient_accumulation_steps: int = Field(default=4, ge=1)
+    num_train_epochs: int = Field(default=3, ge=1)
+    generation_max_new_tokens: int = Field(default=512, ge=1)
+    loss_type: Literal["forward_kl"] = "forward_kl"
 
 
 class SlowLoopConfig(_ConfigModel):
