@@ -52,20 +52,19 @@ def _public_context() -> dict[str, object]:
     }
 
 
-def _diagnostic_item(index: int = 1) -> dict[str, object]:
+def _diagnostic_item(index: int = 1, tier: str = "tip") -> dict[str, object]:
     return {
         "id": f"memory-{index}",
+        "tier": tier,
         "content": "Confirm the order before changing it.",
         "version": 1,
-        "usage_count": 2,
-        "success_count": 1,
-        "last_used": "2026-07-13T00:00:00Z",
+        "status": "active",
     }
 
 
 def _maintenance_diagnostics() -> dict[str, object]:
     return {
-        tier: {"items": [_diagnostic_item()]}
+        tier: {"items": [_diagnostic_item(tier=tier)]}
         for tier in ("trajectory", "tip", "skill", "tool")
     }
 
@@ -143,6 +142,15 @@ def test_maintenance_prompt_requires_exactly_four_tier_item_lists() -> None:
 def test_maintenance_prompt_rejects_unknown_item_fields() -> None:
     diagnostics = _maintenance_diagnostics()
     diagnostics["tip"]["items"][0]["arbitrary"] = "hidden"
+
+    with pytest.raises(ValueError):
+        build_maintenance_prompt(diagnostics=diagnostics)
+
+
+@pytest.mark.parametrize("private_field", ["usage_count", "success_count", "last_used"])
+def test_maintenance_prompt_rejects_private_usage_fields(private_field: str) -> None:
+    diagnostics = _maintenance_diagnostics()
+    diagnostics["tip"]["items"][0][private_field] = 1
 
     with pytest.raises(ValueError):
         build_maintenance_prompt(diagnostics=diagnostics)

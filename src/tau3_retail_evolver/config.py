@@ -6,7 +6,7 @@ import re
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 from tau3_retail_evolver.credential_policy import is_credential_key
 
@@ -81,6 +81,26 @@ class TrainingConfig(_ConfigModel):
     seed: int = 42
 
 
+class SlowLoopConfig(_ConfigModel):
+    tier_priors: dict[Literal["trajectory", "tip", "skill", "tool"], float] = Field(
+        default_factory=lambda: {
+            "trajectory": 0.9,
+            "tip": 0.8,
+            "skill": 1.0,
+            "tool": 1.2,
+        }
+    )
+    redundancy_threshold: float = Field(default=0.90, ge=-1.0, le=1.0)
+    max_redundancy_pairs: int = Field(default=50, ge=0)
+
+    @model_validator(mode="after")
+    def tier_priors_must_have_exact_keys(self) -> "SlowLoopConfig":
+        expected = {"trajectory", "tip", "skill", "tool"}
+        if set(self.tier_priors) != expected:
+            raise ValueError("tier_priors must define exactly trajectory, tip, skill, and tool")
+        return self
+
+
 class NLAssertionsConfig(_ConfigModel):
     model: str = "openrouter/openai/gpt-4.1"
     model_args: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0})
@@ -120,6 +140,7 @@ class ProjectConfig(_ConfigModel):
     lora: LoraConfig = Field(default_factory=LoraConfig)
     rollout: RolloutConfig = Field(default_factory=RolloutConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    slow_loop: SlowLoopConfig = Field(default_factory=SlowLoopConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
 

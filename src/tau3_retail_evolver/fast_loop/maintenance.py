@@ -88,11 +88,10 @@ def bounded_diagnostics(
                 "items": [
                     {
                         "id": item.id,
+                        "tier": item.tier.value,
                         "content": item.content[:MAX_DIAGNOSTIC_CONTENT_CHARS],
                         "version": item.version,
-                        "usage_count": item.usage_count,
-                        "success_count": item.success_count,
-                        "last_used": item.last_used,
+                        "status": item.status.value,
                     }
                     for item in items
                 ]

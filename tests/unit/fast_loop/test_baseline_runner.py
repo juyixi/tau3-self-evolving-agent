@@ -148,7 +148,7 @@ def test_runs_two_tasks_with_canonical_auditable_event_order_and_closes_environm
         "EpisodeFinished",
     ]
     for event in events.events:
-        assert event["schema_version"] == 1
+        assert event["schema_version"] == 2
         assert {
             "run_id": "baseline-001",
             "iteration": 0,

@@ -258,11 +258,10 @@ def test_bounded_diagnostics_are_public_active_complete_and_deterministic(
     assert all(len(tier_data["items"]) == 1 for tier_data in diagnostics.values())
     allowed = {
         "id",
+        "tier",
         "content",
         "version",
-        "usage_count",
-        "success_count",
-        "last_used",
+        "status",
     }
     for tier_data in diagnostics.values():
         assert all(set(item) == allowed for item in tier_data["items"])

@@ -312,6 +312,13 @@ def _install_main_dependencies(
         task_ids=lambda split: ("task-1", "task-2"),
         require_official_compatibility=lambda: ordering.append("catalog-official"),
     )
+    task_group_signatures = {
+        "task-1": f"retail-actions-v1:{'1' * 64}",
+        "task-2": f"retail-actions-v1:{'2' * 64}",
+    }
+    task_groups = SimpleNamespace(
+        signature_for=lambda task_id: task_group_signatures[task_id]
+    )
     ordering: list[str] = []
     captured: dict[str, Any] = {}
 
@@ -418,6 +425,14 @@ def _install_main_dependencies(
         "RetailTaskCatalog",
         SimpleNamespace(
             from_files=lambda tasks_path, split_path: ordering.append("catalog") or catalog
+        ),
+    )
+    monkeypatch.setattr(
+        run_fast_loop,
+        "RetailTaskGroups",
+        SimpleNamespace(
+            from_file=lambda tasks_path, *, task_ids: ordering.append("task-groups")
+            or task_groups
         ),
     )
     monkeypatch.setattr(run_fast_loop, "Tau2RetailEnv", FakeEnvironment)
@@ -686,11 +701,14 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
     assert all(context.adapter_revision == "adapter-revision-b" for context in episode_contexts)
     assert episode_contexts[0].memory_snapshot_id == manifest["memory_snapshot_id"]
     assert episode_contexts[1].memory_snapshot_id != episode_contexts[0].memory_snapshot_id
-    assert all(
-        context.task_group_for(task_id) == "retail"
+    assert [
+        context.task_group_for(task_id)
         for context, task_id in zip(episode_contexts, captured_tasks, strict=True)
+    ] == [f"retail-actions-v1:{'1' * 64}", f"retail-actions-v1:{'2' * 64}"]
+    assert all(
+        context.default_task_group == "retail-actions-v1:maintenance"
+        for context in episode_contexts
     )
-    assert all(context.default_task_group == "retail" for context in episode_contexts)
     maintenance_contexts = captured["maintenance_contexts"]
     assert maintenance_contexts[0].memory_snapshot_id == episode_contexts[1].memory_snapshot_id
     assert maintenance_contexts[1].memory_snapshot_id == summary["output_memory_snapshot_id"]
@@ -698,6 +716,7 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
     assert manifest["parent_checkpoint"] is None
     assert manifest["task_ids"] == ["task-1", "task-2"]
     assert manifest["rollout_options"]["memory_enabled"] is True
+    assert manifest["rollout_options"]["memory_agent_id"] == "retail"
     assert summary == {
         "completed_train_tasks_after": 27,
         "completed_train_tasks_before": 25,
@@ -727,6 +746,7 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         "runtime-pin",
         "catalog",
         "catalog-official",
+        "task-groups",
         "gym",
         "assertions",
         "environment:task-1",
@@ -755,7 +775,11 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         json.loads(line)
         for line in (run_path / "rollouts" / "events.jsonl").read_text("utf-8").splitlines()
     ]
-    assert {event["task_group"] for event in rollout_events} == {"retail"}
+    assert {event["schema_version"] for event in rollout_events} == {2}
+    assert {event["task_group"] for event in rollout_events} == {
+        f"retail-actions-v1:{'1' * 64}",
+        f"retail-actions-v1:{'2' * 64}",
+    }
     all_artifacts = "\n".join(
         path.read_text(encoding="utf-8")
         for path in tmp_path.rglob("*")
@@ -886,6 +910,7 @@ def test_disables_memory_dependencies_and_records_no_memory_provenance(
     assert returncode == 0
     assert all(context.memory_snapshot_id is None for context in episode_contexts)
     assert manifest["rollout_options"]["memory_enabled"] is False
+    assert manifest["rollout_options"]["memory_agent_id"] is None
     assert manifest["memory_snapshot_id"] is None
     assert summary["memory_enabled"] is False
     assert summary["input_memory_snapshot_id"] is None

@@ -48,17 +48,14 @@ class _PromptModel(BaseModel):
 
 class MaintenanceDiagnosticItem(_PromptModel):
     id: str = Field(min_length=1, max_length=256)
+    tier: Literal["trajectory", "tip", "skill", "tool"]
     content: str = Field(min_length=1, max_length=MAX_DIAGNOSTIC_CONTENT_CHARS)
     version: int = Field(ge=1)
-    usage_count: int = Field(default=0, ge=0)
-    success_count: int = Field(default=0, ge=0)
-    last_used: str | None = Field(default=None, max_length=128)
+    status: Literal["active", "retired"]
 
-    @field_validator("id", "content", "last_used")
+    @field_validator("id", "content")
     @classmethod
-    def text_must_not_be_blank(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def text_must_not_be_blank(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("diagnostic text must not be blank")

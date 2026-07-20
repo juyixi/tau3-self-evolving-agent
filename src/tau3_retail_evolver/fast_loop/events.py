@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class RunMode(StrEnum):

@@ -36,6 +36,7 @@ from tau3_retail_evolver.models.openai_compatible import (
     OpenAICompatibleHttpClient,
 )
 from tau3_retail_evolver.runs.manifest import create_manifest
+from tau3_retail_evolver.slow_loop.task_grouping import RetailTaskGroups
 
 
 MODEL_SERVING_CONTRACT = {
@@ -95,6 +96,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     base_url = _validate_qwen_base_url(args.qwen_base_url or os.environ.get("QWEN_BASE_URL"))
     if not base_url:
         raise ValueError("QWEN_BASE_URL or --qwen-base-url is required")
+
+    task_groups = RetailTaskGroups.from_file(
+        runtime.retail_tasks_path,
+        task_ids=args.task_ids,
+    )
 
     gym_factory = Tau2Runtime.load_verified_gym_factory(runtime.repo_path)
     evaluation_provenance = bind_tau2_nl_assertions(config.evaluation.nl_assertions)
@@ -163,6 +169,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "top_p": config.rollout.top_p,
             "max_episode_steps": config.rollout.max_episode_steps,
             "memory_enabled": fast_loop_config.memory_enabled,
+            "memory_agent_id": (
+                config.memory.agent_id if fast_loop_config.memory_enabled else None
+            ),
         },
         model_serving_contract=MODEL_SERVING_CONTRACT,
         evaluation_config={"nl_assertions": evaluation_provenance},
@@ -178,10 +187,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=config.training.seed,
         event_writer=JsonlWriter(run_path / "rollouts" / "events.jsonl"),
         mode=RunMode.LEARN,
-        task_groups={task_id: "retail" for task_id in args.task_ids},
+        task_groups={
+            task_id: task_groups.signature_for(task_id) for task_id in args.task_ids
+        },
         temperature=config.rollout.temperature,
         top_p=config.rollout.top_p,
-        default_task_group="retail",
+        default_task_group="retail-actions-v1:maintenance",
     )
     results, maintenance_rounds = _run_requested_tasks(
         task_ids=tuple(args.task_ids),

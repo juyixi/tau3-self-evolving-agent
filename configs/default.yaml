@@ -36,6 +36,14 @@ memory:
   embedding_max_length: 2048
   embedding_batch_size: 16
   embedding_cache: true
+slow_loop:
+  tier_priors:
+    trajectory: 0.9
+    tip: 0.8
+    skill: 1.0
+    tool: 1.2
+  redundancy_threshold: 0.90
+  max_redundancy_pairs: 50
 training:
   seed: 42
 evaluation:

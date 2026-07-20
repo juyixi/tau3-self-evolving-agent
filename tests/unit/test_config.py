@@ -6,7 +6,7 @@ import tomllib
 import pytest
 from pydantic import ValidationError
 
-from tau3_retail_evolver.config import ProjectConfig, load_config
+from tau3_retail_evolver.config import ProjectConfig, SlowLoopConfig, load_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -53,9 +53,37 @@ def test_default_config_has_the_required_retail_environment() -> None:
         "embedding_batch_size": 16,
         "embedding_cache": True,
     }
+    assert config.slow_loop.tier_priors == {
+        "trajectory": 0.9,
+        "tip": 0.8,
+        "skill": 1.0,
+        "tool": 1.2,
+    }
+    assert config.slow_loop.redundancy_threshold == 0.90
+    assert config.slow_loop.max_redundancy_pairs == 50
     assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
     assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}
     assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
+
+
+@pytest.mark.parametrize(
+    "tier_priors",
+    [
+        {"trajectory": 0.9, "tip": 0.8, "skill": 1.0},
+        {
+            "trajectory": 0.9,
+            "tip": 0.8,
+            "skill": 1.0,
+            "tool": 1.2,
+            "other": 1.0,
+        },
+    ],
+)
+def test_slow_loop_tier_priors_require_exact_keys(
+    tier_priors: dict[str, float],
+) -> None:
+    with pytest.raises(ValidationError, match="tier_priors"):
+        SlowLoopConfig(tier_priors=tier_priors)
 
 
 def test_memory_config_accepts_yaml_false(tmp_path: Path) -> None:
