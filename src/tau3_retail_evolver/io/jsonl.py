@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 class JsonlWriter:
@@ -24,6 +24,27 @@ class JsonlWriter:
             destination.flush()
             os.fsync(destination.fileno())
         _fsync_directory(self.path.parent)
+
+
+def iter_jsonl_objects(path: Path) -> Iterator[dict[str, Any]]:
+    """Yield JSON objects while preserving path and line diagnostics."""
+    try:
+        source = path.open(encoding="utf-8")
+    except OSError as error:
+        raise ValueError(f"unable to read JSONL file: {path}") from error
+    with source:
+        for line_number, raw_line in enumerate(source, start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                value = json.loads(raw_line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"invalid JSONL at {path}:{line_number}") from error
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"JSONL row must be a JSON object at {path}:{line_number}"
+                )
+            yield value
 
 
 def _fsync_directory(path: Path) -> None:

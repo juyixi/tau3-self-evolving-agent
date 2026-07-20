@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tau3_retail_evolver.io.jsonl import JsonlWriter
+import pytest
+
+from tau3_retail_evolver.io.jsonl import JsonlWriter, iter_jsonl_objects
 import tau3_retail_evolver.io.jsonl as jsonl
 
 
@@ -39,3 +41,24 @@ def test_best_effort_syncs_the_parent_directory_after_an_append(
     JsonlWriter(tmp_path / "events.jsonl").append({"event_type": "EpisodeStarted"})
 
     assert synced == [tmp_path]
+
+
+def test_iter_jsonl_objects_reports_path_and_line(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text('{"ok":true}\nnot-json\n', encoding="utf-8")
+
+    iterator = iter_jsonl_objects(path)
+
+    assert next(iterator) == {"ok": True}
+    with pytest.raises(ValueError, match=r"events\.jsonl:2"):
+        next(iterator)
+
+
+def test_iter_jsonl_objects_skips_blank_lines_and_rejects_non_objects(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text('\n[]\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"JSON object.*events\.jsonl:2"):
+        list(iter_jsonl_objects(path))
