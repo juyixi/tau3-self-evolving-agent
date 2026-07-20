@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import random
+import re
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -157,6 +158,7 @@ def _resolve_resume_adapter(
         raise ValueError(f"resume checkpoint does not exist: {checkpoint}")
     if checkpoint.parent.parent != output_dir:
         raise ValueError("resume checkpoint must be under output_dir/checkpoints")
+    _require_latest_published_checkpoint(checkpoint)
     manifest = _read_json_object(checkpoint / "checkpoint_manifest.json")
     if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
         raise ValueError("resume checkpoint schema_version must be 1")
@@ -216,6 +218,21 @@ def _resolve_resume_adapter(
     if not (checkpoint / "rng_state.pt").is_file():
         raise ValueError("resume checkpoint rng_state.pt is missing")
     return adapter_path
+
+
+def _require_latest_published_checkpoint(checkpoint: Path) -> None:
+    candidates = [
+        child.resolve()
+        for child in checkpoint.parent.iterdir()
+        if child.is_dir()
+        and re.fullmatch(r"step-(\d{8})", child.name)
+        and (child / "checkpoint_manifest.json").is_file()
+    ]
+    if not candidates:
+        raise ValueError("resume output has no published checkpoints")
+    latest = max(candidates, key=lambda path: int(path.name.removeprefix("step-")))
+    if checkpoint != latest:
+        raise ValueError(f"resume checkpoint must be the latest published checkpoint: {latest}")
 
 
 def _positive_manifest_int(manifest: Mapping[str, Any], field: str) -> int:

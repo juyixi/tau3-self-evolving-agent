@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import shutil
 from typing import Any
 import uuid
@@ -258,6 +259,7 @@ class OPDTrainer:
         checkpoint: Path,
         schedule_fingerprint: str,
     ) -> tuple[int, int]:
+        _require_latest_published_checkpoint(checkpoint)
         if manifest.get("schema_version") != _MANIFEST_SCHEMA_VERSION:
             raise ValueError("resume checkpoint schema mismatch")
         if manifest.get("dataset_build_id") != dataset_manifest.get("dataset_build_id"):
@@ -353,6 +355,21 @@ def _load_examples(dataset_dir: Path) -> dict[str, tuple[OPDExample, ...]]:
             raise ValueError(f"dataset kind mismatch in {path}")
         examples[kind] = rows
     return examples
+
+
+def _require_latest_published_checkpoint(checkpoint: Path) -> None:
+    candidates = [
+        child.resolve()
+        for child in checkpoint.parent.iterdir()
+        if child.is_dir()
+        and re.fullmatch(r"step-(\d{8})", child.name)
+        and (child / "checkpoint_manifest.json").is_file()
+    ]
+    if not candidates:
+        raise ValueError("resume output has no published checkpoints")
+    latest = max(candidates, key=lambda path: int(path.name.removeprefix("step-")))
+    if checkpoint != latest:
+        raise ValueError(f"resume checkpoint must be the latest published checkpoint: {latest}")
 
 
 def _build_schedule(

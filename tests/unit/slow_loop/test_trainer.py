@@ -155,19 +155,28 @@ class ToyCheckpointSaver:
         (adapter / "stage6_adapter_contract.json").write_text(
             json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "requested_target_modules": "all-linear",
                     "resolved_target_modules": ["q_proj"],
+                    "eligible_linear_modules": ["q_proj"],
+                    "targeted_module_instances": ["q_proj"],
                     "options": {
                         "alpha_pattern": {},
                         "bias": "none",
+                        "exclude_modules": None,
                         "init_lora_weights": True,
+                        "layer_replication": None,
+                        "layers_pattern": None,
+                        "layers_to_transform": None,
                         "lora_alpha": 64,
+                        "lora_bias": False,
                         "lora_dropout": 0.05,
                         "modules_to_save": None,
                         "r": 32,
                         "rank_pattern": {},
                         "task_type": "CAUSAL_LM",
+                        "target_parameters": None,
+                        "trainable_token_indices": None,
                         "use_dora": False,
                         "use_rslora": False,
                     },
@@ -566,6 +575,48 @@ def test_resume_uses_latest_completed_step_and_removes_uncommitted_rows(tmp_path
     assert len({row["sequence_index"] for row in generations}) == 6
     assert result.completed_examples == 6
     assert result.optimizer_steps == 2
+
+
+def test_resume_rejects_a_stale_checkpoint_before_mutating_logs(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset"
+    output = tmp_path / "output"
+    _write_dataset(dataset, {"sel": 2})
+    config = _config(per_device_batch_size=1, gradient_accumulation_steps=1)
+    OPDTrainer(
+        ToyPolicy(),
+        ToyTokenizer(),
+        config,
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(dataset, output))
+
+    stale_checkpoint = output / "checkpoints" / "step-00000001"
+    adapter_path = _checkpoint_adapter_path(stale_checkpoint)
+    generations = output / "training_generations.jsonl"
+    metrics = output / "training_metrics.jsonl"
+    original_generations = generations.read_bytes()
+    original_metrics = metrics.read_bytes()
+
+    with pytest.raises(ValueError, match="latest published checkpoint"):
+        OPDTrainer(
+            _load_toy_policy(adapter_path),
+            ToyTokenizer(),
+            config,
+            RolloutConfig(),
+            checkpoint_saver=ToyCheckpointSaver(),
+            optimizer_factory=OptimizerFactory(),
+        ).train(
+            _request(
+                dataset,
+                output,
+                resume_from=stale_checkpoint,
+                loaded_adapter_path=adapter_path,
+            )
+        )
+
+    assert generations.read_bytes() == original_generations
+    assert metrics.read_bytes() == original_metrics
 
 
 def test_stochastic_resume_matches_uninterrupted_training_with_fresh_loaded_model(

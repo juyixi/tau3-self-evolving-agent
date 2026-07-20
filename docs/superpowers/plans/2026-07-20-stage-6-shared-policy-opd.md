@@ -33,7 +33,7 @@
 **Interfaces:**
 - Produces: `TrainingConfig` fields consumed by the loader, generator, trainer, and CLI.
 
-- [ ] **Step 1: Write failing configuration tests**
+- [x] **Step 1: Write failing configuration tests**
 
 ```python
 assert config.training.dtype == "bfloat16"
@@ -42,13 +42,13 @@ assert config.training.loss_type == "forward_kl"
 assert config.training.target_modules == "all-linear"
 ```
 
-- [ ] **Step 2: Run the focused tests**
+- [x] **Step 2: Run the focused tests**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/test_config.py -q`
 
 Expected: FAIL because the Stage 6 fields do not exist.
 
-- [ ] **Step 3: Add exact validated settings and optional dependencies**
+- [x] **Step 3: Add exact validated settings and optional dependencies**
 
 ```python
 class TrainingConfig(_ConfigModel):
@@ -67,7 +67,7 @@ class TrainingConfig(_ConfigModel):
 
 Add a `training` optional-dependency group containing compatible `torch`, `transformers`, `peft`, `accelerate`, and `safetensors` requirements without forcing them into baseline-only installs.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/test_config.py -q`
 
@@ -87,7 +87,7 @@ Commit: `feat: configure stage 6 opd training`
 - Consumes: `OPDExample`, a Transformers-compatible tokenizer/processor, and generated response token IDs.
 - Produces: `AlignedOPDBatch`, `render_public_prompt`, `render_teacher_prompt`, and `build_aligned_batch`.
 
-- [ ] **Step 1: Write toy-tokenizer tests**
+- [x] **Step 1: Write toy-tokenizer tests**
 
 ```python
 batch = build_aligned_batch(example, tokenizer, response_ids=(41, 42), max_length=32)
@@ -98,13 +98,13 @@ assert batch.teacher_input_ids[batch.teacher_response_positions].tolist() == [41
 
 Cover all four `kind` values, deterministic JSON rendering, prompt-token masking, paired truncation, and rejection when the response alone exceeds `max_length`.
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/slow_loop/test_alignment.py -q`
 
 Expected: FAIL because `alignment.py` is absent.
 
-- [ ] **Step 3: Implement explicit prompt and position mapping**
+- [x] **Step 3: Implement explicit prompt and position mapping**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -119,7 +119,7 @@ class AlignedOPDBatch:
 
 Serialize `public_input`, `privileged_hindsight`, and `response_schema` as canonical JSON instructions. Encode public and privileged prompts independently, append the same response IDs, truncate only from the left side of each prompt, and preserve every response token.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/slow_loop/test_alignment.py -q`
 
@@ -140,7 +140,7 @@ Commit: `feat: align public and privileged opd prefixes`
 **Interfaces:**
 - Produces: `token_forward_kl`, `OPDStepResult`, and `shared_policy_opd_step`.
 
-- [ ] **Step 1: Write hand-computed loss tests**
+- [x] **Step 1: Write hand-computed loss tests**
 
 ```python
 loss = token_forward_kl(student_logits, teacher_logits, student_positions, teacher_positions)
@@ -150,17 +150,17 @@ torch.testing.assert_close(loss, expected)
 
 Also assert identical logits give zero, prompt positions do not affect loss, full vocabulary contributes, and teacher logits have no gradient.
 
-- [ ] **Step 2: Write observable shared-model tests**
+- [x] **Step 2: Write observable shared-model tests**
 
 Use one toy causal module that records `self.training`, `torch.is_grad_enabled()`, input IDs, and parameter data pointers. Assert teacher runs first in eval/no-grad, student runs second with gradients, both calls use one object and storage, and the original mode is restored.
 
-- [ ] **Step 3: Verify failure**
+- [x] **Step 3: Verify failure**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/slow_loop/test_loss.py tests/unit/slow_loop/test_opd_step.py -q`
 
 Expected: FAIL because the modules are absent.
 
-- [ ] **Step 4: Implement the paper-exact step**
+- [x] **Step 4: Implement the paper-exact step**
 
 ```python
 with torch.no_grad():
@@ -173,7 +173,7 @@ loss = token_forward_kl(student_logits, teacher_logits, student_positions, teach
 
 Return detached scalar metrics but leave `loss` attached for caller-controlled accumulation and backward.
 
-- [ ] **Step 5: Run focused tests and commit**
+- [x] **Step 5: Run focused tests and commit**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/slow_loop/test_loss.py tests/unit/slow_loop/test_opd_step.py -q`
 
@@ -195,25 +195,25 @@ Commit: `feat: add shared policy forward kl step`
 **Interfaces:**
 - Produces: `build_lora_config`, `load_qwen35_processor`, `load_shared_qwen35_policy`, `assert_only_lora_trainable`, and `save_adapter_checkpoint`.
 
-- [ ] **Step 1: Write mocked PEFT tests**
+- [x] **Step 1: Write mocked PEFT tests**
 
 Assert `LoraConfig(r=32, lora_alpha=64, lora_dropout=0.05, init_lora_weights=True, target_modules="all-linear", task_type="CAUSAL_LM")`, reject non-zero-impact initializers, freeze every non-LoRA parameter, and reject saving any base-model tensor.
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py -q`
 
 Expected: FAIL because the loader modules are absent.
 
-- [ ] **Step 3: Implement lazy optional imports and adapter lifecycle**
+- [x] **Step 3: Implement lazy optional imports and adapter lifecycle**
 
 Load the processor and `AutoModelForCausalLM` from a local path or Hugging Face ID, map configured dtype to `torch.dtype`, enable gradient checkpointing, disable KV cache during training, create or load exactly one adapter, and validate trainable parameter names/counts.
 
-- [ ] **Step 4: Add opt-in GPU integration coverage**
+- [x] **Step 4: Add opt-in GPU integration coverage**
 
 Gate real model loading behind `RUN_QWEN35_INTEGRATION=1`; verify Qwen base parameters have no gradients, LoRA B matrices start at zero, one shared forward is finite, and adapter reload succeeds.
 
-- [ ] **Step 5: Run focused tests and commit**
+- [x] **Step 5: Run focused tests and commit**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py tests/integration/test_qwen35_loader.py -q`
 
@@ -233,17 +233,17 @@ Commit: `feat: load qwen35 with zero impact lora`
 - Consumes: Stage 5 `dataset_manifest.json` and `datasets/{sel,act,write,maint}.jsonl`.
 - Produces: `OPDTrainer`, `TrainingRequest`, `TrainingResult`, adapter checkpoint directories, `training_generations.jsonl`, `training_metrics.jsonl`, and `training_manifest.json`.
 
-- [ ] **Step 1: Write CPU toy-model trainer tests**
+- [x] **Step 1: Write CPU toy-model trainer tests**
 
 Cover online generation, equal kind round-robin sampling, accumulation, final partial accumulation, source revision mismatch, adapter-only save, atomic manifest publication, and resume from the latest completed optimizer step.
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/slow_loop/test_trainer.py -q`
 
 Expected: FAIL because the trainer is absent.
 
-- [ ] **Step 3: Implement the minimal trainer**
+- [x] **Step 3: Implement the minimal trainer**
 
 ```python
 for example in balanced_examples:
@@ -255,7 +255,7 @@ for example in balanced_examples:
 
 Clip no gradients by default, step only LoRA optimizer parameters, append generation/metric JSONL rows after successful examples, and save adapter checkpoints with exact dataset/model/adapter lineage.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/slow_loop/test_trainer.py -q`
 

@@ -348,3 +348,37 @@ exit 0
 - Real Qwen3.5-9B BF16 execution, VRAM fit, checkpointed backward, adapter
   reload, and exact PEFT-version behavior remain pending on the intended GPU
   host with the immutable model revision already cached.
+
+## Final Review Fixes
+
+The final whole-branch review identified two remaining correctness gaps. Both
+were reproduced with failing tests before production changes:
+
+- Selecting an older published checkpoint could truncate committed JSONL logs
+  and then fail while trying to overwrite a newer checkpoint. CLI preflight
+  and direct trainer resume now require the highest published `step-*`
+  checkpoint before any log repair. The regression also verifies that rejected
+  resume attempts leave both training logs byte-for-byte unchanged.
+- The suffix-only adapter contract could not distinguish full `all-linear`
+  coverage from layer-filtered coverage. Contract schema 2 now stores the full
+  eligible linear-module instance list and PEFT's actual targeted-module
+  instance list. Fresh attach, save, and reload require exact equality, while
+  reload recomputes eligibility from the pinned base model. PEFT exclusion,
+  layer filtering, token targeting, layer replication, LoRA bias, and direct
+  parameter targeting must all retain their standard disabled values.
+
+TDD evidence:
+
+```text
+stale checkpoint red: 2 failed
+stale checkpoint green: 2 passed
+adapter coverage red: 9 failed, 14 passed
+adapter coverage green: 23 passed
+focused final: 121 passed, 2 skipped
+full final: 637 passed, 5 skipped
+compileall: exit 0
+```
+
+The five full-suite skips still include the opt-in GPU paths. No model was
+downloaded during this review pass; real Qwen3.5-9B BF16 execution remains the
+only pending Stage 6 validation gate.

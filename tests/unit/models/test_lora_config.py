@@ -40,6 +40,10 @@ class FakeBaseModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.ones(2))
+        self.q_proj = nn.Linear(2, 2, bias=False)
+        self.k_proj = nn.Linear(2, 2, bias=False)
+        self.v_proj = nn.Linear(2, 2, bias=False)
+        self.lm_head = nn.Linear(2, 2, bias=False)
         self.config = SimpleNamespace(use_cache=True)
         self.gradient_checkpointing_calls = 0
         self.input_require_grads_calls = 0
@@ -49,6 +53,9 @@ class FakeBaseModel(nn.Module):
 
     def enable_input_require_grads(self) -> None:
         self.input_require_grads_calls += 1
+
+    def get_output_embeddings(self) -> nn.Module:
+        return self.lm_head
 
 
 class FakeAdapterModel(nn.Module):
@@ -148,6 +155,7 @@ class FakePeftModule:
             {"model": model, "config": config, "adapter_name": adapter_name}
         )
         config.target_modules = {"v_proj", "q_proj", "k_proj"}
+        model.targeted_module_names = ["q_proj", "k_proj", "v_proj"]
         return FakeAdapterModel(model, config)
 
     class PeftModel:
@@ -167,6 +175,7 @@ class FakePeftModule:
                     "is_trainable": is_trainable,
                 }
             )
+            model.targeted_module_names = ["q_proj", "k_proj", "v_proj"]
             return FakeAdapterModel(
                 model,
                 RecordingLoraConfig(**FakePeftModule.loaded_adapter_config),
@@ -226,6 +235,13 @@ def _loaded_adapter_config(**overrides: Any) -> dict[str, Any]:
         "modules_to_save": None,
         "rank_pattern": {},
         "alpha_pattern": {},
+        "exclude_modules": None,
+        "layers_to_transform": None,
+        "layers_pattern": None,
+        "trainable_token_indices": None,
+        "layer_replication": None,
+        "lora_bias": False,
+        "target_parameters": None,
         "task_type": "CAUSAL_LM",
         "target_modules": {"q_proj", "k_proj", "v_proj"},
         **overrides,
@@ -234,19 +250,28 @@ def _loaded_adapter_config(**overrides: Any) -> dict[str, Any]:
 
 def _adapter_contract(**overrides: Any) -> dict[str, Any]:
     contract = {
-        "schema_version": 1,
+        "schema_version": 2,
         "requested_target_modules": "all-linear",
         "resolved_target_modules": ["k_proj", "q_proj", "v_proj"],
+        "eligible_linear_modules": ["k_proj", "q_proj", "v_proj"],
+        "targeted_module_instances": ["k_proj", "q_proj", "v_proj"],
         "options": {
             "alpha_pattern": {},
             "bias": "none",
+            "exclude_modules": None,
             "init_lora_weights": True,
+            "layer_replication": None,
+            "layers_pattern": None,
+            "layers_to_transform": None,
             "lora_alpha": 64,
+            "lora_bias": False,
             "lora_dropout": 0.05,
             "modules_to_save": None,
             "r": 32,
             "rank_pattern": {},
             "task_type": "CAUSAL_LM",
+            "target_parameters": None,
+            "trainable_token_indices": None,
             "use_dora": False,
             "use_rslora": False,
         },
@@ -282,6 +307,13 @@ def test_build_lora_config_uses_the_project_zero_impact_settings() -> None:
         "modules_to_save": None,
         "rank_pattern": {},
         "alpha_pattern": {},
+        "exclude_modules": None,
+        "layers_to_transform": None,
+        "layers_pattern": None,
+        "trainable_token_indices": None,
+        "layer_replication": None,
+        "lora_bias": False,
+        "target_parameters": None,
         "target_modules": "all-linear",
         "task_type": "CAUSAL_LM",
     }
@@ -484,6 +516,13 @@ def test_attach_shared_adapter_rejects_project_settings_before_loading_an_adapte
         ({"modules_to_save": ["lm_head"]}, "modules_to_save=None"),
         ({"rank_pattern": {"q_proj": 16}}, "rank_pattern"),
         ({"alpha_pattern": {"q_proj": 32}}, "alpha_pattern"),
+        ({"exclude_modules": ["k_proj"]}, "exclude_modules"),
+        ({"layers_to_transform": [0]}, "layers_to_transform"),
+        ({"layers_pattern": "layers"}, "layers_pattern"),
+        ({"trainable_token_indices": [0]}, "trainable_token_indices"),
+        ({"layer_replication": [(0, 1)]}, "layer_replication"),
+        ({"lora_bias": True}, "lora_bias"),
+        ({"target_parameters": ["q_proj.weight"]}, "target_parameters"),
         ({"task_type": "SEQ_2_SEQ_LM"}, "task_type=CAUSAL_LM"),
         ({"target_modules": ""}, "target_modules"),
         ({"target_modules": "q_proj"}, "target_modules"),
@@ -532,6 +571,33 @@ def test_load_shared_policy_accepts_expanded_loaded_target_modules(tmp_path: Pat
         "k_proj",
         "v_proj",
     }
+
+
+def test_reload_rejects_a_contract_that_does_not_cover_all_linear_instances(
+    tmp_path: Path,
+) -> None:
+    qwen35 = _qwen35_module()
+    adapter_path = tmp_path / "adapter"
+    contract = _adapter_contract()
+    contract.update(
+        {
+            "eligible_linear_modules": ["k_proj", "q_proj", "v_proj"],
+            "targeted_module_instances": ["q_proj"],
+        }
+    )
+    _write_adapter_contract(adapter_path, **contract)
+
+    with pytest.raises(ValueError, match="eligible linear modules"):
+        qwen35.load_shared_qwen35_policy(
+            _model_config(),
+            LoraConfig(),
+            TrainingConfig(),
+            adapter_path=adapter_path,
+            transformers_module=_transformers_module(),
+            peft_module=FakePeftModule,
+        )
+
+    assert FakePeftModule.load_calls == []
 
 
 def test_load_qwen35_tokenizer_uses_the_text_only_contract_without_loading_a_model(

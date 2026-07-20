@@ -18,6 +18,7 @@ _STAGE_6_LORA_ALPHA = 64
 _STAGE_6_LORA_DROPOUT = 0.05
 _STAGE_6_TARGET_MODULES = "all-linear"
 _STAGE_6_ADAPTER_CONTRACT = "stage6_adapter_contract.json"
+_STAGE_6_TARGET_INSTANCES_ATTR = "_stage6_all_linear_target_instances"
 
 
 def build_lora_config(
@@ -44,6 +45,13 @@ def build_lora_config(
         modules_to_save=None,
         rank_pattern={},
         alpha_pattern={},
+        exclude_modules=None,
+        layers_to_transform=None,
+        layers_pattern=None,
+        trainable_token_indices=None,
+        layer_replication=None,
+        lora_bias=False,
+        target_parameters=None,
         target_modules=training_config.target_modules,
         task_type=peft.TaskType.CAUSAL_LM,
     )
@@ -60,6 +68,7 @@ def attach_shared_lora_adapter(
     """Create or reload exactly one trainable adapter over ``base_model``."""
     validate_stage6_lora_settings(lora_config, training_config)
     peft = peft_module or _require_peft()
+    eligible_instances = _eligible_linear_module_names(base_model)
     expected_targets: Collection[str] | None = None
     if adapter_path is None:
         model = peft.get_peft_model(
@@ -70,6 +79,10 @@ def attach_shared_lora_adapter(
     else:
         contract = validate_stage6_adapter_contract(adapter_path)
         expected_targets = contract["resolved_target_modules"]
+        if tuple(contract["eligible_linear_modules"]) != eligible_instances:
+            raise ValueError(
+                "Stage 6 adapter contract eligible linear modules do not match the base model"
+            )
         model = peft.PeftModel.from_pretrained(
             base_model,
             adapter_path,
@@ -79,6 +92,12 @@ def attach_shared_lora_adapter(
 
     _assert_one_adapter(model)
     _validate_loaded_adapter_config(model, expected_target_modules=expected_targets)
+    targeted_instances = _loaded_target_module_instances(model)
+    if targeted_instances != eligible_instances:
+        raise ValueError(
+            "shared adapter targeted module instances do not match all eligible linear modules"
+        )
+    setattr(model, _STAGE_6_TARGET_INSTANCES_ATTR, eligible_instances)
     _freeze_non_lora_parameters(model)
     assert_only_lora_trainable(model)
     return model
@@ -108,6 +127,14 @@ def save_adapter_checkpoint(
     """Save just the adapter tensors, refusing any base-model state."""
     peft = peft_module or _require_peft()
     resolved_targets = _validate_loaded_adapter_config(model)
+    eligible_instances = getattr(model, _STAGE_6_TARGET_INSTANCES_ATTR, None)
+    if not isinstance(eligible_instances, tuple) or not eligible_instances:
+        raise ValueError("shared policy is missing its all-linear target instance record")
+    targeted_instances = _loaded_target_module_instances(model)
+    if targeted_instances != eligible_instances:
+        raise ValueError(
+            "shared adapter targeted module instances do not match all eligible linear modules"
+        )
     adapter_state = peft.get_peft_model_state_dict(model, adapter_name=_ADAPTER_NAME)
     if not adapter_state:
         raise ValueError("adapter checkpoint has no LoRA tensors")
@@ -127,9 +154,11 @@ def save_adapter_checkpoint(
     if not (adapter_directory / "adapter_config.json").is_file():
         raise RuntimeError(f"PEFT did not write a reloadable adapter to {adapter_directory}")
     contract = {
-        "schema_version": 1,
+        "schema_version": 2,
         "requested_target_modules": _STAGE_6_TARGET_MODULES,
         "resolved_target_modules": list(resolved_targets),
+        "eligible_linear_modules": list(eligible_instances),
+        "targeted_module_instances": list(targeted_instances),
         "options": _stage6_adapter_options(),
     }
     (adapter_directory / _STAGE_6_ADAPTER_CONTRACT).write_text(
@@ -153,12 +182,14 @@ def validate_stage6_adapter_contract(adapter_path: str | Path) -> dict[str, Any]
         "schema_version",
         "requested_target_modules",
         "resolved_target_modules",
+        "eligible_linear_modules",
+        "targeted_module_instances",
         "options",
     }
     if set(contract) != expected_keys:
         raise ValueError("Stage 6 adapter contract fields are not exact")
-    if type(contract["schema_version"]) is not int or contract["schema_version"] != 1:
-        raise ValueError("Stage 6 adapter contract schema_version must be 1")
+    if type(contract["schema_version"]) is not int or contract["schema_version"] != 2:
+        raise ValueError("Stage 6 adapter contract schema_version must be 2")
     if contract["requested_target_modules"] != _STAGE_6_TARGET_MODULES:
         raise ValueError("Stage 6 adapter contract requires logical target all-linear")
 
@@ -171,6 +202,17 @@ def validate_stage6_adapter_contract(adapter_path: str | Path) -> dict[str, Any]
         raise ValueError("Stage 6 adapter contract resolved_target_modules must be sorted")
     if len(set(targets)) != len(targets):
         raise ValueError("Stage 6 adapter contract resolved_target_modules must be unique")
+
+    eligible_instances = _validate_contract_name_list(
+        contract["eligible_linear_modules"], "eligible_linear_modules"
+    )
+    targeted_instances = _validate_contract_name_list(
+        contract["targeted_module_instances"], "targeted_module_instances"
+    )
+    if targeted_instances != eligible_instances:
+        raise ValueError(
+            "Stage 6 adapter contract targeted module instances must equal all eligible linear modules"
+        )
 
     expected_options = _stage6_adapter_options()
     options = contract["options"]
@@ -234,6 +276,18 @@ def _validate_loaded_adapter_config(
         raise ValueError("loaded adapter requires an empty rank_pattern")
     if getattr(adapter_config, "alpha_pattern", None) != {}:
         raise ValueError("loaded adapter requires an empty alpha_pattern")
+    for field in (
+        "exclude_modules",
+        "layers_to_transform",
+        "layers_pattern",
+        "trainable_token_indices",
+        "layer_replication",
+        "target_parameters",
+    ):
+        if getattr(adapter_config, field, None) is not None:
+            raise ValueError(f"loaded adapter requires {field}=None")
+    if getattr(adapter_config, "lora_bias", None) is not False:
+        raise ValueError("loaded adapter requires lora_bias=False")
     task_type = getattr(adapter_config, "task_type", None)
     if getattr(task_type, "value", task_type) != "CAUSAL_LM":
         raise ValueError("loaded adapter requires task_type=CAUSAL_LM")
@@ -268,17 +322,75 @@ def _validate_loaded_target_modules(target_modules: Any) -> tuple[str, ...]:
     return tuple(sorted(set(target_modules)))
 
 
+def _eligible_linear_module_names(model: Any) -> tuple[str, ...]:
+    if not callable(getattr(model, "named_modules", None)):
+        raise TypeError("base model must expose named_modules()")
+    try:
+        from torch import nn
+    except ImportError as error:
+        raise RuntimeError("all-linear target validation requires torch") from error
+    output_layer = None
+    get_output_embeddings = getattr(model, "get_output_embeddings", None)
+    if callable(get_output_embeddings):
+        output_layer = get_output_embeddings()
+    names = tuple(
+        sorted(
+            name
+            for name, module in model.named_modules()
+            if name and isinstance(module, nn.Linear) and module is not output_layer
+        )
+    )
+    if not names:
+        raise ValueError("base model has no eligible linear modules for all-linear LoRA")
+    return names
+
+
+def _loaded_target_module_instances(model: Any) -> tuple[str, ...]:
+    for owner in (getattr(model, "base_model", None), model):
+        value = getattr(owner, "targeted_module_names", None)
+        if value is not None:
+            return _validate_name_collection(value, "loaded targeted_module_names")
+    raise ValueError("loaded adapter does not expose targeted_module_names")
+
+
+def _validate_contract_name_list(value: Any, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"Stage 6 adapter contract {field} must be a list")
+    names = _validate_name_collection(value, f"Stage 6 adapter contract {field}")
+    if value != list(names):
+        raise ValueError(f"Stage 6 adapter contract {field} must be sorted and unique")
+    return names
+
+
+def _validate_name_collection(value: Any, label: str) -> tuple[str, ...]:
+    if (
+        isinstance(value, (str, bytes))
+        or not isinstance(value, Collection)
+        or not value
+        or any(not isinstance(name, str) or not name.strip() for name in value)
+    ):
+        raise ValueError(f"{label} must contain module names")
+    return tuple(sorted(set(value)))
+
+
 def _stage6_adapter_options() -> dict[str, Any]:
     return {
         "alpha_pattern": {},
         "bias": "none",
+        "exclude_modules": None,
         "init_lora_weights": True,
+        "layer_replication": None,
+        "layers_pattern": None,
+        "layers_to_transform": None,
         "lora_alpha": _STAGE_6_LORA_ALPHA,
+        "lora_bias": False,
         "lora_dropout": _STAGE_6_LORA_DROPOUT,
         "modules_to_save": None,
         "r": _STAGE_6_LORA_R,
         "rank_pattern": {},
         "task_type": "CAUSAL_LM",
+        "target_parameters": None,
+        "trainable_token_indices": None,
         "use_dora": False,
         "use_rslora": False,
     }

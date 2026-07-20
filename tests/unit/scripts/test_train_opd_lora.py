@@ -314,11 +314,12 @@ def test_fresh_preflight_rejects_an_existing_non_directory_output_path(
 def _write_resume_checkpoint(
     output_dir: Path,
     *,
+    step: int = 1,
     adapter_path: str = "adapter/shared_policy",
     manifest_overrides: dict[str, Any] | None = None,
     missing_fields: tuple[str, ...] = (),
 ) -> tuple[Path, Path]:
-    checkpoint = output_dir / "checkpoints" / "step-00000001"
+    checkpoint = output_dir / "checkpoints" / f"step-{step:08d}"
     adapter = checkpoint / "adapter" / "shared_policy"
     adapter.mkdir(parents=True)
     (adapter / "adapter_config.json").write_text("{}\n", encoding="utf-8")
@@ -326,19 +327,28 @@ def _write_resume_checkpoint(
     (adapter / "stage6_adapter_contract.json").write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "requested_target_modules": "all-linear",
                 "resolved_target_modules": ["q_proj"],
+                "eligible_linear_modules": ["q_proj"],
+                "targeted_module_instances": ["q_proj"],
                 "options": {
                     "alpha_pattern": {},
                     "bias": "none",
+                    "exclude_modules": None,
                     "init_lora_weights": True,
+                    "layer_replication": None,
+                    "layers_pattern": None,
+                    "layers_to_transform": None,
                     "lora_alpha": 64,
+                    "lora_bias": False,
                     "lora_dropout": 0.05,
                     "modules_to_save": None,
                     "r": 32,
                     "rank_pattern": {},
                     "task_type": "CAUSAL_LM",
+                    "target_parameters": None,
+                    "trainable_token_indices": None,
                     "use_dora": False,
                     "use_rslora": False,
                 },
@@ -349,9 +359,9 @@ def _write_resume_checkpoint(
     )
     manifest = {
         "adapter_path": adapter_path,
-        "completed_examples": 2,
+        "completed_examples": step * 2,
         "dataset_build_id": "dataset-a",
-        "optimizer_steps": 1,
+        "optimizer_steps": step,
         "rollout_config": {
             "temperature": 1.0,
             "top_p": 0.95,
@@ -412,6 +422,29 @@ def test_resume_dry_run_reads_manifest_and_resolves_exact_adapter_path(
     summary = json.loads(capsys.readouterr().out)
     assert summary["resume_from"] == str(checkpoint.resolve())
     assert summary["resume_adapter_path"] == str(adapter)
+
+
+def test_resume_preflight_rejects_a_stale_published_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    stale_checkpoint, _ = _write_resume_checkpoint(output_dir, step=1)
+    _write_resume_checkpoint(output_dir, step=2)
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    with pytest.raises(ValueError, match="latest published checkpoint"):
+        train_opd_lora.main(
+            _argv(
+                dataset_dir,
+                output_dir,
+                "--resume-from",
+                str(stale_checkpoint),
+                "--dry-run",
+            )
+        )
 
 
 @pytest.mark.parametrize("adapter_path", ("../escape", "missing/shared_policy"))
