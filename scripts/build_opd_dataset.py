@@ -57,4 +57,3 @@ def _canonical_json(value: object) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

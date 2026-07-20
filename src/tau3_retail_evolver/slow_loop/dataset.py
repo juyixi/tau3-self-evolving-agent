@@ -66,6 +66,7 @@ class _MaterializedDataset:
     snapshot_chain: tuple[str, ...]
     resolved_config: Mapping[str, Any]
     build_code_revision: str
+    source_context: Mapping[str, Any]
 
 
 def build_opd_dataset(request: DatasetBuildRequest) -> DatasetBuildResult:
@@ -76,6 +77,7 @@ def build_opd_dataset(request: DatasetBuildRequest) -> DatasetBuildResult:
     output_root = _resolve_from_project(request.output_root, project)
     final_build_root = output_root / build_id
     final_dataset_dir = final_build_root / "slow_loop"
+    dataset_relative_path = _relative_to_project(final_dataset_dir, project)
     if final_build_root.exists():
         raise FileExistsError(f"refusing to overwrite existing dataset build: {final_build_root}")
 
@@ -86,9 +88,14 @@ def build_opd_dataset(request: DatasetBuildRequest) -> DatasetBuildResult:
     try:
         temp_dataset_dir.mkdir(parents=True, exist_ok=False)
         artifacts = _write_artifacts(temp_dataset_dir, materialized)
-        manifest = _build_manifest(build_id, materialized, artifacts)
+        manifest = _build_manifest(
+            build_id,
+            materialized,
+            artifacts,
+            dataset_relative_path=dataset_relative_path,
+        )
         _write_json(temp_dataset_dir / "dataset_manifest.json", manifest)
-        report = audit_dataset(temp_dataset_dir)
+        report = audit_dataset(temp_dataset_dir, project_root=project)
         _write_json(
             temp_dataset_dir / "audit_report.json",
             report.model_dump(mode="json"),
@@ -98,6 +105,7 @@ def build_opd_dataset(request: DatasetBuildRequest) -> DatasetBuildResult:
             raise ValueError(f"dataset audit failed before publication: {codes}")
         try:
             temp_build_root.rename(final_build_root)
+            _fsync_directory(output_root)
         except FileExistsError as error:
             raise FileExistsError(
                 f"refusing to overwrite existing dataset build: {final_build_root}"
@@ -224,6 +232,19 @@ def _materialize(request: DatasetBuildRequest) -> _MaterializedDataset:
             "embedding_model": config.memory.embedding_model,
         },
         build_code_revision=_git_revision(project),
+        source_context={
+            "retail_tasks_path": _relative_to_project(
+                runtime.retail_tasks_path, project
+            ),
+            "retail_split_path": _relative_to_project(
+                runtime.retail_split_path, project
+            ),
+            "memory_root": _relative_to_project(memory_root, project),
+            "source_run_paths": [
+                _relative_to_project(source.path, project)
+                for source in source_set.runs
+            ],
+        },
     )
 
 
@@ -261,6 +282,8 @@ def _build_manifest(
     build_id: str,
     materialized: _MaterializedDataset,
     artifacts: Mapping[str, Mapping[str, Any]],
+    *,
+    dataset_relative_path: str,
 ) -> dict[str, Any]:
     ledger = materialized.ledger
     counts = {
@@ -297,6 +320,10 @@ def _build_manifest(
         },
         "resolved_config": _json_copy(materialized.resolved_config),
         "source_runs": _json_copy(materialized.source_runs),
+        "source_context": {
+            **_json_copy(materialized.source_context),
+            "dataset_relative_path": dataset_relative_path,
+        },
         "counts": counts,
         "skip_reasons": _skip_reasons(materialized),
         "artifacts": _json_copy(artifacts),
@@ -357,6 +384,9 @@ def _write_jsonl(path: Path, rows: Sequence[Any]) -> int:
     with path.open("xb") as destination:
         for row in rows:
             destination.write(_canonical_json_bytes(_json_value(row)))
+        destination.flush()
+        os.fsync(destination.fileno())
+    _fsync_directory(path.parent)
     return len(rows)
 
 
@@ -366,6 +396,7 @@ def _write_json(path: Path, value: Any) -> None:
         destination.write(_canonical_json_bytes(value))
         destination.flush()
         os.fsync(destination.fileno())
+    _fsync_directory(path.parent)
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -425,6 +456,24 @@ def _validate_build_id(value: str) -> str:
 def _resolve_from_project(path: Path, project: Path) -> Path:
     candidate = Path(path).expanduser()
     return (project / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+
+
+def _relative_to_project(path: Path, project: Path) -> str:
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(project).as_posix()
+    except ValueError as error:
+        raise ValueError(f"dataset path must stay within project root: {resolved}") from error
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _git_revision(project: Path) -> str:

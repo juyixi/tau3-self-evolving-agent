@@ -66,6 +66,16 @@ _ACTION_MEMORY_VALUE = re.compile(
     re.IGNORECASE,
 )
 
+_CREDENTIAL_VALUE = re.compile(
+    r"(?:"
+    r"\bauthorization\s*[:=]\s*(?:bearer|basic)\s+[a-z0-9._~+/=-]{8,}"
+    r"|\bbearer\s+sk-[a-z0-9_-]{8,}"
+    r"|\bsk-[a-z0-9_-]{8,}"
+    r"|\b(?:api[ _-]?key|access[ _-]?token|secret|password)\s*[:=]\s*\S{4,}"
+    r")",
+    re.IGNORECASE,
+)
+
 
 def normalized_key(value: object) -> str:
     normalized = unicodedata.normalize("NFKC", str(value)).casefold()
@@ -98,6 +108,8 @@ def _walk_artifact(value: Any, *, path: str) -> None:
             _walk_artifact(nested, path=f"{path}[{index}]")
         return
     if isinstance(value, str):
+        if _CREDENTIAL_VALUE.search(value):
+            raise ValueError(f"artifact contains credential-bearing value at {path}")
         if _credential_bearing_url(value):
             raise ValueError(f"artifact contains credential-bearing URL at {path}")
         if _is_test_or_evaluation_path(value):

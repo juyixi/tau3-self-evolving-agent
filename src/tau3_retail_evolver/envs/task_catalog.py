@@ -11,6 +11,15 @@ SplitName = Literal["train", "test", "base"]
 _REQUIRED_SPLITS = ("train", "test", "base")
 OFFICIAL_SPLIT_COUNTS = {"train": 74, "test": 40, "base": 114}
 OFFICIAL_SPLIT_SHA256 = "235237983dd826c6c16989e90797e9d58f8ed52059020c9079e60069288147eb"
+OFFICIAL_TRAIN_TASK_IDS = (
+    "0", "1", "2", "3", "4", "6", "7", "8", "10", "11", "13", "14",
+    "15", "16", "19", "20", "21", "22", "23", "24", "25", "28", "29",
+    "30", "31", "34", "35", "37", "41", "43", "44", "46", "47", "48",
+    "50", "52", "54", "57", "58", "59", "63", "66", "67", "69", "72",
+    "73", "75", "76", "78", "80", "81", "82", "83", "84", "85", "87",
+    "88", "89", "91", "92", "93", "95", "96", "98", "99", "103", "104",
+    "105", "106", "107", "109", "110", "112", "113",
+)
 
 
 @dataclass(frozen=True)
@@ -77,6 +86,11 @@ class RetailTaskCatalog:
             raise RuntimeError(
                 "Tau2 retail split hash mismatch: expected "
                 f"{OFFICIAL_SPLIT_SHA256}, resolved {self.split_sha256}. "
+                "Restore the official split_tasks.json."
+            )
+        if self._task_ids_by_split["train"] != OFFICIAL_TRAIN_TASK_IDS:
+            raise RuntimeError(
+                "Tau2 retail train task IDs do not match the pinned official order. "
                 "Restore the official split_tasks.json."
             )
 

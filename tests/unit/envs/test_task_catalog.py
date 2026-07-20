@@ -12,7 +12,10 @@ import pytest
 import tau3_retail_evolver.envs.runtime as runtime_module
 from tau3_retail_evolver.envs.runtime import RuntimeFingerprint, Tau2Runtime
 from tau3_retail_evolver.envs.split_guard import require_learning_split
-from tau3_retail_evolver.envs.task_catalog import RetailTaskCatalog
+from tau3_retail_evolver.envs.task_catalog import (
+    OFFICIAL_TRAIN_TASK_IDS,
+    RetailTaskCatalog,
+)
 
 
 SPLIT_FIXTURE = (
@@ -43,6 +46,7 @@ def test_official_retail_splits_are_complete_disjoint_and_stably_fingerprinted(
         json.dumps(split_data, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     assert len(train_ids) == 74
+    assert train_ids == OFFICIAL_TRAIN_TASK_IDS
     assert len(test_ids) == 40
     assert len(base_ids) == 114
     assert set(train_ids).isdisjoint(test_ids)

@@ -224,6 +224,38 @@ def test_negative_value_is_retained_but_not_qualified() -> None:
     assert score.qualified_for_supervision is False
 
 
+def test_value_equal_to_threshold_is_qualified() -> None:
+    memory_id = "mem-tip-threshold"
+    ledger = _ledger(
+        [
+            _episode(
+                "selected",
+                group="returns",
+                reward=1.0,
+                memory_id=memory_id,
+                selected=True,
+            ),
+            _episode(
+                "control",
+                group="returns",
+                reward=0.0,
+                memory_id=memory_id,
+            ),
+        ]
+    )
+    value = compute_memory_scores(
+        ledger, tier_priors=PRIORS, score_threshold=0.0
+    )[0].value
+    assert value is not None
+
+    score = compute_memory_scores(
+        ledger, tier_priors=PRIORS, score_threshold=value
+    )[0]
+
+    assert score.value == value
+    assert score.qualified_for_supervision is True
+
+
 def test_creator_episode_cannot_value_its_own_write() -> None:
     memory_id = "mem-skill-new"
     ledger = _ledger(

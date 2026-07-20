@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from tau3_retail_evolver.envs.task_catalog import (
     OFFICIAL_SPLIT_COUNTS,
     OFFICIAL_SPLIT_SHA256,
+    OFFICIAL_TRAIN_TASK_IDS,
+    RetailTaskCatalog,
 )
 from tau3_retail_evolver.io.jsonl import iter_jsonl_objects
 from tau3_retail_evolver.slow_loop.attribution import MemoryScore, compute_memory_scores
@@ -17,13 +19,20 @@ from tau3_retail_evolver.slow_loop.evidence import (
     EpisodeEvidence,
     EvidenceLedger,
     MaintenanceEvidence,
+    build_evidence,
 )
 from tau3_retail_evolver.slow_loop.examples import (
     ONLINE_SAMPLING_CONTRACT,
     OPDExample,
     audit_example_boundaries,
+    build_action_examples,
+    build_maintenance_examples,
+    build_selection_examples,
+    build_writing_examples,
 )
 from tau3_retail_evolver.slow_loop.leakage import audit_artifact_payload
+from tau3_retail_evolver.slow_loop.source_runs import load_source_runs
+from tau3_retail_evolver.slow_loop.task_grouping import RetailTaskGroups
 
 
 _EXPECTED_ARTIFACTS = (
@@ -54,7 +63,7 @@ class AuditReport(_AuditModel):
     errors: tuple[AuditError, ...]
 
 
-def audit_dataset(path: Path) -> AuditReport:
+def audit_dataset(path: Path, *, project_root: Path | None = None) -> AuditReport:
     root = Path(path).resolve()
     errors: list[AuditError] = []
     manifest = _read_manifest(root, errors)
@@ -81,6 +90,7 @@ def audit_dataset(path: Path) -> AuditReport:
             or not all(isinstance(task_id, str) and task_id for task_id in raw_train_ids)
             or len(raw_train_ids) != len(set(raw_train_ids))
             or len(raw_train_ids) != OFFICIAL_SPLIT_COUNTS["train"]
+            or tuple(raw_train_ids) != OFFICIAL_TRAIN_TASK_IDS
         ):
             _error(errors, "non_train_source", "official train task ID set is invalid")
         else:
@@ -101,6 +111,14 @@ def audit_dataset(path: Path) -> AuditReport:
         source_task_ids=source_task_ids,
         errors=errors,
     )
+    _audit_source_evidence(
+        root,
+        manifest=manifest,
+        episodes=episodes,
+        maintenance=maintenance,
+        project_root=project_root,
+        errors=errors,
+    )
     scores = _audit_scores(
         artifact_rows.get("attribution/memory_scores.jsonl", ()),
         episodes=episodes,
@@ -113,6 +131,7 @@ def audit_dataset(path: Path) -> AuditReport:
         episodes=episodes,
         maintenance=maintenance,
         scores=scores,
+        manifest=manifest,
         errors=errors,
     )
     _audit_manifest_counts(
@@ -209,6 +228,14 @@ def _read_artifacts(
         except ValueError as error:
             _error(errors, "artifact_jsonl_invalid", str(error), relative)
             continue
+        canonical_payload = b"".join(_canonical_json_bytes(row) for row in rows)
+        if payload != canonical_payload:
+            _error(
+                errors,
+                "artifact_noncanonical",
+                "artifact is not canonical JSONL",
+                relative,
+            )
         for row in rows:
             try:
                 audit_artifact_payload(row)
@@ -247,6 +274,130 @@ def _audit_source_lineage(manifest: dict[str, Any], errors: list[AuditError]) ->
         not isinstance(snapshot_id, str) or not snapshot_id for snapshot_id in expected_chain
     ):
         _error(errors, "source_lineage_invalid", "manifest snapshot chain mismatch")
+
+
+def _audit_source_evidence(
+    root: Path,
+    *,
+    manifest: dict[str, Any],
+    episodes: dict[str, EpisodeEvidence],
+    maintenance: dict[str, MaintenanceEvidence],
+    project_root: Path | None,
+    errors: list[AuditError],
+) -> None:
+    context = manifest.get("source_context")
+    if not isinstance(context, dict):
+        _error(errors, "source_evidence_mismatch", "source context is missing")
+        return
+    try:
+        project = (
+            Path(project_root).resolve()
+            if project_root is not None
+            else _infer_project_root(root, context)
+        )
+        tasks_path = _context_path(project, context.get("retail_tasks_path"))
+        split_path = _context_path(project, context.get("retail_split_path"))
+        memory_root = _context_path(project, context.get("memory_root"))
+        raw_source_paths = context.get("source_run_paths")
+        if not isinstance(raw_source_paths, list) or not raw_source_paths:
+            raise ValueError("source run paths are missing")
+        source_paths = tuple(
+            _context_path(project, value) for value in raw_source_paths
+        )
+        catalog = RetailTaskCatalog.from_files(tasks_path, split_path)
+        catalog.require_official_compatibility()
+        source_set = load_source_runs(
+            source_paths,
+            catalog=catalog,
+            memory_root=memory_root,
+        )
+        rebuilt = build_evidence(source_set, memory_root=memory_root)
+        groups = RetailTaskGroups.from_file(
+            tasks_path,
+            task_ids=tuple(
+                task_id
+                for source in source_set.runs
+                for task_id in source.manifest["task_ids"]
+            ),
+        )
+        if any(
+            episode.task_group != groups.signature_for(episode.task_id)
+            for episode in rebuilt.episodes
+        ):
+            raise ValueError("source task group does not match Retail task metadata")
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        _error(errors, "source_evidence_mismatch", str(error))
+        return
+
+    expected_sources = [
+        {
+            "run_id": source.run_id,
+            "task_ids": list(source.manifest["task_ids"]),
+            "manifest_sha256": source.manifest_sha256,
+            "events_sha256": source.events_sha256,
+            "summary_sha256": source.summary_sha256,
+            "input_memory_snapshot_id": source.manifest["memory_snapshot_id"],
+            "output_memory_snapshot_id": source.summary["output_memory_snapshot_id"],
+            "completed_train_tasks_before": source.summary[
+                "completed_train_tasks_before"
+            ],
+            "completed_train_tasks_after": source.summary[
+                "completed_train_tasks_after"
+            ],
+        }
+        for source in source_set.runs
+    ]
+    if manifest.get("source_runs") != expected_sources:
+        _error(
+            errors,
+            "source_evidence_mismatch",
+            "source run hashes or lineage differ from the published manifest",
+        )
+
+    actual_rows = [
+        item.model_dump(mode="json")
+        for item in (*episodes.values(), *maintenance.values())
+    ]
+    expected_rows = [
+        item.model_dump(mode="json")
+        for item in (*rebuilt.episodes, *rebuilt.maintenance)
+    ]
+    if actual_rows != expected_rows:
+        _error(
+            errors,
+            "source_evidence_mismatch",
+            "published evidence differs from source-run and snapshot reconstruction",
+            "evidence/episodes.jsonl",
+        )
+
+
+def _infer_project_root(root: Path, context: dict[str, Any]) -> Path:
+    raw_relative = context.get("dataset_relative_path")
+    if not isinstance(raw_relative, str) or not raw_relative:
+        raise ValueError("dataset relative path is missing")
+    relative = Path(raw_relative)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("dataset relative path must stay within project root")
+    project = root
+    for _ in relative.parts:
+        project = project.parent
+    if (project / relative).resolve() != root:
+        raise ValueError("dataset path does not match source context")
+    return project.resolve()
+
+
+def _context_path(project: Path, value: Any) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ValueError("source context path is invalid")
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("source context paths must be project-relative")
+    resolved = (project / relative).resolve()
+    try:
+        resolved.relative_to(project)
+    except ValueError as error:
+        raise ValueError("source context path escapes project root") from error
+    return resolved
 
 
 def _audit_evidence(
@@ -427,9 +578,13 @@ def _audit_examples(
     episodes: dict[str, EpisodeEvidence],
     maintenance: dict[str, MaintenanceEvidence],
     scores: dict[str, MemoryScore],
+    manifest: dict[str, Any],
     errors: list[AuditError],
 ) -> None:
     seen: set[str] = set()
+    parsed_by_kind: dict[str, list[OPDExample]] = {
+        kind: [] for kind in ("sel", "act", "write", "maint")
+    }
     for kind in ("sel", "act", "write", "maint"):
         relative = f"datasets/{kind}.jsonl"
         for row in artifact_rows.get(relative, ()):
@@ -441,6 +596,7 @@ def _audit_examples(
             if example.example_id in seen:
                 _error(errors, "duplicate_example_id", example.example_id, relative)
             seen.add(example.example_id)
+            parsed_by_kind[kind].append(example)
             if example.kind != kind:
                 _error(errors, "example_kind_mismatch", example.example_id, relative)
             if example.sampling_contract != ONLINE_SAMPLING_CONTRACT:
@@ -466,6 +622,96 @@ def _audit_examples(
             if maintenance_id is not None and maintenance_id not in maintenance:
                 _error(errors, "example_provenance_invalid", example.example_id, relative)
             _audit_example_memory_refs(example, scores, errors, relative)
+
+    _audit_recomputed_examples(
+        parsed_by_kind,
+        episodes=episodes,
+        maintenance=maintenance,
+        scores=scores,
+        manifest=manifest,
+        errors=errors,
+    )
+
+
+def _audit_recomputed_examples(
+    actual_by_kind: dict[str, list[OPDExample]],
+    *,
+    episodes: dict[str, EpisodeEvidence],
+    maintenance: dict[str, MaintenanceEvidence],
+    scores: dict[str, MemoryScore],
+    manifest: dict[str, Any],
+    errors: list[AuditError],
+) -> None:
+    lineage = manifest.get("policy_lineage")
+    split = manifest.get("official_split")
+    memory = manifest.get("memory")
+    config = manifest.get("resolved_config")
+    source_runs = manifest.get("source_runs")
+    if not all(
+        isinstance(value, dict) for value in (lineage, split, memory, config)
+    ) or not isinstance(source_runs, list):
+        _error(errors, "example_recompute_mismatch", "recompute metadata is missing")
+        return
+    try:
+        ledger = EvidenceLedger(
+            iteration=lineage["iteration"],
+            model_revision=lineage["model_revision"],
+            adapter_revision=lineage.get("adapter_revision"),
+            tau2_commit=lineage["tau2_commit"],
+            split_hash=split["sha256"],
+            memory_agent_id=memory["agent_id"],
+            source_run_ids=tuple(source["run_id"] for source in source_runs),
+            episodes=tuple(episodes.values()),
+            maintenance=tuple(maintenance.values()),
+        )
+        ordered_scores = tuple(sorted(scores.values(), key=lambda item: item.memory_id))
+        expected_by_kind = {
+            "sel": build_selection_examples(
+                ledger,
+                ordered_scores,
+                score_threshold=config["score_threshold"],
+            ),
+            "act": build_action_examples(
+                ledger,
+                ordered_scores,
+                score_threshold=config["score_threshold"],
+                teacher_memory_cap=config["teacher_memory_cap"],
+            ),
+            "write": build_writing_examples(
+                ledger,
+                ordered_scores,
+                score_threshold=config["score_threshold"],
+            ),
+            "maint": build_maintenance_examples(
+                ledger,
+                ordered_scores,
+                teacher_memory_cap=config["teacher_memory_cap"],
+                redundancy_threshold=config["redundancy_threshold"],
+                max_redundancy_pairs=config["max_redundancy_pairs"],
+            ),
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        _error(errors, "example_recompute_mismatch", str(error))
+        return
+
+    for kind, expected in expected_by_kind.items():
+        expected_rows = [
+            item.model_dump(mode="json")
+            for item in sorted(expected, key=lambda item: item.example_id)
+        ]
+        actual_rows = [
+            item.model_dump(mode="json")
+            for item in sorted(
+                actual_by_kind[kind], key=lambda item: item.example_id
+            )
+        ]
+        if actual_rows != expected_rows:
+            _error(
+                errors,
+                "example_recompute_mismatch",
+                f"stored {kind} examples differ from deterministic recomputation",
+                f"datasets/{kind}.jsonl",
+            )
 
 
 def _audit_example_memory_refs(
@@ -538,3 +784,16 @@ def _canonical_hash(value: Any) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return (
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")

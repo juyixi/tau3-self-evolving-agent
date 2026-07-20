@@ -406,17 +406,20 @@ python -m scripts.build_opd_dataset `
   --config configs/default.yaml `
   --source-run runs/<run-1> `
   --source-run runs/<run-2> `
-  --dataset-build-id opd-iter0-001
+  --dataset-build-id opd-iter0-001 `
+  --output-root runs `
+  --project-root .
 ```
 
 独立审计：
 
 ```powershell
 python -m scripts.audit_opd_dataset `
-  --dataset-dir runs/opd-iter0-001/slow_loop
+  --dataset-dir runs/opd-iter0-001/slow_loop `
+  --project-root .
 ```
 
-CLI 不隐式扫描整个 `runs/`。source runs 必须显式列出，顺序由 lineage 校验后规范化。构建器向 stdout 输出 canonical summary，不输出 prompt、Memory content 或凭证。
+CLI 不隐式扫描整个 `runs/`。source runs 必须显式列出，顺序由 lineage 校验后规范化。正式 dataset、source runs、Tau2 Retail 元数据和 Memory root 必须位于同一项目根目录内；manifest 只保存项目相对路径。审计命令的 `--project-root` 可省略，此时从 dataset 相对路径自动反推。构建器向 stdout 输出 canonical summary，不输出 prompt、Memory content 或凭证。
 
 ## Dataset Manifest
 
@@ -424,6 +427,7 @@ CLI 不隐式扫描整个 `runs/`。source runs 必须显式列出，顺序由 l
 
 - dataset schema、build ID 和构建代码 revision。
 - source run IDs 及 manifest/events/summary SHA256。
+- source runs、Tau2 Retail tasks/split、Memory root 和 dataset 的项目相对路径。
 - iteration、model/adapter revision。
 - Tau2 commit、split hash、精确 train task IDs。
 - Memory agent namespace 和完整 snapshot chain。

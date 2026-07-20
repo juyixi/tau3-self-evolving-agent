@@ -1,6 +1,6 @@
 # Stage 5 Outcome Attribution and OPD Dataset Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build an auditable Stage 5 pipeline that converts same-policy Tau2 retail train runs into normalized evidence, paper-exact memory attribution, and four leakage-safe OPD datasets.
 
@@ -81,7 +81,7 @@
 - Consumes: Tau2 Retail `tasks.json`, `ProjectConfig`, existing `RunContext` and run manifest writer.
 - Produces: `RetailTaskGroups.from_file(path: Path)`, `RetailTaskGroups.signature_for(task_id: str) -> str`, `SlowLoopConfig`, schema-2 events, and manifest `rollout_options.memory_agent_id`.
 
-- [ ] **Step 1: Write failing grouping and configuration tests**
+- [x] **Step 1: Write failing grouping and configuration tests**
 
 ```python
 def test_group_signature_uses_only_canonical_mutating_action_names(tmp_path: Path) -> None:
@@ -146,13 +146,13 @@ def test_slow_loop_tier_priors_require_exact_keys(tier_priors: dict[str, float])
         SlowLoopConfig(tier_priors=tier_priors)
 ```
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run: `python -m pytest tests/unit/slow_loop/test_task_grouping.py tests/unit/test_config.py -v`
 
 Expected: collection/import failure for missing `slow_loop.task_grouping` or missing `ProjectConfig.slow_loop`.
 
-- [ ] **Step 3: Implement the typed config and grouping API**
+- [x] **Step 3: Implement the typed config and grouping API**
 
 ```python
 class SlowLoopConfig(_ConfigModel):
@@ -175,7 +175,7 @@ assert task_group_signature.startswith("retail-actions-v1:")
 
 Validate `tier_priors` with a model validator so its keys are exactly `trajectory`, `tip`, `skill`, and `tool`. Use exact read-only and mutating allowlists from the approved spec. Hash canonical JSON containing `domain`, `grouping_revision`, and sorted unique mutating names. Reject missing task IDs, duplicate IDs, malformed criteria, or unclassified names.
 
-- [ ] **Step 4: Add schema-2 Fast Loop regression tests**
+- [x] **Step 4: Add schema-2 Fast Loop regression tests**
 
 ```python
 def assert_schema2_fast_loop_artifacts(run_path: Path) -> None:
@@ -192,23 +192,23 @@ def test_public_maintenance_diagnostics_exclude_privileged_usage(tmp_path: Path)
     assert set(item) == {"id", "content", "version", "status"}
 ```
 
-- [ ] **Step 5: Run the new tests and verify RED**
+- [x] **Step 5: Run the new tests and verify RED**
 
 Run: `python -m pytest tests/unit/fast_loop/test_maintenance.py tests/unit/scripts/test_run_fast_loop.py -v`
 
 Expected: failures showing schema version `1`, hard-coded `retail`, missing namespace, and public usage fields.
 
-- [ ] **Step 6: Integrate signatures and remove privileged maintenance fields**
+- [x] **Step 6: Integrate signatures and remove privileged maintenance fields**
 
 Set `SCHEMA_VERSION = 2`. Resolve `RetailTaskGroups` from `runtime.retail_tasks_path` before creating `RunContext`. Pass `{task_id: groups.signature_for(task_id)}` and add `memory_agent_id` plus `task_grouping_revision` to `rollout_options`. Restrict public maintenance items to ID/content/version/status; derive usage only in Stage 5.
 
-- [ ] **Step 7: Run focused and affected regression tests**
+- [x] **Step 7: Run focused and affected regression tests**
 
 Run: `python -m pytest tests/unit/slow_loop/test_task_grouping.py tests/unit/test_config.py tests/unit/fast_loop/test_maintenance.py tests/unit/scripts/test_run_fast_loop.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit Task 1**
+- [x] **Step 8: Commit Task 1**
 
 ```bash
 git add configs/default.yaml src/tau3_retail_evolver/config.py src/tau3_retail_evolver/slow_loop src/tau3_retail_evolver/fast_loop/events.py src/tau3_retail_evolver/fast_loop/maintenance.py scripts/run_fast_loop.py tests/unit/slow_loop/test_task_grouping.py tests/unit/test_config.py tests/unit/fast_loop/test_maintenance.py tests/unit/scripts/test_run_fast_loop.py
@@ -229,7 +229,7 @@ git commit -m "feat: add stage 5 task grouping provenance"
 - Consumes: explicit source-run paths, official `RetailTaskCatalog`, `ProjectConfig`, and `history/agents/<agent_id>/memory/snapshots`.
 - Produces: `SourceRun`, `SourceRunSet`, `load_source_runs(paths, *, catalog, memory_root) -> SourceRunSet`, and `iter_jsonl_objects(path) -> Iterator[dict[str, Any]]`.
 
-- [ ] **Step 1: Write strict JSONL reader tests**
+- [x] **Step 1: Write strict JSONL reader tests**
 
 ```python
 def test_iter_jsonl_objects_reports_path_and_line(tmp_path: Path) -> None:
@@ -248,13 +248,13 @@ def test_iter_jsonl_objects_rejects_non_object(tmp_path: Path) -> None:
         list(iter_jsonl_objects(path))
 ```
 
-- [ ] **Step 2: Run JSONL tests and verify RED**
+- [x] **Step 2: Run JSONL tests and verify RED**
 
 Run: `python -m pytest tests/unit/io/test_jsonl.py -v`
 
 Expected: import failure for `iter_jsonl_objects`.
 
-- [ ] **Step 3: Implement the strict reader and rerun tests**
+- [x] **Step 3: Implement the strict reader and rerun tests**
 
 ```python
 def iter_jsonl_objects(path: Path) -> Iterator[dict[str, Any]]:
@@ -273,7 +273,7 @@ def iter_jsonl_objects(path: Path) -> Iterator[dict[str, Any]]:
 
 Expected: `tests/unit/io/test_jsonl.py` PASS.
 
-- [ ] **Step 4: Write source policy and snapshot-lineage tests**
+- [x] **Step 4: Write source policy and snapshot-lineage tests**
 
 ```python
 def test_source_runs_require_same_on_policy_revision_and_continuous_snapshots(tmp_path: Path) -> None:
@@ -290,13 +290,13 @@ def test_source_runs_fail_closed_on_invalid_lineage(tmp_path: Path, mutation: st
         load_source_runs(paths, catalog=catalog, memory_root=memory_root)
 ```
 
-- [ ] **Step 5: Run source loader tests and verify RED**
+- [x] **Step 5: Run source loader tests and verify RED**
 
 Run: `python -m pytest tests/unit/slow_loop/test_source_runs.py -v`
 
 Expected: import failure for `slow_loop.source_runs`.
 
-- [ ] **Step 6: Implement immutable source models and fail-closed validation**
+- [x] **Step 6: Implement immutable source models and fail-closed validation**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -324,13 +324,13 @@ class SourceRunSet:
 
 Validate manifest schema, summary counts, event schema/mode/provenance, exact train membership, unique task IDs, policy revision equality, task-range continuity, snapshot equality, snapshot directory existence, and path exclusion from `history/evaluations`.
 
-- [ ] **Step 7: Run focused source tests**
+- [x] **Step 7: Run focused source tests**
 
 Run: `python -m pytest tests/unit/io/test_jsonl.py tests/unit/slow_loop/test_source_runs.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit Task 2**
+- [x] **Step 8: Commit Task 2**
 
 ```bash
 git add src/tau3_retail_evolver/io/jsonl.py src/tau3_retail_evolver/slow_loop/source_runs.py tests/unit/io/test_jsonl.py tests/unit/slow_loop/test_source_runs.py
@@ -349,7 +349,7 @@ git commit -m "feat: validate stage 5 source run lineage"
 - Consumes: `SourceRunSet`, schema-2 event rows, and verified snapshot directories.
 - Produces: `EpisodeEvidence`, `MaintenanceEvidence`, `EvidenceLedger`, and `build_evidence(source_runs, *, memory_root) -> EvidenceLedger`.
 
-- [ ] **Step 1: Write the happy-path episode reconstruction test**
+- [x] **Step 1: Write the happy-path episode reconstruction test**
 
 ```python
 def test_build_evidence_reconstructs_candidate_selection_trajectory_and_write(tmp_path: Path) -> None:
@@ -366,7 +366,7 @@ def test_build_evidence_reconstructs_candidate_selection_trajectory_and_write(tm
     assert episode.replayed_memory_ids == ()
 ```
 
-- [ ] **Step 2: Write invalid-state-machine and snapshot tests**
+- [x] **Step 2: Write invalid-state-machine and snapshot tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -386,13 +386,13 @@ def test_build_evidence_rejects_invalid_lifecycle(tmp_path: Path, mutation: str,
         build_evidence(source_runs, memory_root=memory_root)
 ```
 
-- [ ] **Step 3: Run evidence tests and verify RED**
+- [x] **Step 3: Run evidence tests and verify RED**
 
 Run: `python -m pytest tests/unit/slow_loop/test_evidence.py -v`
 
 Expected: import failure for `slow_loop.evidence`.
 
-- [ ] **Step 4: Implement typed evidence models and per-task state machines**
+- [x] **Step 4: Implement typed evidence models and per-task state machines**
 
 ```python
 class MemoryCandidateEvidence(BaseModel):
@@ -432,7 +432,7 @@ class EpisodeEvidence(BaseModel):
 
 Create one state object per task. Require exact event progression, consistent common provenance, monotonically increasing turns, and a committed or explicitly empty write lifecycle. Load candidates from `snapshots/<memory_snapshot_id>` with `ReadOnlyMemoryRepository`; compare ID/tier/version and hash content.
 
-- [ ] **Step 5: Add maintenance evidence tests and implementation**
+- [x] **Step 5: Add maintenance evidence tests and implementation**
 
 ```python
 def test_maintenance_evidence_uses_public_repository_view_and_prior_history(tmp_path: Path) -> None:
@@ -448,13 +448,13 @@ def test_maintenance_evidence_uses_public_repository_view_and_prior_history(tmp_
 
 Reconstruct `H_qQ` from preceding `EpisodeEvidence` in completed-task order. Accept only `MaintenanceStarted -> MaintenanceProposed -> MaintenanceCommitted` with matching round and snapshot provenance.
 
-- [ ] **Step 6: Run evidence and affected Fast Loop tests**
+- [x] **Step 6: Run evidence and affected Fast Loop tests**
 
 Run: `python -m pytest tests/unit/slow_loop/test_evidence.py tests/unit/fast_loop/test_runner.py tests/unit/fast_loop/test_maintenance.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Task 3**
+- [x] **Step 7: Commit Task 3**
 
 ```bash
 git add src/tau3_retail_evolver/slow_loop/evidence.py tests/unit/slow_loop/test_evidence.py
@@ -473,7 +473,7 @@ git commit -m "feat: materialize stage 5 evidence ledger"
 - Consumes: `EvidenceLedger`, tier priors, and score threshold.
 - Produces: `MemoryGroupScore`, `MemoryScore`, and `compute_memory_scores(ledger, *, tier_priors, score_threshold) -> tuple[MemoryScore, ...]`.
 
-- [ ] **Step 1: Write a hand-calculated multi-group Eq.11-Eq.12 test**
+- [x] **Step 1: Write a hand-calculated multi-group Eq.11-Eq.12 test**
 
 ```python
 def test_compute_memory_scores_matches_paper_equations() -> None:
@@ -500,7 +500,7 @@ def test_compute_memory_scores_matches_paper_equations() -> None:
     assert score.value == pytest.approx(0.8 * expected_gamma * expected_a_hat)
 ```
 
-- [ ] **Step 2: Write evidence-control, negative, and future-write tests**
+- [x] **Step 2: Write evidence-control, negative, and future-write tests**
 
 ```python
 def test_unretrieved_tasks_never_enter_candidate_control() -> None:
@@ -519,13 +519,13 @@ def test_creator_episode_cannot_value_its_own_write() -> None:
     assert score.source_episode_ids == ("future-selected", "future-not-selected")
 ```
 
-- [ ] **Step 3: Run attribution tests and verify RED**
+- [x] **Step 3: Run attribution tests and verify RED**
 
 Run: `python -m pytest tests/unit/slow_loop/test_attribution.py -v`
 
 Expected: import failure for `slow_loop.attribution`.
 
-- [ ] **Step 4: Implement exact scoring and full diagnostics**
+- [x] **Step 4: Implement exact scoring and full diagnostics**
 
 ```python
 class MemoryGroupScore(BaseModel):
@@ -556,13 +556,13 @@ class MemoryScore(BaseModel):
 
 Index each episode's candidates and selected IDs. For each group, include only retrieved episodes and require both sides. Sum `rho * delta`; do not average groups and do not add recency. Exclude evidence whose episode order is not later than the Memory's creator episode. Sort all groups and Memory scores deterministically.
 
-- [ ] **Step 5: Run attribution and evidence regression tests**
+- [x] **Step 5: Run attribution and evidence regression tests**
 
 Run: `python -m pytest tests/unit/slow_loop/test_attribution.py tests/unit/slow_loop/test_evidence.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 ```bash
 git add src/tau3_retail_evolver/slow_loop/attribution.py tests/unit/slow_loop/test_attribution.py
@@ -583,7 +583,7 @@ git commit -m "feat: compute outcome calibrated memory attribution"
 - Consumes: `EvidenceLedger`, `MemoryScore` rows, score threshold, teacher cap, and redundancy settings.
 - Produces: `OPDExample`, `build_selection_examples`, `build_action_examples`, `build_writing_examples`, `build_maintenance_examples`, and `audit_example_boundaries(example) -> None`.
 
-- [ ] **Step 1: Write recursive leakage tests**
+- [x] **Step 1: Write recursive leakage tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -605,13 +605,13 @@ def test_action_public_input_rejects_memory_even_under_alias() -> None:
         audit_public_input("act", {"context": {"selectedMemories": ["mem-tip-a"]}})
 ```
 
-- [ ] **Step 2: Run leakage tests and verify RED**
+- [x] **Step 2: Run leakage tests and verify RED**
 
 Run: `python -m pytest tests/unit/slow_loop/test_leakage.py -v`
 
 Expected: import failure for `slow_loop.leakage`.
 
-- [ ] **Step 3: Implement normalized-key recursive guards**
+- [x] **Step 3: Implement normalized-key recursive guards**
 
 ```python
 def normalized_key(value: object) -> str:
@@ -635,7 +635,7 @@ FORBIDDEN_PUBLIC_KEYS = frozenset(
 
 Implement `audit_public_input` as a recursive mapping/sequence walker over normalized keys. Reuse `is_credential_key` and the manifest URL policy. Reject credential keys/URLs, evaluator keys, privileged diagnostic variants, and every Memory alias for `act`. Permit stable IDs to appear in both public and privileged fields only for `sel`, `write`, and `maint` join relationships.
 
-- [ ] **Step 4: Write selection and action example tests**
+- [x] **Step 4: Write selection and action example tests**
 
 ```python
 def test_selection_example_keeps_all_scored_candidates_and_separates_values() -> None:
@@ -654,7 +654,7 @@ def test_action_example_removes_memory_from_public_and_uses_same_group_success()
     assert example.privileged_hindsight["successful_trajectory"]["task_group"] == example.provenance["task_group"]
 ```
 
-- [ ] **Step 5: Write writing and maintenance example tests**
+- [x] **Step 5: Write writing and maintenance example tests**
 
 ```python
 def test_writing_example_uses_only_future_scored_committed_memories() -> None:
@@ -677,13 +677,13 @@ def test_maintenance_example_keeps_usage_and_redundancy_privileged() -> None:
     assert len(example.privileged_hindsight["redundancy_pairs"]) <= 50
 ```
 
-- [ ] **Step 6: Run example tests and verify RED**
+- [x] **Step 6: Run example tests and verify RED**
 
 Run: `python -m pytest tests/unit/slow_loop/test_examples.py -v`
 
 Expected: import failure for `slow_loop.examples`.
 
-- [ ] **Step 7: Implement typed OPD examples and deterministic builders**
+- [x] **Step 7: Implement typed OPD examples and deterministic builders**
 
 ```python
 class OPDExample(BaseModel):
@@ -700,13 +700,13 @@ class OPDExample(BaseModel):
 
 Use canonical hashes for example IDs. Build `sel` per episode, `act` per turn, `write` per episode with future-qualified committed writes, and `maint` per committed round. Choose successful trajectories by current-success preference, then reward descending, steps ascending, and episode ID. Compute redundancy only for same-revision, same-dimension embeddings; select deterministic high/low value, high-usage, and redundancy endpoint buckets under the cap.
 
-- [ ] **Step 8: Run leakage, example, attribution, and config tests**
+- [x] **Step 8: Run leakage, example, attribution, and config tests**
 
 Run: `python -m pytest tests/unit/slow_loop/test_leakage.py tests/unit/slow_loop/test_examples.py tests/unit/slow_loop/test_attribution.py tests/unit/test_config.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 5**
+- [x] **Step 9: Commit Task 5**
 
 ```bash
 git add src/tau3_retail_evolver/slow_loop/leakage.py src/tau3_retail_evolver/slow_loop/examples.py tests/unit/slow_loop/test_leakage.py tests/unit/slow_loop/test_examples.py
@@ -730,7 +730,7 @@ git commit -m "feat: build four privileged opd views"
 - Consumes: explicit source-run paths, project config, Tau2 runtime metadata, evidence ledger, scores, and examples.
 - Produces: `build_opd_dataset(request: DatasetBuildRequest) -> DatasetBuildResult`, `audit_dataset(path: Path) -> AuditReport`, and two module CLIs.
 
-- [ ] **Step 1: Write deterministic writer and no-overwrite tests**
+- [x] **Step 1: Write deterministic writer and no-overwrite tests**
 
 ```python
 def test_dataset_build_writes_canonical_files_and_manifest_hashes(tmp_path: Path) -> None:
@@ -751,7 +751,7 @@ def test_dataset_build_refuses_existing_build_id(tmp_path: Path) -> None:
         build_opd_dataset(request)
 ```
 
-- [ ] **Step 2: Write independent audit mutation tests**
+- [x] **Step 2: Write independent audit mutation tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -771,13 +771,13 @@ def test_auditor_fails_closed_on_mutated_dataset(tmp_path: Path, mutation: str, 
     assert error_code in {error.code for error in report.errors}
 ```
 
-- [ ] **Step 3: Run dataset tests and verify RED**
+- [x] **Step 3: Run dataset tests and verify RED**
 
 Run: `python -m pytest tests/unit/slow_loop/test_dataset.py -v`
 
 Expected: import failure for `slow_loop.dataset` or `slow_loop.audit`.
 
-- [ ] **Step 4: Implement canonical artifacts and atomic publication**
+- [x] **Step 4: Implement canonical artifacts and atomic publication**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -798,11 +798,11 @@ class DatasetBuildResult:
 
 Write canonical JSONL rows sorted by stable IDs. Record source hashes, exact revisions, snapshot chain, resolved config, counts, skip reasons, line counts, and artifact SHA256. Build in a temporary sibling directory; run internal audit; publish only when audit passes.
 
-- [ ] **Step 5: Implement independent audit without trusting builder objects**
+- [x] **Step 5: Implement independent audit without trusting builder objects**
 
 Re-read manifest and every artifact from disk. Recompute hashes and counts, validate schemas and unique IDs, rerun `audit_example_boundaries`, require the manifest split hash to equal `RetailTaskCatalog.OFFICIAL_SPLIT_SHA256`, verify every source task ID belongs to the manifest's exact official train task ID set, and validate attribution chronology/provenance references. Do not reuse in-memory builder objects.
 
-- [ ] **Step 6: Write CLI parsing and stdout tests**
+- [x] **Step 6: Write CLI parsing and stdout tests**
 
 ```python
 def test_build_cli_requires_explicit_source_runs_and_prints_canonical_summary(monkeypatch, capsys, tmp_path: Path) -> None:
@@ -821,17 +821,17 @@ def test_audit_cli_returns_nonzero_when_report_fails(monkeypatch, tmp_path: Path
     assert audit_script.main(["--dataset-dir", str(tmp_path)]) == 1
 ```
 
-- [ ] **Step 7: Implement both CLIs**
+- [x] **Step 7: Implement both CLIs**
 
 Expose repeatable `--source-run`, `--dataset-build-id`, `--config`, `--output-root`, and optional `--project-root`. Validate safe slug build IDs. Print only canonical summaries; never print task content, Memory content, prompts, or secrets.
 
-- [ ] **Step 8: Run focused dataset and CLI tests**
+- [x] **Step 8: Run focused dataset and CLI tests**
 
 Run: `python -m pytest tests/unit/slow_loop/test_dataset.py tests/unit/scripts/test_build_opd_dataset.py tests/unit/scripts/test_audit_opd_dataset.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 6**
+- [x] **Step 9: Commit Task 6**
 
 ```bash
 git add src/tau3_retail_evolver/slow_loop/dataset.py src/tau3_retail_evolver/slow_loop/audit.py scripts/build_opd_dataset.py scripts/audit_opd_dataset.py tests/unit/slow_loop/test_dataset.py tests/unit/scripts/test_build_opd_dataset.py tests/unit/scripts/test_audit_opd_dataset.py
@@ -851,7 +851,7 @@ git commit -m "feat: publish and audit stage 5 opd datasets"
 - Consumes: complete Stage 5 pipeline and schema-2 Fast Loop contract.
 - Produces: deterministic two-run integration proof, documented real five-task follow-up, and completed plan checklist.
 
-- [ ] **Step 1: Write a two-run end-to-end integration test**
+- [x] **Step 1: Write a two-run end-to-end integration test**
 
 ```python
 def test_two_continuous_schema2_runs_build_and_audit_four_opd_views(tmp_path: Path) -> None:
@@ -876,33 +876,33 @@ def test_two_continuous_schema2_runs_build_and_audit_four_opd_views(tmp_path: Pa
     assert all(_jsonl_count(first.dataset_dir / "datasets" / f"{kind}.jsonl") > 0 for kind in ("sel", "act", "write", "maint"))
 ```
 
-- [ ] **Step 2: Run integration test and verify RED**
+- [x] **Step 2: Run integration test and verify RED**
 
 Run: `python -m pytest tests/integration/test_stage5_opd_dataset.py -v`
 
 Expected: failure until cross-module manifest normalization excludes build-specific path/ID fields from content-comparison hashes.
 
-- [ ] **Step 3: Make deterministic build normalization pass**
+- [x] **Step 3: Make deterministic build normalization pass**
 
 Ensure source run ordering, evidence IDs, attribution ordering, example ordering, and artifact serialization are independent of CLI input order. Compare content artifacts, not `dataset_build_id` or absolute output paths, in the determinism assertion.
 
-- [ ] **Step 4: Document the deferred real five-task schema-2 validation**
+- [x] **Step 4: Document the deferred real five-task schema-2 validation**
 
 Add commands that run five official train tasks with `memory.enabled=true`, then invoke `build_opd_dataset` and `audit_opd_dataset`. State explicitly that real execution remains pending until Qwen, Tau2 user simulator, embedding model, and API credentials are available together, and that passing it is required before Stage 6.
 
-- [ ] **Step 5: Run all Stage 5 and Stage 4 unit/integration tests**
+- [x] **Step 5: Run all Stage 5 and Stage 4 unit/integration tests**
 
 Run: `python -m pytest tests/unit tests/integration/test_fast_loop_tau2_retail.py tests/integration/test_stage5_opd_dataset.py -v`
 
 Expected: PASS, excluding tests already marked skip by their declared external-runtime preconditions.
 
-- [ ] **Step 6: Run the complete automated suite**
+- [x] **Step 6: Run the complete automated suite**
 
 Run: `python -m pytest -v`
 
 Expected: all runnable tests PASS; only declared external-integration skips remain.
 
-- [ ] **Step 7: Run repository hygiene checks**
+- [x] **Step 7: Run repository hygiene checks**
 
 Run: `git diff --check`
 
@@ -912,7 +912,7 @@ Run: `git status --short`
 
 Expected: only intended Stage 5 files and the plan checkbox update before commit.
 
-- [ ] **Step 8: Update all completed plan checkboxes and commit Task 7**
+- [x] **Step 8: Update all completed plan checkboxes and commit Task 7**
 
 ```bash
 git add tests/integration/test_stage5_opd_dataset.py docs/stage-4-fast-loop-validation.md docs/superpowers/plans/2026-07-20-stage-5-outcome-attribution-opd-dataset.md
@@ -923,16 +923,16 @@ git commit -m "test: verify stage 5 opd dataset pipeline"
 
 ## Final Review Checklist
 
-- [ ] `memory_scores.jsonl` matches hand-calculated Eq.11-Eq.12 fixtures.
-- [ ] No recency term or candidate-pool baseline entered attribution.
-- [ ] Every source task is official train data from one policy iteration.
-- [ ] All candidate content is resolved from the event's frozen snapshot.
-- [ ] Creator episodes cannot value their own writes.
-- [ ] `act.public_input` contains no Memory data.
-- [ ] Usage, confidence, value, and redundancy remain teacher-only.
-- [ ] All four dataset files exist and empty categories carry structured reasons.
-- [ ] Stage 6 online sampling contract is present in every example.
-- [ ] Dataset build is deterministic and independently auditable.
-- [ ] Schema-1, Memory-disabled, failed, test/base, stale, duplicate, and broken-lineage inputs fail closed.
-- [ ] Full runnable test suite and `git diff --check` pass.
+- [x] `memory_scores.jsonl` matches hand-calculated Eq.11-Eq.12 fixtures.
+- [x] No recency term or candidate-pool baseline entered attribution.
+- [x] Every source task is official train data from one policy iteration.
+- [x] All candidate content is resolved from the event's frozen snapshot.
+- [x] Creator episodes cannot value their own writes.
+- [x] `act.public_input` contains no Memory data.
+- [x] Usage, confidence, value, and redundancy remain teacher-only.
+- [x] All four dataset files exist and empty categories carry structured reasons.
+- [x] Stage 6 online sampling contract is present in every example.
+- [x] Dataset build is deterministic and independently auditable.
+- [x] Schema-1, Memory-disabled, failed, test/base, stale, duplicate, and broken-lineage inputs fail closed.
+- [x] Full runnable test suite and `git diff --check` pass.
 - [ ] Real five-task validation remains visibly pending and gates Stage 6.

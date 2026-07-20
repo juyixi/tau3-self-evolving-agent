@@ -11,6 +11,7 @@ import pytest
 
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.types import stable_memory_id, MemoryTier
+from tau3_retail_evolver.fast_loop.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
 from tau3_retail_evolver.slow_loop.evidence import build_evidence
 from tau3_retail_evolver.slow_loop.source_runs import SourceRunSet, load_source_runs
 
@@ -337,12 +338,17 @@ def test_build_evidence_rejects_invalid_lifecycle(
         build_evidence(source, memory_root=memory_root)
 
 
-def _source_with_maintenance(tmp_path: Path) -> tuple[SourceRunSet, Path, str]:
+def _source_with_maintenance(
+    tmp_path: Path,
+    *,
+    content: str = "Keep this public.",
+    committed_created_ids: list[str] | None = None,
+) -> tuple[SourceRunSet, Path, str]:
     memory_root = tmp_path / "history" / "agents" / "retail" / "memory"
     repository = MemoryRepository(memory_root)
     public_memory = repository.add(
         tier="tip",
-        content="Keep this public.",
+        content=content,
         source_task_ids=("seed-maintenance",),
         created_round=0,
     )
@@ -370,7 +376,7 @@ def _source_with_maintenance(tmp_path: Path) -> tuple[SourceRunSet, Path, str]:
     public_item = {
         "id": public_memory.id,
         "tier": "tip",
-        "content": "Keep this public.",
+        "content": content[:MAX_DIAGNOSTIC_CONTENT_CHARS],
         "version": 1,
         "status": "active",
     }
@@ -391,21 +397,14 @@ def _source_with_maintenance(tmp_path: Path) -> tuple[SourceRunSet, Path, str]:
             {
                 **maintenance_common,
                 "event_type": "MaintenanceProposed",
-                "commands": [
-                    {
-                        "operation": "merge",
-                        "source_ids": ["mem-tip-a", "mem-tip-b"],
-                        "content": "Merged public guidance.",
-                        "updated_round": 1,
-                    }
-                ],
+                "commands": [],
             },
             {
                 **maintenance_common,
                 "event_type": "MaintenanceCommitted",
                 "looked_up_ids": [],
-                "created_ids": ["mem-tip-c"],
-                "updated_ids": ["mem-tip-a", "mem-tip-b"],
+                "created_ids": committed_created_ids or [],
+                "updated_ids": [],
                 "completed_rounds": [1],
             },
         ]
@@ -448,5 +447,29 @@ def test_maintenance_evidence_uses_public_repository_and_prior_history(
     assert maintenance.repository_state[0].id == public_memory_id
     assert maintenance.repository_state[0].usage_count == 0
     assert maintenance.repository_state[0].embedding is None
-    assert maintenance.commands[0]["operation"] == "merge"
+    assert maintenance.commands == ()
     assert len(maintenance.prior_episode_ids) == 30
+
+
+def test_maintenance_evidence_accepts_canonical_public_content_truncation(
+    tmp_path: Path,
+) -> None:
+    content = "x" * (MAX_DIAGNOSTIC_CONTENT_CHARS + 17)
+    source, memory_root, _ = _source_with_maintenance(tmp_path, content=content)
+
+    maintenance = build_evidence(source, memory_root=memory_root).maintenance[0]
+
+    assert maintenance.public_repository[0].content == content[:MAX_DIAGNOSTIC_CONTENT_CHARS]
+    assert maintenance.repository_state[0].content == content
+
+
+def test_maintenance_evidence_rejects_commit_result_not_produced_by_commands(
+    tmp_path: Path,
+) -> None:
+    source, memory_root, _ = _source_with_maintenance(
+        tmp_path,
+        committed_created_ids=["mem-tip-not-produced"],
+    )
+
+    with pytest.raises(ValueError, match="maintenance commit result"):
+        build_evidence(source, memory_root=memory_root)

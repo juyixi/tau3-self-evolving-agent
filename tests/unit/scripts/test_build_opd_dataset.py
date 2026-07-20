@@ -48,4 +48,3 @@ def test_build_cli_requires_explicit_source_runs_and_prints_canonical_summary(
         "dataset_dir": str(tmp_path / "runs" / "opd-iter0-001" / "slow_loop"),
     }
     assert captured["request"].source_run_paths == (Path("runs/a"), Path("runs/b"))
-

@@ -10,9 +10,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tau3_retail_evolver.fast_loop.decisions import MaintenanceDecision
+from tau3_retail_evolver.fast_loop.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
 from tau3_retail_evolver.io.jsonl import iter_jsonl_objects
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
-from tau3_retail_evolver.memory.types import MemoryStatus, MemoryTier, stable_memory_id
+from tau3_retail_evolver.memory.operations import DeleteCommand, LookupCommand, MergeCommand
+from tau3_retail_evolver.memory.types import (
+    MemoryStatus,
+    MemoryTier,
+    stable_memory_id,
+)
 from tau3_retail_evolver.slow_loop.source_runs import SourceRun, SourceRunSet
 
 
@@ -167,6 +174,7 @@ def build_evidence(
         cursor = 0
         local_episode_count = 0
         local_task_ids: list[str] = []
+        local_maintenance_rounds: list[int] = []
         while cursor < len(rows):
             row_number, event = rows[cursor]
             event_type = event.get("event_type")
@@ -188,8 +196,7 @@ def build_evidence(
                     source_run.summary["completed_train_tasks_before"]
                     + local_episode_count
                 )
-                maintenance.append(
-                    _build_maintenance(
+                item = _build_maintenance(
                         source_run,
                         block,
                         prior_episode_ids=tuple(item.episode_id for item in episodes),
@@ -197,7 +204,8 @@ def build_evidence(
                         memory_root=memory_root,
                         snapshots=snapshots,
                     )
-                )
+                maintenance.append(item)
+                local_maintenance_rounds.append(item.maintenance_round)
                 continue
             raise ValueError(
                 f"unexpected source event {event_type!r} at {source_run.events_path}:{row_number}"
@@ -206,6 +214,12 @@ def build_evidence(
             raise ValueError(f"evidence episode count mismatch for run {source_run.run_id}")
         if tuple(local_task_ids) != tuple(source_run.manifest["task_ids"]):
             raise ValueError(f"evidence task order mismatch for run {source_run.run_id}")
+        if tuple(local_maintenance_rounds) != tuple(
+            source_run.summary["maintenance_rounds_executed"]
+        ):
+            raise ValueError(
+                f"evidence maintenance rounds mismatch for run {source_run.run_id}"
+            )
 
     return EvidenceLedger(
         iteration=source_runs.iteration,
@@ -584,7 +598,7 @@ def _build_maintenance(
                 raise ValueError(f"maintenance memory missing from snapshot: {public.id}")
             if (
                 item.tier != public.tier
-                or item.content != public.content
+                or item.content[:MAX_DIAGNOSTIC_CONTENT_CHARS] != public.content
                 or item.version != public.version
                 or item.status != public.status
             ):
@@ -606,6 +620,29 @@ def _build_maintenance(
             )
 
     commands = _list_of_mappings(proposed.get("commands"), "maintenance commands")
+    try:
+        decision = MaintenanceDecision.model_validate({"commands": commands})
+    except ValueError as error:
+        raise ValueError("maintenance commands are invalid") from error
+    expected_looked_up, expected_created, expected_updated = _maintenance_result_ids(
+        snapshot,
+        decision,
+        maintenance_round=maintenance_round,
+    )
+    looked_up_ids = _string_tuple(committed.get("looked_up_ids"), "looked_up_ids")
+    created_ids = _string_tuple(committed.get("created_ids"), "created_ids")
+    updated_ids = _string_tuple(committed.get("updated_ids"), "updated_ids")
+    if (
+        looked_up_ids != expected_looked_up
+        or created_ids != expected_created
+        or updated_ids != expected_updated
+    ):
+        raise ValueError("maintenance commit result does not match proposed commands")
+    completed_rounds = _positive_int_tuple(
+        committed.get("completed_rounds"), "completed_rounds"
+    )
+    if maintenance_round not in completed_rounds:
+        raise ValueError("maintenance commit does not include its completed round")
     return MaintenanceEvidence(
         maintenance_id=f"{source_run.run_id}:maintenance-round-{maintenance_round}",
         run_id=source_run.run_id,
@@ -620,11 +657,75 @@ def _build_maintenance(
         prior_episode_ids=prior_episode_ids,
         public_repository=tuple(public_repository),
         repository_state=tuple(repository_state),
-        commands=tuple(_json_mapping(command, "maintenance command") for command in commands),
-        looked_up_ids=_string_tuple(committed.get("looked_up_ids"), "looked_up_ids"),
-        created_ids=_string_tuple(committed.get("created_ids"), "created_ids"),
-        updated_ids=_string_tuple(committed.get("updated_ids"), "updated_ids"),
+        commands=tuple(command.model_dump(mode="json") for command in decision.commands),
+        looked_up_ids=looked_up_ids,
+        created_ids=created_ids,
+        updated_ids=updated_ids,
     )
+
+
+def _maintenance_result_ids(
+    snapshot: ReadOnlyMemoryRepository,
+    decision: MaintenanceDecision,
+    *,
+    maintenance_round: int,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    has_lookup = any(isinstance(command, LookupCommand) for command in decision.commands)
+    has_write = any(not isinstance(command, LookupCommand) for command in decision.commands)
+    if has_lookup and has_write:
+        raise ValueError("maintenance lookup commands cannot be mixed with writes")
+    state = {
+        item.id: [item.tier, item.status]
+        for item in snapshot.list(status=None)
+    }
+    looked_up: list[str] = []
+    created: list[str] = []
+    updated: list[str] = []
+    for command in decision.commands:
+        if isinstance(command, LookupCommand):
+            for memory_id in command.memory_ids:
+                tier_status = state.get(memory_id)
+                if tier_status is None or tier_status[1] != MemoryStatus.ACTIVE:
+                    raise ValueError(f"maintenance lookup references inactive Memory: {memory_id}")
+                looked_up.append(memory_id)
+        elif isinstance(command, DeleteCommand):
+            if command.updated_round != maintenance_round:
+                raise ValueError("maintenance command round mismatch")
+            for memory_id in command.memory_ids:
+                tier_status = state.get(memory_id)
+                if tier_status is None or tier_status[1] != MemoryStatus.ACTIVE:
+                    raise ValueError(f"maintenance delete references inactive Memory: {memory_id}")
+                tier_status[1] = MemoryStatus.RETIRED
+                _append_once(updated, memory_id)
+        elif isinstance(command, MergeCommand):
+            if command.updated_round != maintenance_round:
+                raise ValueError("maintenance command round mismatch")
+            sources = []
+            for memory_id in command.source_ids:
+                tier_status = state.get(memory_id)
+                if tier_status is None or tier_status[1] != MemoryStatus.ACTIVE:
+                    raise ValueError(f"maintenance merge references inactive Memory: {memory_id}")
+                sources.append(tier_status)
+            tiers = {source[0] for source in sources}
+            if len(tiers) != 1:
+                raise ValueError("maintenance merge crosses Memory tiers")
+            tier = next(iter(tiers))
+            target_id = stable_memory_id(tier, command.content)
+            if target_id in state:
+                raise ValueError(f"maintenance merge target already exists: {target_id}")
+            state[target_id] = [tier, MemoryStatus.ACTIVE]
+            created.append(target_id)
+            for memory_id, source in zip(command.source_ids, sources, strict=True):
+                source[1] = MemoryStatus.RETIRED
+                _append_once(updated, memory_id)
+        else:
+            raise TypeError(f"unsupported maintenance command: {type(command).__name__}")
+    return tuple(looked_up), tuple(created), tuple(updated)
+
+
+def _append_once(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
 
 
 def _snapshot(
@@ -679,6 +780,17 @@ def _string_tuple(value: Any, label: str) -> tuple[str, ...]:
     result = tuple(value)
     if len(result) != len(set(result)):
         raise ValueError(f"{label} must contain unique values")
+    return result
+
+
+def _positive_int_tuple(value: Any, label: str) -> tuple[int, ...]:
+    if not isinstance(value, list) or not all(
+        type(item) is int and item > 0 for item in value
+    ):
+        raise ValueError(f"{label} must be a list of positive integers")
+    result = tuple(value)
+    if result != tuple(sorted(set(result))):
+        raise ValueError(f"{label} must be sorted and unique")
     return result
 
 

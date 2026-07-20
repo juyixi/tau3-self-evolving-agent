@@ -6,9 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from tau3_retail_evolver.envs.task_catalog import OFFICIAL_SPLIT_SHA256
+from tau3_retail_evolver.envs.task_catalog import (
+    OFFICIAL_SPLIT_SHA256,
+    OFFICIAL_TRAIN_TASK_IDS,
+)
 from tau3_retail_evolver.slow_loop import dataset as dataset_module
-from tau3_retail_evolver.slow_loop.attribution import MemoryScore
+from tau3_retail_evolver.slow_loop import audit as audit_module
+from tau3_retail_evolver.slow_loop.attribution import compute_memory_scores
 from tau3_retail_evolver.slow_loop.audit import audit_dataset
 from tau3_retail_evolver.slow_loop.audit import AuditError, AuditReport
 from tau3_retail_evolver.slow_loop.dataset import (
@@ -21,19 +25,24 @@ from tau3_retail_evolver.slow_loop.evidence import (
     MemoryCandidateEvidence,
     TrajectoryStepEvidence,
 )
-from tau3_retail_evolver.slow_loop.examples import ONLINE_SAMPLING_CONTRACT, OPDExample
+from tau3_retail_evolver.slow_loop.examples import (
+    build_action_examples,
+    build_maintenance_examples,
+    build_selection_examples,
+    build_writing_examples,
+)
 
 
-def _episode() -> EpisodeEvidence:
+def _episode(*, task_id: str, selected: bool, reward: float) -> EpisodeEvidence:
     content = "Check the order before changing it."
     return EpisodeEvidence(
-        episode_id="run-a:1",
+        episode_id=f"run-a:{task_id}",
         run_id="run-a",
         source_event_start=1,
         source_event_end=8,
         source_event_sha256="e" * 64,
         iteration=0,
-        task_id="1",
+        task_id=task_id,
         task_group="retail-actions-v1:" + "a" * 64,
         model_revision="model-a",
         adapter_revision="adapter-a",
@@ -58,14 +67,14 @@ def _episode() -> EpisodeEvidence:
                 content_sha256=hashlib.sha256(content.encode()).hexdigest(),
             ),
         ),
-        selected_memory_ids=("mem-a",),
+        selected_memory_ids=("mem-a",) if selected else (),
         trajectory=(
             TrajectoryStepEvidence(
                 turn=0,
                 observation="Help with order 1.",
                 action="lookup_order",
                 next_observation="Done.",
-                reward=1.0,
+                reward=reward,
                 done=True,
                 terminated=True,
                 truncated=False,
@@ -74,7 +83,7 @@ def _episode() -> EpisodeEvidence:
         ),
         terminal_evaluation={},
         simulation_result={},
-        final_reward=1.0,
+        final_reward=reward,
         terminated=True,
         truncated=False,
         write_proposals=(),
@@ -84,35 +93,9 @@ def _episode() -> EpisodeEvidence:
     )
 
 
-def _example(kind: str) -> OPDExample:
-    public = {"observation": "Public state."}
-    privileged: dict[str, object] = {}
-    if kind == "sel":
-        public["candidates"] = [
-            {"memory_id": "mem-a", "tier": "tip", "content": "Public tip."}
-        ]
-        privileged = {"candidate_scores": [{"memory_id": "mem-a", "value": None}]}
-    elif kind == "write":
-        privileged = {"written_memory_scores": []}
-    elif kind == "maint":
-        public = {"repository": [{"id": "mem-a", "content": "Public tip."}]}
-        privileged = {
-            "memory_diagnostics": [{"memory_id": "mem-a", "value": None}],
-            "redundancy_pairs": [],
-        }
-    return OPDExample(
-        example_id=f"opd_{kind}_fixture",
-        kind=kind,
-        public_input=public,
-        privileged_hindsight=privileged,
-        response_schema={"type": "object"},
-        sampling_contract=ONLINE_SAMPLING_CONTRACT,
-        provenance={"episode_id": "run-a:1", "task_id": "1"},
-    )
-
-
 def _materialized() -> dataset_module._MaterializedDataset:
-    episode = _episode()
+    selected = _episode(task_id="1", selected=True, reward=1.0)
+    control = _episode(task_id="2", selected=False, reward=0.0)
     ledger = EvidenceLedger(
         iteration=0,
         model_revision="model-a",
@@ -121,44 +104,46 @@ def _materialized() -> dataset_module._MaterializedDataset:
         split_hash=OFFICIAL_SPLIT_SHA256,
         memory_agent_id="retail",
         source_run_ids=("run-a",),
-        episodes=(episode,),
+        episodes=(selected, control),
         maintenance=(),
     )
-    score = MemoryScore(
-        memory_id="mem-a",
-        tier="tip",
-        observed_versions=(1,),
-        creator_episode_id=None,
-        source_episode_ids=(episode.episode_id,),
-        groups=(),
-        retrieved_count=1,
-        selected_count=1,
-        not_selected_count=0,
-        confidence=1.0 - 1.0 / 2**0.5,
-        tier_prior=0.8,
-        attribution=None,
-        value=None,
-        status="insufficient_evidence",
-        qualified_for_supervision=False,
+    scores = compute_memory_scores(
+        ledger,
+        tier_priors={"trajectory": 0.9, "tip": 0.8, "skill": 1.0, "tool": 1.2},
+        score_threshold=0.01,
     )
+    examples = {
+        "sel": build_selection_examples(ledger, scores, score_threshold=0.01),
+        "act": build_action_examples(
+            ledger, scores, score_threshold=0.01, teacher_memory_cap=20
+        ),
+        "write": build_writing_examples(ledger, scores, score_threshold=0.01),
+        "maint": build_maintenance_examples(
+            ledger,
+            scores,
+            teacher_memory_cap=20,
+            redundancy_threshold=0.9,
+            max_redundancy_pairs=50,
+        ),
+    }
     return dataset_module._MaterializedDataset(
         ledger=ledger,
-        scores=(score,),
-        examples={kind: (_example(kind),) for kind in ("sel", "act", "write", "maint")},
+        scores=scores,
+        examples=examples,
         source_runs=(
             {
                 "run_id": "run-a",
-                "task_ids": ["1"],
+                "task_ids": ["1", "2"],
                 "manifest_sha256": "1" * 64,
                 "events_sha256": "2" * 64,
                 "summary_sha256": "3" * 64,
                 "input_memory_snapshot_id": "snapshot-a",
                 "output_memory_snapshot_id": "snapshot-b",
                 "completed_train_tasks_before": 0,
-                "completed_train_tasks_after": 1,
+                "completed_train_tasks_after": 2,
             },
         ),
-        official_train_task_ids=tuple(str(index) for index in range(74)),
+        official_train_task_ids=OFFICIAL_TRAIN_TASK_IDS,
         snapshot_chain=("snapshot-a", "snapshot-b"),
         resolved_config={
             "tier_priors": {"trajectory": 0.9, "tip": 0.8, "skill": 1.0, "tool": 1.2},
@@ -168,6 +153,12 @@ def _materialized() -> dataset_module._MaterializedDataset:
             "max_redundancy_pairs": 50,
         },
         build_code_revision="b" * 40,
+        source_context={
+            "retail_tasks_path": "external/tau2/retail/tasks.json",
+            "retail_split_path": "external/tau2/retail/split_tasks.json",
+            "memory_root": "history/agents/retail/memory",
+            "source_run_paths": ["source-run"],
+        },
     )
 
 
@@ -187,6 +178,11 @@ def _sha256(path: Path) -> str:
 
 def _built(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(dataset_module, "_materialize", lambda request: _materialized())
+    monkeypatch.setattr(
+        audit_module,
+        "_audit_source_evidence",
+        lambda *args, **kwargs: None,
+    )
     return build_opd_dataset(_request(tmp_path)).dataset_dir
 
 
@@ -213,9 +209,8 @@ def test_dataset_build_refuses_existing_build_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(dataset_module, "_materialize", lambda request: _materialized())
     request = _request(tmp_path)
-    build_opd_dataset(request)
+    _built(tmp_path, monkeypatch)
 
     with pytest.raises(FileExistsError, match="refusing to overwrite"):
         build_opd_dataset(request)
@@ -229,7 +224,7 @@ def test_dataset_build_does_not_publish_when_internal_audit_fails(
     monkeypatch.setattr(
         dataset_module,
         "audit_dataset",
-        lambda path: AuditReport(
+        lambda path, **kwargs: AuditReport(
             dataset_build_id="opd-iter0-001",
             passed=False,
             checked_artifacts=(),
@@ -257,6 +252,9 @@ def test_dataset_build_does_not_publish_when_internal_audit_fails(
         ("broken_snapshot_chain", "source_lineage_invalid"),
         ("tampered_score", "attribution_recompute_mismatch"),
         ("privileged_score", "example_score_mismatch"),
+        ("recomputed_example", "example_recompute_mismatch"),
+        ("substituted_train_id", "non_train_source"),
+        ("noncanonical_jsonl", "artifact_noncanonical"),
     ],
 )
 def test_auditor_fails_closed_on_mutated_dataset(
@@ -272,19 +270,25 @@ def test_auditor_fails_closed_on_mutated_dataset(
     if mutation == "duplicate_example":
         selection.write_bytes(selection.read_bytes() + selection.read_bytes())
     elif mutation == "public_value_leak":
-        row = json.loads(selection.read_text(encoding="utf-8"))
-        row["public_input"]["memory_value"] = 0.8
-        selection.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        rows = [json.loads(line) for line in selection.read_text(encoding="utf-8").splitlines()]
+        rows[0]["public_input"]["memory_value"] = 0.8
+        selection.write_text(
+            "".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8"
+        )
     elif mutation == "artifact_hash_changed":
         selection.write_bytes(selection.read_bytes() + b"\n")
     elif mutation == "missing_online_contract":
-        row = json.loads(selection.read_text(encoding="utf-8"))
-        row["sampling_contract"] = {}
-        selection.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        rows = [json.loads(line) for line in selection.read_text(encoding="utf-8").splitlines()]
+        rows[0]["sampling_contract"] = {}
+        selection.write_text(
+            "".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8"
+        )
     elif mutation == "test_task_id":
-        row = json.loads(evidence.read_text(encoding="utf-8"))
-        row["task_id"] = "test-only"
-        evidence.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        rows = [json.loads(line) for line in evidence.read_text(encoding="utf-8").splitlines()]
+        rows[0]["task_id"] = "test-only"
+        evidence.write_text(
+            "".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8"
+        )
     elif mutation == "manifest_count":
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["counts"]["sel"] = 999
@@ -302,9 +306,45 @@ def test_auditor_fails_closed_on_mutated_dataset(
         row["qualified_for_supervision"] = True
         score_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
     elif mutation == "privileged_score":
-        row = json.loads(selection.read_text(encoding="utf-8"))
+        rows = [json.loads(line) for line in selection.read_text(encoding="utf-8").splitlines()]
+        row = rows[0]
         row["privileged_hindsight"]["candidate_scores"][0]["value"] = 9.0
-        selection.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        rows[0] = row
+        selection.write_text(
+            "".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8"
+        )
+    elif mutation == "recomputed_example":
+        rows = [json.loads(line) for line in selection.read_text(encoding="utf-8").splitlines()]
+        rows[0]["public_input"]["candidates"] = []
+        rows[0]["privileged_hindsight"]["candidate_scores"] = []
+        selection.write_text(
+            "".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["artifacts"]["datasets/sel.jsonl"]["sha256"] = _sha256(selection)
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    elif mutation == "substituted_train_id":
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        train_ids = manifest["official_split"]["train_task_ids"]
+        train_ids[0] = "test-only"
+        manifest["official_split"]["train_task_ids_sha256"] = hashlib.sha256(
+            json.dumps(
+                train_ids,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    elif mutation == "noncanonical_jsonl":
+        rows = [json.loads(line) for line in selection.read_text(encoding="utf-8").splitlines()]
+        selection.write_text(
+            "".join(json.dumps(item, sort_keys=False) + "\n" for item in rows),
+            encoding="utf-8",
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["artifacts"]["datasets/sel.jsonl"]["sha256"] = _sha256(selection)
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
 
     report = audit_dataset(root)
 

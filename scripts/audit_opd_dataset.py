@@ -14,12 +14,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description="Independently audit a published Stage 5 OPD dataset."
     )
     parser.add_argument("--dataset-dir", type=Path, required=True)
+    parser.add_argument("--project-root", type=Path)
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    report = audit_dataset(args.dataset_dir)
+    report = audit_dataset(args.dataset_dir, project_root=args.project_root)
     sys.stdout.write(
         json.dumps(
             report.model_dump(mode="json"),

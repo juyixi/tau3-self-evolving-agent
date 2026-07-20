@@ -241,7 +241,7 @@ def _score_memory(
         attribution=attribution,
         value=value,
         status=status,
-        qualified_for_supervision=value is not None and value > score_threshold,
+        qualified_for_supervision=value is not None and value >= score_threshold,
     )
 
 

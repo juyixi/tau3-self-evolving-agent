@@ -18,6 +18,8 @@ from tau3_retail_evolver.slow_loop.leakage import (
         {"rubric": {"nlAssertions": ["private"]}},
         {"url": "https://user:secret@example.com/path"},
         {"nested": {"apiToken": "secret"}},
+        {"note": "Authorization: Bearer sk-secret-value"},
+        {"note": "api_key=sk-secret-value"},
     ],
 )
 def test_public_input_rejects_privileged_or_secret_values(
