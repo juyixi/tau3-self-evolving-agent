@@ -169,9 +169,14 @@ def _resolve_resume_adapter(
         raise ValueError("resume checkpoint training_config mismatch")
     if manifest.get("rollout_config") != config.rollout.model_dump(mode="json"):
         raise ValueError("resume checkpoint rollout_config mismatch")
+    schedule_fingerprint = manifest.get("schedule_fingerprint")
+    if not isinstance(schedule_fingerprint, str) or not schedule_fingerprint.strip():
+        raise ValueError("resume checkpoint schedule_fingerprint must not be empty")
     schedule_sha256 = manifest.get("schedule_sha256")
     if not isinstance(schedule_sha256, str) or not schedule_sha256.strip():
         raise ValueError("resume checkpoint schedule_sha256 must not be empty")
+    if schedule_fingerprint != schedule_sha256:
+        raise ValueError("resume checkpoint schedule fingerprints do not match")
     total_examples = _positive_manifest_int(manifest, "total_examples")
     completed_examples = _positive_manifest_int(manifest, "completed_examples")
     optimizer_steps = _positive_manifest_int(manifest, "optimizer_steps")
@@ -190,6 +195,16 @@ def _resolve_resume_adapter(
         raise ValueError("resume checkpoint adapter_path escapes the checkpoint") from error
     if not adapter_path.is_dir():
         raise ValueError("resume checkpoint adapter_path does not exist")
+    if not (adapter_path / "adapter_config.json").is_file():
+        raise ValueError("resume checkpoint adapter_config.json is missing")
+    adapter_weights = (
+        adapter_path / "adapter_model.safetensors",
+        adapter_path / "adapter_model.bin",
+    )
+    if sum(path.is_file() for path in adapter_weights) != 1:
+        raise ValueError(
+            "resume checkpoint adapter must contain exactly one supported PEFT weight file"
+        )
     if not (checkpoint / "optimizer.pt").is_file():
         raise ValueError("resume checkpoint optimizer.pt is missing")
     return adapter_path

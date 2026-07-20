@@ -321,6 +321,8 @@ def _write_resume_checkpoint(
     checkpoint = output_dir / "checkpoints" / "step-00000001"
     adapter = checkpoint / "adapter" / "shared_policy"
     adapter.mkdir(parents=True)
+    (adapter / "adapter_config.json").write_text("{}\n", encoding="utf-8")
+    (adapter / "adapter_model.safetensors").write_bytes(b"adapter weights")
     manifest = {
         "adapter_path": adapter_path,
         "completed_examples": 2,
@@ -331,6 +333,7 @@ def _write_resume_checkpoint(
             "top_p": 0.95,
             "max_episode_steps": 40,
         },
+        "schedule_fingerprint": "a" * 64,
         "schedule_sha256": "a" * 64,
         "schema_version": 1,
         "source_lineage": {
@@ -413,6 +416,7 @@ def test_resume_preflight_rejects_escaping_or_missing_adapter_path(
         "trainer_start",
         "training_config",
         "rollout_config",
+        "schedule_fingerprint",
         "schedule_sha256",
         "total_examples",
         "completed_examples",
@@ -442,7 +446,9 @@ def test_resume_preflight_rejects_a_checkpoint_missing_a_required_manifest_field
     (
         ({"schema_version": True}, "schema_version"),
         ({"source_lineage": {}}, "source_lineage"),
+        ({"schedule_fingerprint": " "}, "schedule_fingerprint"),
         ({"schedule_sha256": " "}, "schedule_sha256"),
+        ({"schedule_sha256": "b" * 64}, "schedule"),
         ({"total_examples": 0}, "total_examples"),
         ({"completed_examples": True}, "completed_examples"),
         ({"completed_examples": 5}, "completed_examples"),
@@ -482,6 +488,44 @@ def test_resume_preflight_requires_optimizer_state_file(
     monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
 
     with pytest.raises(ValueError, match="optimizer.pt"):
+        train_opd_lora.main(
+            _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
+        )
+
+
+def test_resume_preflight_requires_adapter_config_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    checkpoint, adapter = _write_resume_checkpoint(output_dir)
+    (adapter / "adapter_config.json").unlink()
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    with pytest.raises(ValueError, match="adapter_config.json"):
+        train_opd_lora.main(
+            _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
+        )
+
+
+@pytest.mark.parametrize("layout", ("missing", "ambiguous"))
+def test_resume_preflight_requires_exactly_one_supported_adapter_weight_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    layout: str,
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    checkpoint, adapter = _write_resume_checkpoint(output_dir)
+    if layout == "missing":
+        (adapter / "adapter_model.safetensors").unlink()
+    else:
+        (adapter / "adapter_model.bin").write_bytes(b"other adapter weights")
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    with pytest.raises(ValueError, match="exactly one supported PEFT weight"):
         train_opd_lora.main(
             _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
         )
