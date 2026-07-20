@@ -277,29 +277,29 @@ Commit: `feat: train and resume opd lora adapters`
 **Interfaces:**
 - Produces: `python -m scripts.train_opd_lora` as the Stage 6 entry point.
 
-- [ ] **Step 1: Write CLI parsing tests**
+- [x] **Step 1: Write CLI parsing tests**
 
 Require `--dataset-dir`, `--output-dir`, `--model-revision`, and `--adapter-revision`; support `--config`, repeated `--set`, `--resume-from`, and `--dry-run`.
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `conda run -n tau3-bench python -m pytest tests/unit/scripts/test_train_opd_lora.py -q`
 
 Expected: FAIL because the script is absent.
 
-- [ ] **Step 3: Implement CLI and dry-run preflight**
+- [x] **Step 3: Implement CLI and dry-run preflight**
 
 Dry-run loads and audits the Stage 5 dataset, checks lineage and output paths, resolves training settings, and prints a JSON summary without importing PEFT or loading Qwen weights. Real mode loads the local Transformers model and calls `OPDTrainer.train()`.
 
-- [ ] **Step 4: Add opt-in GPU smoke**
+- [x] **Step 4: Add opt-in GPU smoke contract (real GPU execution pending)**
 
 Gate with `RUN_OPD_GPU_SMOKE=1`; train one example and assert finite KL, non-zero LoRA gradient norm, zero base gradient tensors, adapter-only artifacts, and reload success.
 
-- [ ] **Step 5: Document AutoDL execution**
+- [x] **Step 5: Document AutoDL execution**
 
 Document that the vLLM server must be stopped before training, the Hugging Face cache/model path may be reused, and the remote command must install the `training` extra.
 
-- [ ] **Step 6: Run the complete suite**
+- [x] **Step 6: Run the complete suite**
 
 Run: `conda run -n tau3-bench python -m pytest -q`
 
@@ -314,4 +314,3 @@ Commit: `feat: expose stage 6 opd training workflow`
 - Spec coverage: loader, zero-impact LoRA, shared teacher/student storage, online response generation, same-prefix alignment, full-vocabulary forward KL, adapter-only artifacts, resume, and GPU smoke are assigned to explicit tasks.
 - Placeholder scan: no TBD/TODO or deferred implementation placeholders are present.
 - Type consistency: Stage 5 `OPDExample` flows through `build_aligned_batch` into `shared_policy_opd_step`; the trainer and CLI consume the same typed interfaces.
-

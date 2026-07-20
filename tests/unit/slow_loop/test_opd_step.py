@@ -7,6 +7,7 @@ import torch
 from torch import nn
 
 from tau3_retail_evolver.slow_loop.alignment import AlignedOPDBatch
+from tau3_retail_evolver.slow_loop import opd_step
 from tau3_retail_evolver.slow_loop.opd_step import shared_policy_opd_step
 
 
@@ -83,4 +84,24 @@ def test_shared_policy_opd_step_restores_the_original_mode_when_a_forward_raises
     assert model.calls[0]["grad_enabled"] is False
     assert model.calls[1]["training"] is False
     assert model.calls[1]["grad_enabled"] is True
+    assert model.training is False
+
+
+@pytest.mark.parametrize("failure_stage", ("teacher", "loss"))
+def test_shared_policy_opd_step_restores_mode_after_teacher_or_loss_exception(
+    monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    model = RecordingCausalModel(
+        fail_on_call=1 if failure_stage == "teacher" else None
+    ).eval()
+    if failure_stage == "loss":
+        monkeypatch.setattr(
+            opd_step,
+            "token_forward_kl",
+            lambda *args: (_ for _ in ()).throw(RuntimeError("intentional loss failure")),
+        )
+
+    with pytest.raises(RuntimeError, match="intentional"):
+        shared_policy_opd_step(model, _batch())
+
     assert model.training is False

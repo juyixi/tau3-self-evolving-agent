@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+import argparse
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+import json
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+from typing import Any
+
+from tau3_retail_evolver.config import ProjectConfig, load_config
+from tau3_retail_evolver.slow_loop.audit import AuditReport, audit_dataset
+
+
+@dataclass(frozen=True, slots=True)
+class _Preflight:
+    config: ProjectConfig
+    dataset_dir: Path
+    output_dir: Path
+    model_revision: str
+    adapter_revision: str
+    dataset_build_id: str
+    resume_from: Path | None
+    resume_adapter_path: Path | None
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Train the shared Qwen3.5 LoRA policy on an audited Stage 5 dataset."
+    )
+    parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
+    parser.add_argument("--set", dest="overrides", action="append", default=[])
+    parser.add_argument("--dataset-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--model-revision", required=True)
+    parser.add_argument("--adapter-revision", required=True)
+    parser.add_argument("--resume-from", type=Path)
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    preflight = _run_preflight(args)
+    if args.dry_run:
+        _print_json(_preflight_summary(preflight))
+        return 0
+
+    runtime = _load_training_runtime()
+    _require_cuda_bf16(runtime.torch, preflight.config)
+    processor = runtime.load_qwen35_processor(
+        preflight.config.model.base_model,
+        revision=preflight.model_revision,
+    )
+    model = runtime.load_shared_qwen35_policy(
+        preflight.config.model,
+        preflight.config.lora,
+        preflight.config.training,
+        revision=preflight.model_revision,
+        adapter_path=preflight.resume_adapter_path,
+    )
+    model = model.to("cuda")
+    trainer = runtime.OPDTrainer(
+        model,
+        processor,
+        preflight.config.training,
+        preflight.config.rollout,
+    )
+    result = trainer.train(
+        runtime.TrainingRequest(
+            dataset_dir=preflight.dataset_dir,
+            output_dir=preflight.output_dir,
+            model_revision=preflight.model_revision,
+            adapter_revision=preflight.adapter_revision,
+            resume_from=preflight.resume_from,
+            loaded_adapter_path=preflight.resume_adapter_path,
+        )
+    )
+    _print_json(
+        {
+            "completed_examples": result.completed_examples,
+            "latest_checkpoint": str(result.latest_checkpoint),
+            "optimizer_steps": result.optimizer_steps,
+            "output_dir": str(result.output_dir),
+            "status": "complete",
+        }
+    )
+    return 0
+
+
+def _run_preflight(args: argparse.Namespace) -> _Preflight:
+    model_revision = _nonblank(args.model_revision, "model_revision")
+    adapter_revision = _nonblank(args.adapter_revision, "adapter_revision")
+    config = load_config(args.config, overrides=args.overrides)
+    dataset_dir = Path(args.dataset_dir).resolve()
+    output_dir = Path(args.output_dir).resolve()
+    report = audit_dataset(args.dataset_dir)
+    _require_passing_audit(report)
+    dataset_manifest = _read_json_object(dataset_dir / "dataset_manifest.json")
+    lineage = dataset_manifest.get("policy_lineage")
+    if not isinstance(lineage, Mapping):
+        raise ValueError("dataset policy_lineage is missing")
+    if lineage.get("model_revision") != model_revision:
+        raise ValueError("dataset policy_lineage model_revision does not match --model-revision")
+    if lineage.get("adapter_revision") != adapter_revision:
+        raise ValueError(
+            "dataset policy_lineage adapter_revision does not match --adapter-revision"
+        )
+    build_id = dataset_manifest.get("dataset_build_id")
+    if not isinstance(build_id, str) or not build_id:
+        raise ValueError("dataset_build_id is missing")
+
+    resume_from: Path | None = None
+    resume_adapter_path: Path | None = None
+    if args.resume_from is None:
+        _require_fresh_output(output_dir)
+    else:
+        resume_from = Path(args.resume_from).resolve()
+        resume_adapter_path = _resolve_resume_adapter(
+            resume_from,
+            output_dir=output_dir,
+            config=config,
+            dataset_build_id=build_id,
+            model_revision=model_revision,
+            adapter_revision=adapter_revision,
+        )
+    return _Preflight(
+        config=config,
+        dataset_dir=dataset_dir,
+        output_dir=output_dir,
+        model_revision=model_revision,
+        adapter_revision=adapter_revision,
+        dataset_build_id=build_id,
+        resume_from=resume_from,
+        resume_adapter_path=resume_adapter_path,
+    )
+
+
+def _resolve_resume_adapter(
+    checkpoint: Path,
+    *,
+    output_dir: Path,
+    config: ProjectConfig,
+    dataset_build_id: str,
+    model_revision: str,
+    adapter_revision: str,
+) -> Path:
+    if not checkpoint.is_dir():
+        raise ValueError(f"resume checkpoint does not exist: {checkpoint}")
+    if checkpoint.parent.parent != output_dir:
+        raise ValueError("resume checkpoint must be under output_dir/checkpoints")
+    manifest = _read_json_object(checkpoint / "checkpoint_manifest.json")
+    raw_adapter_path = manifest.get("adapter_path")
+    if not isinstance(raw_adapter_path, str) or not raw_adapter_path:
+        raise ValueError("resume checkpoint adapter_path is invalid")
+    adapter_path = (checkpoint / raw_adapter_path).resolve()
+    try:
+        adapter_path.relative_to(checkpoint)
+    except ValueError as error:
+        raise ValueError("resume checkpoint adapter_path escapes the checkpoint") from error
+    if not adapter_path.is_dir():
+        raise ValueError("resume checkpoint adapter_path does not exist")
+    if manifest.get("dataset_build_id") != dataset_build_id:
+        raise ValueError("resume checkpoint dataset lineage mismatch")
+    if manifest.get("trainer_start") != {
+        "model_revision": model_revision,
+        "adapter_revision": adapter_revision,
+    }:
+        raise ValueError("resume checkpoint trainer lineage mismatch")
+    if manifest.get("training_config") != config.training.model_dump(mode="json"):
+        raise ValueError("resume checkpoint training config mismatch")
+    if manifest.get("rollout_config") != config.rollout.model_dump(mode="json"):
+        raise ValueError("resume checkpoint rollout config mismatch")
+    return adapter_path
+
+
+def _require_fresh_output(output_dir: Path) -> None:
+    managed = (
+        output_dir / "training_generations.jsonl",
+        output_dir / "training_metrics.jsonl",
+        output_dir / "training_manifest.json",
+    )
+    if any(path.exists() for path in managed):
+        raise FileExistsError("training output already exists; use --resume-from")
+    checkpoints = output_dir / "checkpoints"
+    if checkpoints.exists() and any(
+        not (child.name.startswith(".step-") and ".tmp-" in child.name)
+        for child in checkpoints.iterdir()
+    ):
+        raise FileExistsError("training output already exists; use --resume-from")
+
+
+def _require_passing_audit(report: AuditReport) -> None:
+    if report.passed:
+        return
+    details = ", ".join(
+        f"{error.code}: {error.message}" for error in report.errors
+    ) or "unknown audit failure"
+    raise ValueError(f"Stage 5 dataset audit failed: {details}")
+
+
+def _require_cuda_bf16(torch_module: Any, config: ProjectConfig) -> None:
+    if config.training.dtype != "bfloat16":
+        raise RuntimeError("real OPD training requires training.dtype=bfloat16")
+    if not torch_module.cuda.is_available():
+        raise RuntimeError("real OPD training requires an available CUDA GPU")
+    if not torch_module.cuda.is_bf16_supported():
+        raise RuntimeError("real OPD training requires CUDA BF16 support")
+
+
+def _load_training_runtime() -> Any:
+    import torch
+
+    from tau3_retail_evolver.models.qwen35 import (
+        load_qwen35_processor,
+        load_shared_qwen35_policy,
+    )
+    from tau3_retail_evolver.slow_loop.trainer import OPDTrainer, TrainingRequest
+
+    return SimpleNamespace(
+        torch=torch,
+        load_qwen35_processor=load_qwen35_processor,
+        load_shared_qwen35_policy=load_shared_qwen35_policy,
+        OPDTrainer=OPDTrainer,
+        TrainingRequest=TrainingRequest,
+    )
+
+
+def _preflight_summary(preflight: _Preflight) -> dict[str, Any]:
+    return {
+        "adapter_revision": preflight.adapter_revision,
+        "dataset_build_id": preflight.dataset_build_id,
+        "dataset_dir": str(preflight.dataset_dir),
+        "dry_run": True,
+        "model_id": preflight.config.model.base_model,
+        "model_revision": preflight.model_revision,
+        "output_dir": str(preflight.output_dir),
+        "resume_adapter_path": (
+            str(preflight.resume_adapter_path)
+            if preflight.resume_adapter_path is not None
+            else None
+        ),
+        "resume_from": (
+            str(preflight.resume_from) if preflight.resume_from is not None else None
+        ),
+        "rollout_config": preflight.config.rollout.model_dump(mode="json"),
+        "training_config": preflight.config.training.model_dump(mode="json"),
+    }
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"unable to read JSON object: {path}") from error
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON value must be an object: {path}")
+    return value
+
+
+def _nonblank(value: Any, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must not be empty")
+    return value
+
+
+def _print_json(value: Any) -> None:
+    sys.stdout.write(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

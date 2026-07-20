@@ -32,6 +32,8 @@ def test_training_dependencies_are_optional() -> None:
         "torch",
         "transformers",
     }
+    assert "transformers>=5.2" in training_dependencies
+    assert "peft>=0.19" in training_dependencies
 
 
 def test_default_config_has_the_required_retail_environment() -> None:

@@ -257,12 +257,17 @@ def test_load_shared_policy_creates_one_zero_impact_adapter_and_freezes_base_par
         _model_config(),
         LoraConfig(),
         TrainingConfig(),
+        revision="model-commit-a",
         transformers_module=_transformers_module(),
         peft_module=FakePeftModule,
     )
 
     assert FakeAutoModelForCausalLM.calls == [
-        {"model_id": "Qwen/Qwen3.5-9B", "torch_dtype": torch.bfloat16}
+        {
+            "model_id": "Qwen/Qwen3.5-9B",
+            "revision": "model-commit-a",
+            "torch_dtype": torch.bfloat16,
+        }
     ]
     assert FakeAutoModelForCausalLM.model is not None
     assert FakeAutoModelForCausalLM.model.gradient_checkpointing_calls == 1
@@ -381,12 +386,52 @@ def test_load_qwen35_processor_accepts_a_model_id_or_local_path_without_loading_
     qwen35 = _qwen35_module()
 
     processor = qwen35.load_qwen35_processor(
-        tmp_path, transformers_module=_transformers_module()
+        tmp_path,
+        revision="model-commit-a",
+        transformers_module=_transformers_module(),
     )
 
     assert processor == {"processor_for": str(tmp_path)}
-    assert FakeAutoProcessor.calls == [{"model_id": str(tmp_path)}]
+    assert FakeAutoProcessor.calls == [
+        {"model_id": str(tmp_path), "revision": "model-commit-a"}
+    ]
     assert FakeAutoModelForCausalLM.calls == []
+
+
+def test_qwen_loaders_can_require_cached_files_without_downloading(tmp_path: Path) -> None:
+    qwen35 = _qwen35_module()
+
+    qwen35.load_qwen35_processor(
+        tmp_path,
+        revision="model-commit-a",
+        local_files_only=True,
+        transformers_module=_transformers_module(),
+    )
+    qwen35.load_shared_qwen35_policy(
+        _model_config(),
+        LoraConfig(),
+        TrainingConfig(),
+        revision="model-commit-a",
+        local_files_only=True,
+        transformers_module=_transformers_module(),
+        peft_module=FakePeftModule,
+    )
+
+    assert FakeAutoProcessor.calls == [
+        {
+            "model_id": str(tmp_path),
+            "revision": "model-commit-a",
+            "local_files_only": True,
+        }
+    ]
+    assert FakeAutoModelForCausalLM.calls == [
+        {
+            "model_id": "Qwen/Qwen3.5-9B",
+            "revision": "model-commit-a",
+            "local_files_only": True,
+            "torch_dtype": torch.bfloat16,
+        }
+    ]
 
 
 def test_save_adapter_checkpoint_writes_only_peft_adapter_tensors(tmp_path: Path) -> None:

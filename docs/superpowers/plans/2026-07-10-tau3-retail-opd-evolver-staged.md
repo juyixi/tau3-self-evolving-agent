@@ -416,11 +416,11 @@
 - 测试：`tests/unit/models/test_lora_config.py`
 - 集成测试：`tests/integration/test_qwen35_loader.py`
 
-- [ ] 编写单元测试，断言 `use_peft=true`、rank 32、alpha 64、dropout 0.05、可训练基础模型参数数目为零，并拒绝全参数微调。
-- [ ] 使用 text-only 输入，通过当前官方 Transformers multimodal model/processor API 加载 Qwen3.5。
-- [ ] 从官方要求的最新版 Qwen3.5-compatible Transformers revision 开始，然后在 `uv.lock` 中锁定解析出的 Git commit 和全部训练依赖。
-- [ ] 添加 GPU 集成断言，确认只有 LoRA 参数需要 gradient，保存的 artifact 只包含 adapter weights/config，不包含基础模型权重。
-- [ ] 提交为 `feat: load qwen35 shared policy with lora`。
+- [x] 编写单元测试，断言 `use_peft=true`、rank 32、alpha 64、dropout 0.05、可训练基础模型参数数目为零，并拒绝全参数微调。
+- [x] 使用 text-only 输入，通过当前官方 Transformers model/processor API 加载 Qwen3.5，并把显式 model revision 传给两个 loader。
+- [x] 将 `training` extra 的 lower bounds 提升到已发布的 Qwen3.5-compatible Transformers/PEFT 版本；按 Task 6 要求不创建 lockfile。
+- [ ] 已添加 opt-in Qwen GPU 集成契约；仍需在缓存真实权重的 BF16 CUDA 机器上执行，确认只有 LoRA 参数需要 gradient 且 artifact 仅含 adapter。
+- [x] 提交为 `feat: load qwen35 shared policy with lora`。
 
 ### 任务 6.2：前缀对齐与 Token KL
 
@@ -434,11 +434,11 @@
 - 产出：`build_aligned_batch(example, processor) -> AlignedOPDBatch`
 - 产出：`token_kl(student_logits, teacher_logits, student_positions, teacher_positions) -> Tensor`
 
-- [ ] 编写 toy-tokenizer 失败测试，证明两条路径都以完全相同的学生采样 response 结尾、response position array 长度相等、prompt/padding token 被 mask，并且 truncation 不会只移除某一侧的 prefix。
-- [ ] 为全词表 `KL(teacher || student)`、teacher detach、相同 logits 时 loss 为零，以及只在 response token 上求平均编写手工计算测试。
-- [ ] 实现学生序列 `z + y` 和教师序列 `z + h + y`，并提供显式 response position map。
-- [ ] 重新运行聚焦测试并确认 PASS。
-- [ ] 提交为 `feat: add aligned on policy distillation loss`。
+- [x] 编写 toy-tokenizer 失败测试，证明两条路径都以完全相同的学生采样 response 结尾、response position array 长度相等、prompt/padding token 被 mask，并且 truncation 不会只移除某一侧的 prefix。
+- [x] 为全词表 `KL(teacher || student)`、teacher detach、相同 logits 时 loss 为零，以及只在 response token 上求平均编写手工计算测试。
+- [x] 实现学生序列 `z + y` 和教师序列 `z + h + y`，并提供显式 response position map。
+- [x] 重新运行聚焦测试并确认 PASS。
+- [x] 提交为 `feat: add aligned on policy distillation loss`。
 
 ### 任务 6.3：共享模型 Teacher/Student Step
 
@@ -446,12 +446,12 @@
 - 创建：`src/tau3_retail_evolver/slow_loop/opd_step.py`
 - 测试：`tests/unit/slow_loop/test_opd_step.py`
 
-- [ ] 构建一个可观测的小型 causal model，并编写失败测试，确认两次 forward 使用同一个 Python model object 和 parameter storage。
-- [ ] 断言 teacher forward 首先在 `torch.no_grad()` 和 eval mode 下执行，teacher logits 已 detach，student forward 保留 gradient，并且 optimizer 只看到 LoRA 参数。
-- [ ] 断言教师以 `h` 为条件，但只在学生的 `y_<n` 前缀上评分。
-- [ ] 实现 two-pass step，并在发生异常时可靠恢复 model mode。
-- [ ] 重新运行测试并确认 PASS。
-- [ ] 提交为 `feat: add shared model opd training step`。
+- [x] 构建一个可观测的小型 causal model，并编写失败测试，确认两次 forward 使用同一个 Python model object 和 parameter storage。
+- [x] 断言 teacher forward 首先在 `torch.no_grad()` 和 eval mode 下执行，teacher logits 已 detach，student forward 保留 gradient，并且 optimizer 只看到 LoRA 参数。
+- [x] 断言教师以 `h` 为条件，但只在学生的 `y_<n` 前缀上评分。
+- [x] 实现 two-pass step，并验证 teacher、student 或 loss 异常时可靠恢复 model mode。
+- [x] 重新运行测试并确认 PASS。
+- [x] 提交为 `feat: add shared model opd training step`。
 
 ### 任务 6.4：Trainer、Checkpoint 与 GPU Smoke
 
@@ -461,14 +461,14 @@
 - 测试：`tests/unit/slow_loop/test_trainer.py`
 - 集成测试：`tests/integration/test_opd_gpu_smoke.py`
 
-- [ ] 编写 CPU toy-model 测试，覆盖 gradient accumulation、四类样本 sampling、checkpoint manifest、resume 和仅保存 adapter。
-- [ ] 实现 batch/epoch 控制，同时保留论文默认值：learning rate 1e-5、per-device batch 2、accumulation 4、训练三轮。
-- [ ] 拒绝 `source_adapter_revision` 与 trainer 起始 adapter 不一致的数据集。
-- [ ] 在小型兼容模型上运行一个 GPU step；硬件可用时再运行一个 Qwen3.5-9B batch。
-- [ ] 验证 LoRA gradient norm 非零、基础模型 gradient tensor 数目为零、KL 有限且 adapter 可重新加载。
-- [ ] 提交为 `feat: train qwen35 lora with shared policy opd`。
+- [x] 编写 CPU toy-model 测试，覆盖 gradient accumulation、四类样本 sampling、checkpoint manifest、resume 和仅保存 adapter。
+- [x] 实现 batch/epoch 控制，同时保留论文默认值：learning rate 1e-5、per-device batch 2、accumulation 4、训练三轮。
+- [x] 拒绝 `source_adapter_revision` 与 trainer 起始 adapter 不一致的数据集。
+- [ ] opt-in GPU smoke 已实现且默认跳过；尚未在真实 Qwen3.5-9B/BF16 CUDA 上执行一个 batch。
+- [ ] 已编码 LoRA gradient/update、零基础模型 gradient、有限 KL、adapter-only reload 断言；等待真实 GPU smoke 执行。
+- [x] 提交为 `feat: train qwen35 lora with shared policy opd`。
 
-**阶段 6 gate：** toy 和 GPU OPD 测试通过；保存的 artifact 仅包含 adapter；不存在 SFT label 或推理阶段特权信息依赖。
+**阶段 6 gate：** 本地 toy、trainer、CLI/dry-run、resume 与 adapter-only 契约通过；真实 Qwen3.5-9B GPU smoke 尚未运行，因此完整阶段 gate 保持 pending。
 
 ---
 

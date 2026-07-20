@@ -50,13 +50,24 @@ def test_token_forward_kl_ignores_prompt_logits_and_is_zero_for_identical_select
 
 
 def test_token_forward_kl_uses_every_vocabulary_logit() -> None:
-    student_logits = torch.tensor([[[0.0, 0.0, -10.0]]], requires_grad=True)
-    teacher_logits = torch.tensor([[[0.0, 0.0, 10.0]]])
+    student_logits = torch.tensor([[[1.5, -0.5, -4.0]]], requires_grad=True)
+    teacher_logits = torch.tensor([[[-1.0, 0.25, 3.0]]])
     positions = torch.tensor([0])
 
     loss = token_forward_kl(student_logits, teacher_logits, positions, positions)
 
-    assert loss.item() > 10.0
+    student_log_probs = torch.log_softmax(student_logits[0, 0], dim=-1)
+    teacher_log_probs = torch.log_softmax(teacher_logits[0, 0], dim=-1)
+    expected_full_vocab = (
+        teacher_log_probs.exp() * (teacher_log_probs - student_log_probs)
+    ).sum()
+    expected_without_last_vocab = (
+        teacher_log_probs[:2].exp()
+        * (teacher_log_probs[:2] - student_log_probs[:2])
+    ).sum()
+
+    torch.testing.assert_close(loss, expected_full_vocab)
+    assert not torch.isclose(loss, expected_without_last_vocab)
 
 
 @pytest.mark.parametrize(
