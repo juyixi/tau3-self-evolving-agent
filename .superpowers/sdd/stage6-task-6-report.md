@@ -242,3 +242,109 @@ exit 0
   download or real Qwen BF16 training was performed in this fix pass.
 - Pytest cache handling remained disabled for verification to avoid the
   previously documented Windows cache-directory permission issue.
+
+## Whole-Branch Fix
+
+Whole-branch implementation commit: `d9d03ce`
+(`fix: harden Stage 6 training contracts`)
+
+### Review Requirements Resolved
+
+- The LoRA builder now passes the complete explicit Stage 6 PEFT contract:
+  `bias="none"`, `use_rslora=False`, `use_dora=False`,
+  `modules_to_save=None`, and empty rank/alpha patterns in addition to the
+  pinned rank, alpha, dropout, zero-impact initializer, causal-LM task type,
+  and logical `all-linear` target.
+- Adapter checkpoints now write `stage6_adapter_contract.json` beside the PEFT
+  adapter config and weights. The dependency-free validator requires exact
+  schema/options, logical `all-linear`, and a nonempty, unique, sorted list of
+  resolved concrete targets.
+- Adapter state is validated before save. Reload validates the JSON contract
+  before invoking PEFT, then validates the loaded PEFT config and requires its
+  resolved targets to match the contract. CLI resume preflight uses the same
+  pure validator without importing Torch, PEFT, Transformers, or the trainer.
+- The Qwen text path now uses `AutoTokenizer`; `load_qwen35_tokenizer` is
+  exported through the model package and CLI, while `load_qwen35_processor`
+  remains a compatibility alias returning the text tokenizer. No positional
+  text is passed through an `AutoProcessor` contract.
+- Forward KL promotes the complete selected student and detached teacher
+  full-vocabulary logits to FP32 before log-softmax. The 65,536-vocabulary
+  BF16 near-equality regression verifies finite FP32 loss and gradients against
+  an independent FP32 reference.
+- Fresh CLI execution seeds Python, Torch CPU, and Torch CUDA before tokenizer,
+  model, and adapter construction. Fresh trainer execution seeds again before
+  schedule sampling; resume restores checkpoint RNG state before stochastic
+  generation.
+- Checkpoints atomically include `rng_state.pt`; direct trainer resume and pure
+  CLI artifact preflight both require it. The trusted project-owned RNG file is
+  loaded with explicit `weights_only=False`, and Python state is structurally
+  validated before `random.setstate`.
+- The stochastic fresh-versus-resume regression constructs a newly loaded
+  resumed model and verifies identical generated response IDs and exact final
+  LoRA weights against uninterrupted training.
+- Production gradient checkpointing now enables input gradients as required by
+  frozen-base LoRA training. The opt-in GPU smoke uses
+  `gradient_checkpointing=True` and the text tokenizer path.
+
+Files changed in the whole-branch implementation commit:
+
+- `scripts/train_opd_lora.py`
+- `src/tau3_retail_evolver/models/__init__.py`
+- `src/tau3_retail_evolver/models/lora.py`
+- `src/tau3_retail_evolver/models/qwen35.py`
+- `src/tau3_retail_evolver/slow_loop/loss.py`
+- `src/tau3_retail_evolver/slow_loop/trainer.py`
+- `tests/integration/test_opd_gpu_smoke.py`
+- `tests/integration/test_qwen35_loader.py`
+- `tests/unit/models/test_lora_config.py`
+- `tests/unit/scripts/test_train_opd_lora.py`
+- `tests/unit/slow_loop/test_loss.py`
+- `tests/unit/slow_loop/test_trainer.py`
+
+### Whole-Branch TDD Evidence
+
+The first shell-level focused invocation used an unrelated Python 3.14 pytest
+and failed collection because Torch was unavailable. The project plan identified
+`tau3-bench` as the required environment; the authoritative unchanged focused
+red run was then:
+
+```text
+conda run -n tau3-bench python -m pytest -q tests/unit/models/test_lora_config.py tests/integration/test_qwen35_loader.py tests/unit/scripts/test_train_opd_lora.py tests/unit/slow_loop/test_loss.py tests/unit/slow_loop/test_trainer.py tests/integration/test_opd_gpu_smoke.py --basetemp=.pytest-tmp/whole-fix-red
+15 failed, 102 passed, 2 skipped in 7.08s
+```
+
+All 15 failures were the incomplete adapter contract: missing explicit PEFT
+options, missing persisted/validated contract, incomplete reload checks, and
+missing CLI contract preflight. Two additional focused regressions were added
+for the explicit trusted RNG load and pre-`random.setstate` validation; both
+were observed failing before production changes.
+
+Final green verification:
+
+```text
+conda run -n tau3-bench python -m pytest -q tests/unit/models/test_lora_config.py tests/integration/test_qwen35_loader.py tests/unit/scripts/test_train_opd_lora.py tests/unit/slow_loop/test_loss.py tests/unit/slow_loop/test_trainer.py tests/integration/test_opd_gpu_smoke.py --basetemp=.pytest-tmp/whole-fix-focused
+119 passed, 2 skipped in 4.59s
+
+conda run -n tau3-bench python -m pytest -q --basetemp=.pytest-tmp/whole-fix-full
+627 passed, 5 skipped in 14.63s
+
+conda run -n tau3-bench python -m compileall -q scripts src tests
+exit 0
+
+git diff --check
+exit 0 (only expected Windows LF-to-CRLF notices)
+
+git diff --cached --check
+exit 0
+```
+
+### Whole-Branch Review And Concerns
+
+- A final production/test diff review found no unresolved correctness or
+  scope issues. The implementation commit contains only the requested Stage 6
+  production and regression-test changes.
+- The five full-suite skips are expected opt-in integrations. The changed
+  focused set skipped both GPU smoke cases; no model was downloaded.
+- Real Qwen3.5-9B BF16 execution, VRAM fit, checkpointed backward, adapter
+  reload, and exact PEFT-version behavior remain pending on the intended GPU
+  host with the immutable model revision already cached.
