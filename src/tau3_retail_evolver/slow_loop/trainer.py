@@ -270,6 +270,8 @@ class OPDTrainer:
             raise ValueError("resume sampling schedule mismatch")
         if manifest.get("schedule_fingerprint") != schedule_fingerprint:
             raise ValueError("resume schedule fingerprint mismatch")
+        if manifest.get("schedule_sha256") != schedule_fingerprint:
+            raise ValueError("resume schedule sha256 mismatch")
         _validate_loaded_adapter_path(manifest, request, checkpoint)
         completed = manifest.get("completed_examples")
         steps = manifest.get("optimizer_steps")
@@ -316,6 +318,7 @@ class OPDTrainer:
                 "optimizer_steps": optimizer_steps,
                 "rollout_config": self.rollout_config.model_dump(mode="json"),
                 "schedule_fingerprint": schedule_fingerprint,
+                "schedule_sha256": schedule_fingerprint,
                 "schema_version": _MANIFEST_SCHEMA_VERSION,
                 "source_lineage": dict(source_lineage),
                 "status": "checkpoint",

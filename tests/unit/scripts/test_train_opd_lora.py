@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import builtins
+import importlib
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -15,6 +17,28 @@ from tau3_retail_evolver.slow_loop.trainer import TrainingRequest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "default.yaml"
+
+
+def test_importing_training_cli_does_not_import_qwen_loader() -> None:
+    module_names = (
+        "scripts.train_opd_lora",
+        "tau3_retail_evolver.models",
+        "tau3_retail_evolver.models.lora",
+        "tau3_retail_evolver.models.qwen35",
+    )
+    saved_modules = {
+        name: sys.modules.pop(name)
+        for name in module_names
+        if name in sys.modules
+    }
+    try:
+        importlib.import_module("scripts.train_opd_lora")
+
+        assert "tau3_retail_evolver.models.qwen35" not in sys.modules
+    finally:
+        for name in module_names:
+            sys.modules.pop(name, None)
+        sys.modules.update(saved_modules)
 
 
 def _write_dataset_manifest(
@@ -192,6 +216,49 @@ def test_preflight_requires_a_passing_stage5_audit(
 
 
 @pytest.mark.parametrize(
+    ("override", "match"),
+    (
+        ("lora.lora_r=16", "lora_r=32"),
+        ("lora.lora_alpha=32", "lora_alpha=64"),
+        ("lora.lora_dropout=0.1", "lora_dropout=0.05"),
+        ("training.target_modules=q_proj", "target_modules='all-linear'"),
+    ),
+)
+def test_dry_run_rejects_stage6_lora_setting_deviations_before_audit_or_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    override: str,
+    match: str,
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    _write_dataset_manifest(dataset_dir)
+    audit_calls: list[Path] = []
+    monkeypatch.setattr(
+        train_opd_lora,
+        "audit_dataset",
+        lambda path: audit_calls.append(path) or _passing_audit(),
+    )
+    monkeypatch.setattr(
+        train_opd_lora,
+        "_load_training_runtime",
+        lambda: (_ for _ in ()).throw(AssertionError("runtime must not load")),
+    )
+
+    with pytest.raises(ValueError, match=match):
+        train_opd_lora.main(
+            _argv(
+                dataset_dir,
+                tmp_path / "output",
+                "--set",
+                override,
+                "--dry-run",
+            )
+        )
+
+    assert audit_calls == []
+
+
+@pytest.mark.parametrize(
     ("model_revision", "adapter_revision", "match"),
     (
         ("other-model", "adapter-a", "model_revision"),
@@ -231,22 +298,46 @@ def test_fresh_preflight_rejects_existing_training_output(
         train_opd_lora.main(_argv(dataset_dir, output_dir, "--dry-run"))
 
 
+def test_fresh_preflight_rejects_an_existing_non_directory_output_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    output_dir.write_text("not a directory\n", encoding="utf-8")
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    with pytest.raises(NotADirectoryError, match="not a directory"):
+        train_opd_lora.main(_argv(dataset_dir, output_dir, "--dry-run"))
+
+
 def _write_resume_checkpoint(
     output_dir: Path,
     *,
     adapter_path: str = "adapter/shared_policy",
+    manifest_overrides: dict[str, Any] | None = None,
+    missing_fields: tuple[str, ...] = (),
 ) -> tuple[Path, Path]:
     checkpoint = output_dir / "checkpoints" / "step-00000001"
     adapter = checkpoint / "adapter" / "shared_policy"
     adapter.mkdir(parents=True)
     manifest = {
         "adapter_path": adapter_path,
+        "completed_examples": 2,
         "dataset_build_id": "dataset-a",
+        "optimizer_steps": 1,
         "rollout_config": {
             "temperature": 1.0,
             "top_p": 0.95,
             "max_episode_steps": 40,
         },
+        "schedule_sha256": "a" * 64,
+        "schema_version": 1,
+        "source_lineage": {
+            "model_revision": "model-commit-a",
+            "adapter_revision": "adapter-a",
+        },
+        "total_examples": 4,
         "trainer_start": {
             "model_revision": "model-commit-a",
             "adapter_revision": "adapter-a",
@@ -265,9 +356,13 @@ def _write_resume_checkpoint(
             "loss_type": "forward_kl",
         },
     }
+    manifest.update(manifest_overrides or {})
+    for field in missing_fields:
+        manifest.pop(field)
     (checkpoint / "checkpoint_manifest.json").write_text(
         json.dumps(manifest) + "\n", encoding="utf-8"
     )
+    (checkpoint / "optimizer.pt").write_bytes(b"optimizer state")
     return checkpoint, adapter.resolve()
 
 
@@ -304,6 +399,89 @@ def test_resume_preflight_rejects_escaping_or_missing_adapter_path(
     monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
 
     with pytest.raises(ValueError, match="adapter_path"):
+        train_opd_lora.main(
+            _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "schema_version",
+        "dataset_build_id",
+        "source_lineage",
+        "trainer_start",
+        "training_config",
+        "rollout_config",
+        "schedule_sha256",
+        "total_examples",
+        "completed_examples",
+        "optimizer_steps",
+        "adapter_path",
+    ),
+)
+def test_resume_preflight_rejects_a_checkpoint_missing_a_required_manifest_field(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    field: str,
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    checkpoint, _ = _write_resume_checkpoint(output_dir, missing_fields=(field,))
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    with pytest.raises(ValueError, match=field.replace("_", "[ _]")):
+        train_opd_lora.main(
+            _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    (
+        ({"schema_version": True}, "schema_version"),
+        ({"source_lineage": {}}, "source_lineage"),
+        ({"schedule_sha256": " "}, "schedule_sha256"),
+        ({"total_examples": 0}, "total_examples"),
+        ({"completed_examples": True}, "completed_examples"),
+        ({"completed_examples": 5}, "completed_examples"),
+        ({"optimizer_steps": 0}, "optimizer_steps"),
+        ({"optimizer_steps": 3}, "optimizer_steps"),
+    ),
+)
+def test_resume_preflight_rejects_invalid_checkpoint_manifest_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    overrides: dict[str, Any],
+    match: str,
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    checkpoint, _ = _write_resume_checkpoint(
+        output_dir,
+        manifest_overrides=overrides,
+    )
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    with pytest.raises(ValueError, match=match):
+        train_opd_lora.main(
+            _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
+        )
+
+
+def test_resume_preflight_requires_optimizer_state_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    checkpoint, _ = _write_resume_checkpoint(output_dir)
+    (checkpoint / "optimizer.pt").unlink()
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    with pytest.raises(ValueError, match="optimizer.pt"):
         train_opd_lora.main(
             _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
         )

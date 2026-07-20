@@ -386,6 +386,9 @@ def test_checkpoint_contains_adapter_optimizer_and_atomic_json_manifests_only(
     ).train(_request(tmp_path / "dataset", output))
 
     checkpoint = result.latest_checkpoint
+    checkpoint_manifest = json.loads(
+        (checkpoint / "checkpoint_manifest.json").read_text(encoding="utf-8")
+    )
     temporary_checkpoint = saver.calls[0].parent
     assert temporary_checkpoint.parent == checkpoint.parent
     assert temporary_checkpoint.name.startswith(".step-00000001.tmp-")
@@ -395,6 +398,9 @@ def test_checkpoint_contains_adapter_optimizer_and_atomic_json_manifests_only(
     assert (checkpoint / "adapter" / "shared_policy" / "adapter_config.json").is_file()
     assert (checkpoint / "optimizer.pt").is_file()
     assert (checkpoint / "checkpoint_manifest.json").is_file()
+    assert checkpoint_manifest["schedule_sha256"] == checkpoint_manifest[
+        "schedule_fingerprint"
+    ]
     assert (result.output_dir / "training_manifest.json").is_file()
     assert not list(result.output_dir.rglob("pytorch_model*"))
     replaced_names = [destination.name for _, destination in replacements]

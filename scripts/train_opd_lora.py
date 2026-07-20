@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from tau3_retail_evolver.config import ProjectConfig, load_config
+from tau3_retail_evolver.models.lora import validate_stage6_lora_settings
 from tau3_retail_evolver.slow_loop.audit import AuditReport, audit_dataset
 
 
@@ -93,6 +94,7 @@ def _run_preflight(args: argparse.Namespace) -> _Preflight:
     model_revision = _nonblank(args.model_revision, "model_revision")
     adapter_revision = _nonblank(args.adapter_revision, "adapter_revision")
     config = load_config(args.config, overrides=args.overrides)
+    validate_stage6_lora_settings(config.lora, config.training)
     dataset_dir = Path(args.dataset_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
     report = audit_dataset(args.dataset_dir)
@@ -151,6 +153,33 @@ def _resolve_resume_adapter(
     if checkpoint.parent.parent != output_dir:
         raise ValueError("resume checkpoint must be under output_dir/checkpoints")
     manifest = _read_json_object(checkpoint / "checkpoint_manifest.json")
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
+        raise ValueError("resume checkpoint schema_version must be 1")
+    if manifest.get("dataset_build_id") != dataset_build_id:
+        raise ValueError("resume checkpoint dataset_build_id mismatch")
+    expected_lineage = {
+        "model_revision": model_revision,
+        "adapter_revision": adapter_revision,
+    }
+    if manifest.get("source_lineage") != expected_lineage:
+        raise ValueError("resume checkpoint source_lineage mismatch")
+    if manifest.get("trainer_start") != expected_lineage:
+        raise ValueError("resume checkpoint trainer_start mismatch")
+    if manifest.get("training_config") != config.training.model_dump(mode="json"):
+        raise ValueError("resume checkpoint training_config mismatch")
+    if manifest.get("rollout_config") != config.rollout.model_dump(mode="json"):
+        raise ValueError("resume checkpoint rollout_config mismatch")
+    schedule_sha256 = manifest.get("schedule_sha256")
+    if not isinstance(schedule_sha256, str) or not schedule_sha256.strip():
+        raise ValueError("resume checkpoint schedule_sha256 must not be empty")
+    total_examples = _positive_manifest_int(manifest, "total_examples")
+    completed_examples = _positive_manifest_int(manifest, "completed_examples")
+    optimizer_steps = _positive_manifest_int(manifest, "optimizer_steps")
+    if completed_examples > total_examples:
+        raise ValueError("resume checkpoint completed_examples exceeds total_examples")
+    if optimizer_steps > completed_examples:
+        raise ValueError("resume checkpoint optimizer_steps exceeds completed_examples")
+
     raw_adapter_path = manifest.get("adapter_path")
     if not isinstance(raw_adapter_path, str) or not raw_adapter_path:
         raise ValueError("resume checkpoint adapter_path is invalid")
@@ -161,21 +190,21 @@ def _resolve_resume_adapter(
         raise ValueError("resume checkpoint adapter_path escapes the checkpoint") from error
     if not adapter_path.is_dir():
         raise ValueError("resume checkpoint adapter_path does not exist")
-    if manifest.get("dataset_build_id") != dataset_build_id:
-        raise ValueError("resume checkpoint dataset lineage mismatch")
-    if manifest.get("trainer_start") != {
-        "model_revision": model_revision,
-        "adapter_revision": adapter_revision,
-    }:
-        raise ValueError("resume checkpoint trainer lineage mismatch")
-    if manifest.get("training_config") != config.training.model_dump(mode="json"):
-        raise ValueError("resume checkpoint training config mismatch")
-    if manifest.get("rollout_config") != config.rollout.model_dump(mode="json"):
-        raise ValueError("resume checkpoint rollout config mismatch")
+    if not (checkpoint / "optimizer.pt").is_file():
+        raise ValueError("resume checkpoint optimizer.pt is missing")
     return adapter_path
 
 
+def _positive_manifest_int(manifest: Mapping[str, Any], field: str) -> int:
+    value = manifest.get(field)
+    if type(value) is not int or value < 1:
+        raise ValueError(f"resume checkpoint {field} must be a positive integer")
+    return value
+
+
 def _require_fresh_output(output_dir: Path) -> None:
+    if output_dir.exists() and not output_dir.is_dir():
+        raise NotADirectoryError(f"training output path is not a directory: {output_dir}")
     managed = (
         output_dir / "training_generations.jsonl",
         output_dir / "training_metrics.jsonl",

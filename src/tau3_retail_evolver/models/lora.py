@@ -26,11 +26,7 @@ def build_lora_config(
     peft_module: Any | None = None,
 ) -> Any:
     """Build the standard PEFT configuration with a zero-output LoRA update."""
-    if not isinstance(lora_config, ProjectLoraConfig):
-        raise TypeError("lora_config must be a LoraConfig")
-    if not isinstance(training_config, TrainingConfig):
-        raise TypeError("training_config must be a TrainingConfig")
-    _validate_stage_6_project_settings(lora_config, training_config)
+    validate_stage6_lora_settings(lora_config, training_config)
     if init_lora_weights is not True:
         raise ValueError("zero-impact LoRA requires init_lora_weights=True")
 
@@ -54,7 +50,7 @@ def attach_shared_lora_adapter(
     peft_module: Any | None = None,
 ) -> Any:
     """Create or reload exactly one trainable adapter over ``base_model``."""
-    _validate_stage_6_project_settings(lora_config, training_config)
+    validate_stage6_lora_settings(lora_config, training_config)
     peft = peft_module or _require_peft()
     if adapter_path is None:
         model = peft.get_peft_model(
@@ -128,10 +124,15 @@ def _freeze_non_lora_parameters(model: Any) -> None:
         parameter.requires_grad = _is_lora_parameter(name)
 
 
-def _validate_stage_6_project_settings(
+def validate_stage6_lora_settings(
     lora_config: ProjectLoraConfig,
     training_config: TrainingConfig,
 ) -> None:
+    """Validate Stage 6 LoRA invariants without loading training dependencies."""
+    if not isinstance(lora_config, ProjectLoraConfig):
+        raise TypeError("lora_config must be a LoraConfig")
+    if not isinstance(training_config, TrainingConfig):
+        raise TypeError("training_config must be a TrainingConfig")
     if lora_config.use_peft is not True:
         raise ValueError("Stage 6 requires use_peft=True")
     if lora_config.lora_r != _STAGE_6_LORA_R:

@@ -201,6 +201,60 @@ def test_build_lora_config_uses_the_project_zero_impact_settings() -> None:
     }
 
 
+def test_build_and_attach_paths_reuse_the_public_stage6_settings_validator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lora = _lora_module()
+    calls: list[tuple[LoraConfig, TrainingConfig]] = []
+    monkeypatch.setattr(
+        lora,
+        "validate_stage6_lora_settings",
+        lambda lora_config, training_config: calls.append(
+            (lora_config, training_config)
+        ),
+    )
+    lora_config = LoraConfig()
+    training_config = TrainingConfig()
+
+    lora.build_lora_config(
+        lora_config,
+        training_config,
+        peft_module=FakePeftModule,
+    )
+    lora.attach_shared_lora_adapter(
+        FakeBaseModel(),
+        lora_config,
+        training_config,
+        adapter_path=tmp_path / "adapter",
+        peft_module=FakePeftModule,
+    )
+
+    assert calls == [
+        (lora_config, training_config),
+        (lora_config, training_config),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("lora_config", "training_config", "match"),
+    (
+        (LoraConfig(lora_r=16), TrainingConfig(), "lora_r=32"),
+        (LoraConfig(lora_alpha=32), TrainingConfig(), "lora_alpha=64"),
+        (LoraConfig(lora_dropout=0.1), TrainingConfig(), "lora_dropout=0.05"),
+        (LoraConfig(), TrainingConfig(target_modules="q_proj"), "target_modules"),
+    ),
+)
+def test_public_stage6_settings_validator_is_pure_and_rejects_deviations(
+    lora_config: LoraConfig,
+    training_config: TrainingConfig,
+    match: str,
+) -> None:
+    lora = _lora_module()
+
+    with pytest.raises(ValueError, match=match):
+        lora.validate_stage6_lora_settings(lora_config, training_config)
+
+
 @pytest.mark.parametrize(
     ("lora_config", "training_config", "match"),
     (
