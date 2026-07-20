@@ -106,3 +106,87 @@ installed in `tau3-bench`; it was not downloaded or installed for this task.
 - PEFT and Accelerate are not installed in the local baseline environment, so
   optional dependency behavior was tested through lazy-import and fake-module
   contracts rather than by installing packages.
+
+## Fix Pass
+
+Fix implementation commit: `5e32866` (`fix: harden stage 6 training preflight`)
+
+### Important Findings Resolved
+
+- Exposed pure `validate_stage6_lora_settings(lora_config, training_config)`
+  from `models/lora.py`. CLI preflight calls it immediately after
+  `load_config`, and both LoRA construction and attachment reuse it. The module
+  imports no Torch, PEFT, or Transformers runtime dependency.
+- Dry-run now rejects deviations in LoRA rank, alpha, dropout, and target
+  modules before dataset audit or runtime loader access.
+- Resume preflight now requires a complete version-1 checkpoint manifest:
+  dataset build identity, source lineage, trainer start lineage, full training
+  and rollout configs, nonblank schedule SHA-256, valid and bounded example and
+  optimizer counts, a contained existing adapter directory, and an
+  `optimizer.pt` file.
+- Checkpoint publication now includes `schedule_sha256` while retaining the
+  existing schedule fingerprint field for compatibility. Direct trainer
+  resume verifies the new field as well.
+- Fresh mode now rejects an existing output path that is not a directory.
+- The model package uses lazy Qwen loader exports, preserving the Torch-free
+  CLI preflight import boundary. This was covered with a simple in-process test
+  rather than subprocess machinery.
+
+Files changed in the fix commit:
+
+- `scripts/train_opd_lora.py`
+- `src/tau3_retail_evolver/models/__init__.py`
+- `src/tau3_retail_evolver/models/lora.py`
+- `src/tau3_retail_evolver/slow_loop/trainer.py`
+- `tests/unit/models/test_lora_config.py`
+- `tests/unit/scripts/test_train_opd_lora.py`
+- `tests/unit/slow_loop/test_trainer.py`
+
+### Fix TDD Evidence
+
+Tests were written first and observed failing for each reported behavior:
+
+- Public-validator tests failed because
+  `validate_stage6_lora_settings` did not exist.
+- Dry-run deviation cases reached audit/runtime instead of failing during
+  config preflight.
+- Incomplete and invalid resume manifests were accepted, including missing
+  schedule/count fields and absent `optimizer.pt`.
+- An existing file was accepted as a fresh output path.
+- The isolated import-boundary test showed eager Qwen module loading through
+  `models/__init__.py`.
+- The trainer manifest test failed with missing `schedule_sha256`.
+
+Green verification after the fixes:
+
+```text
+conda run -n tau3-bench python -m pytest tests/unit/scripts/test_train_opd_lora.py tests/unit/models/test_lora_config.py tests/unit/slow_loop/test_trainer.py -q
+86 passed in 4.20s
+
+conda run -n tau3-bench python -m pytest -q
+601 passed, 5 skipped in 20.49s
+
+conda run -n tau3-bench python -m compileall -q scripts src tests
+exit 0
+
+git diff --cached --check
+exit 0
+```
+
+### Fix Self-Review And Remaining Concerns
+
+- Confirmed resume validation is Torch-free and does not import the trainer.
+- Confirmed strict integer validation rejects booleans and enforces
+  `optimizer_steps <= completed_examples <= total_examples`.
+- Confirmed adapter paths remain contained by the checkpoint and both adapter
+  and optimizer artifacts have the required filesystem types.
+- Confirmed package-level Qwen loader exports still resolve after conversion
+  to lazy imports.
+- The opt-in GPU smoke remains skipped because `RUN_OPD_GPU_SMOKE=1` was not
+  set. No model download was attempted; real Qwen BF16 hardware validation is
+  still the outstanding Stage 6 gate.
+- Ruff remains unavailable in the existing environment and was not installed.
+- One redundant post-verification loader run encountered Windows `WinError 5`
+  while pytest cleaned temporary directories. The isolated affected contract
+  passed with cache handling disabled; the clean focused and full-suite runs
+  above remain the authoritative results.
