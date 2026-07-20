@@ -305,7 +305,7 @@ Run: `conda run -n tau3-bench python -m pytest -q`
 
 Expected: all unit tests PASS; Tau2, Qwen3.5, and GPU integration tests SKIP unless explicitly enabled.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Commit: `feat: expose stage 6 opd training workflow`
 
