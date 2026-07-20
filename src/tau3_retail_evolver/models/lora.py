@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,6 +17,7 @@ _STAGE_6_LORA_R = 32
 _STAGE_6_LORA_ALPHA = 64
 _STAGE_6_LORA_DROPOUT = 0.05
 _STAGE_6_TARGET_MODULES = "all-linear"
+_STAGE_6_ADAPTER_CONTRACT = "stage6_adapter_contract.json"
 
 
 def build_lora_config(
@@ -36,6 +38,12 @@ def build_lora_config(
         lora_alpha=lora_config.lora_alpha,
         lora_dropout=lora_config.lora_dropout,
         init_lora_weights=True,
+        bias="none",
+        use_rslora=False,
+        use_dora=False,
+        modules_to_save=None,
+        rank_pattern={},
+        alpha_pattern={},
         target_modules=training_config.target_modules,
         task_type=peft.TaskType.CAUSAL_LM,
     )
@@ -52,6 +60,7 @@ def attach_shared_lora_adapter(
     """Create or reload exactly one trainable adapter over ``base_model``."""
     validate_stage6_lora_settings(lora_config, training_config)
     peft = peft_module or _require_peft()
+    expected_targets: Collection[str] | None = None
     if adapter_path is None:
         model = peft.get_peft_model(
             base_model,
@@ -59,15 +68,17 @@ def attach_shared_lora_adapter(
             adapter_name=_ADAPTER_NAME,
         )
     else:
+        contract = validate_stage6_adapter_contract(adapter_path)
+        expected_targets = contract["resolved_target_modules"]
         model = peft.PeftModel.from_pretrained(
             base_model,
             adapter_path,
             adapter_name=_ADAPTER_NAME,
             is_trainable=True,
         )
-        _validate_loaded_adapter_config(model)
 
     _assert_one_adapter(model)
+    _validate_loaded_adapter_config(model, expected_target_modules=expected_targets)
     _freeze_non_lora_parameters(model)
     assert_only_lora_trainable(model)
     return model
@@ -96,6 +107,7 @@ def save_adapter_checkpoint(
 ) -> Path:
     """Save just the adapter tensors, refusing any base-model state."""
     peft = peft_module or _require_peft()
+    resolved_targets = _validate_loaded_adapter_config(model)
     adapter_state = peft.get_peft_model_state_dict(model, adapter_name=_ADAPTER_NAME)
     if not adapter_state:
         raise ValueError("adapter checkpoint has no LoRA tensors")
@@ -114,7 +126,57 @@ def save_adapter_checkpoint(
     adapter_directory = destination / _ADAPTER_NAME
     if not (adapter_directory / "adapter_config.json").is_file():
         raise RuntimeError(f"PEFT did not write a reloadable adapter to {adapter_directory}")
+    contract = {
+        "schema_version": 1,
+        "requested_target_modules": _STAGE_6_TARGET_MODULES,
+        "resolved_target_modules": list(resolved_targets),
+        "options": _stage6_adapter_options(),
+    }
+    (adapter_directory / _STAGE_6_ADAPTER_CONTRACT).write_text(
+        json.dumps(contract, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    validate_stage6_adapter_contract(adapter_directory)
     return adapter_directory
+
+
+def validate_stage6_adapter_contract(adapter_path: str | Path) -> dict[str, Any]:
+    """Read and validate the dependency-free Stage 6 adapter contract."""
+    contract_path = Path(adapter_path) / _STAGE_6_ADAPTER_CONTRACT
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"unable to read {_STAGE_6_ADAPTER_CONTRACT}: {contract_path}") from error
+    if not isinstance(contract, dict):
+        raise ValueError("Stage 6 adapter contract must be a JSON object")
+    expected_keys = {
+        "schema_version",
+        "requested_target_modules",
+        "resolved_target_modules",
+        "options",
+    }
+    if set(contract) != expected_keys:
+        raise ValueError("Stage 6 adapter contract fields are not exact")
+    if type(contract["schema_version"]) is not int or contract["schema_version"] != 1:
+        raise ValueError("Stage 6 adapter contract schema_version must be 1")
+    if contract["requested_target_modules"] != _STAGE_6_TARGET_MODULES:
+        raise ValueError("Stage 6 adapter contract requires logical target all-linear")
+
+    targets = contract["resolved_target_modules"]
+    if not isinstance(targets, list) or not targets:
+        raise ValueError("Stage 6 adapter contract resolved_target_modules must be non-empty")
+    if any(not isinstance(target, str) or not target.strip() for target in targets):
+        raise ValueError("Stage 6 adapter contract resolved_target_modules must contain names")
+    if targets != sorted(targets):
+        raise ValueError("Stage 6 adapter contract resolved_target_modules must be sorted")
+    if len(set(targets)) != len(targets):
+        raise ValueError("Stage 6 adapter contract resolved_target_modules must be unique")
+
+    expected_options = _stage6_adapter_options()
+    options = contract["options"]
+    if not _has_exact_typed_values(options, expected_options):
+        raise ValueError("Stage 6 adapter contract options do not match the exact contract")
+    return contract
 
 
 def _freeze_non_lora_parameters(model: Any) -> None:
@@ -145,7 +207,11 @@ def validate_stage6_lora_settings(
         raise ValueError(f"Stage 6 requires target_modules='{_STAGE_6_TARGET_MODULES}'")
 
 
-def _validate_loaded_adapter_config(model: Any) -> None:
+def _validate_loaded_adapter_config(
+    model: Any,
+    *,
+    expected_target_modules: Collection[str] | None = None,
+) -> tuple[str, ...]:
     try:
         adapter_config = model.peft_config[_ADAPTER_NAME]
     except (AttributeError, KeyError, TypeError) as error:
@@ -156,10 +222,27 @@ def _validate_loaded_adapter_config(model: Any) -> None:
     _require_loaded_value(adapter_config, "lora_dropout", _STAGE_6_LORA_DROPOUT)
     if getattr(adapter_config, "init_lora_weights", None) is not True:
         raise ValueError("loaded adapter requires init_lora_weights=True")
+    if getattr(adapter_config, "bias", None) != "none":
+        raise ValueError("loaded adapter requires bias=none")
+    if getattr(adapter_config, "use_rslora", None) is not False:
+        raise ValueError("loaded adapter requires use_rslora=False")
+    if getattr(adapter_config, "use_dora", None) is not False:
+        raise ValueError("loaded adapter requires use_dora=False")
+    if getattr(adapter_config, "modules_to_save", None) is not None:
+        raise ValueError("loaded adapter requires modules_to_save=None")
+    if getattr(adapter_config, "rank_pattern", None) != {}:
+        raise ValueError("loaded adapter requires an empty rank_pattern")
+    if getattr(adapter_config, "alpha_pattern", None) != {}:
+        raise ValueError("loaded adapter requires an empty alpha_pattern")
     task_type = getattr(adapter_config, "task_type", None)
     if getattr(task_type, "value", task_type) != "CAUSAL_LM":
         raise ValueError("loaded adapter requires task_type=CAUSAL_LM")
-    _validate_loaded_target_modules(getattr(adapter_config, "target_modules", None))
+    resolved_targets = _validate_loaded_target_modules(
+        getattr(adapter_config, "target_modules", None)
+    )
+    if expected_target_modules is not None and resolved_targets != tuple(expected_target_modules):
+        raise ValueError("loaded adapter target_modules do not match the adapter contract")
+    return resolved_targets
 
 
 def _require_loaded_value(adapter_config: Any, name: str, expected: int | float) -> None:
@@ -167,9 +250,9 @@ def _require_loaded_value(adapter_config: Any, name: str, expected: int | float)
         raise ValueError(f"loaded adapter requires {name}={expected}")
 
 
-def _validate_loaded_target_modules(target_modules: Any) -> None:
+def _validate_loaded_target_modules(target_modules: Any) -> tuple[str, ...]:
     if target_modules == _STAGE_6_TARGET_MODULES:
-        return
+        raise ValueError("loaded adapter target_modules must contain resolved concrete suffixes")
     if isinstance(target_modules, str):
         raise ValueError(
             "loaded adapter target_modules must be 'all-linear' or non-empty concrete suffixes"
@@ -182,6 +265,32 @@ def _validate_loaded_target_modules(target_modules: Any) -> None:
         raise ValueError(
             "loaded adapter target_modules must be 'all-linear' or non-empty concrete suffixes"
         )
+    return tuple(sorted(set(target_modules)))
+
+
+def _stage6_adapter_options() -> dict[str, Any]:
+    return {
+        "alpha_pattern": {},
+        "bias": "none",
+        "init_lora_weights": True,
+        "lora_alpha": _STAGE_6_LORA_ALPHA,
+        "lora_dropout": _STAGE_6_LORA_DROPOUT,
+        "modules_to_save": None,
+        "r": _STAGE_6_LORA_R,
+        "rank_pattern": {},
+        "task_type": "CAUSAL_LM",
+        "use_dora": False,
+        "use_rslora": False,
+    }
+
+
+def _has_exact_typed_values(actual: Any, expected: Mapping[str, Any]) -> bool:
+    if not isinstance(actual, dict) or set(actual) != set(expected):
+        return False
+    return all(
+        type(actual[name]) is type(value) and actual[name] == value
+        for name, value in expected.items()
+    )
 
 
 def _assert_one_adapter(model: Any) -> None:

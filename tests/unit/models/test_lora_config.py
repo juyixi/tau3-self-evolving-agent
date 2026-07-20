@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -41,9 +42,13 @@ class FakeBaseModel(nn.Module):
         self.weight = nn.Parameter(torch.ones(2))
         self.config = SimpleNamespace(use_cache=True)
         self.gradient_checkpointing_calls = 0
+        self.input_require_grads_calls = 0
 
     def gradient_checkpointing_enable(self) -> None:
         self.gradient_checkpointing_calls += 1
+
+    def enable_input_require_grads(self) -> None:
+        self.input_require_grads_calls += 1
 
 
 class FakeAdapterModel(nn.Module):
@@ -78,13 +83,48 @@ class FakeAutoModelForCausalLM:
         return cls.model
 
 
+class ProcessorStyleContractFake:
+    def __call__(
+        self,
+        images: Any = None,
+        text: str | None = None,
+        *,
+        add_special_tokens: bool,
+    ) -> dict[str, list[int]]:
+        if images is not None:
+            raise AssertionError("positional text was bound to processor images")
+        assert text is not None
+        assert add_special_tokens is False
+        return {"input_ids": [len(text)]}
+
+
+class TextTokenizerContractFake:
+    def __call__(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool,
+    ) -> dict[str, list[int]]:
+        assert add_special_tokens is False
+        return {"input_ids": [len(text)]}
+
+
+class FakeAutoTokenizer:
+    calls: list[dict[str, Any]] = []
+
+    @classmethod
+    def from_pretrained(cls, model_id: str, **kwargs: Any) -> TextTokenizerContractFake:
+        cls.calls.append({"model_id": model_id, **kwargs})
+        return TextTokenizerContractFake()
+
+
 class FakeAutoProcessor:
     calls: list[dict[str, Any]] = []
 
     @classmethod
-    def from_pretrained(cls, model_id: str, **kwargs: Any) -> object:
+    def from_pretrained(cls, model_id: str, **kwargs: Any) -> ProcessorStyleContractFake:
         cls.calls.append({"model_id": model_id, **kwargs})
-        return {"processor_for": model_id}
+        return ProcessorStyleContractFake()
 
 
 class FakePeftModule:
@@ -107,6 +147,7 @@ class FakePeftModule:
         cls.get_peft_calls.append(
             {"model": model, "config": config, "adapter_name": adapter_name}
         )
+        config.target_modules = {"v_proj", "q_proj", "k_proj"}
         return FakeAdapterModel(model, config)
 
     class PeftModel:
@@ -152,6 +193,7 @@ def reset_fakes() -> None:
     RecordingLoraConfig.calls = []
     FakeAutoModelForCausalLM.calls = []
     FakeAutoModelForCausalLM.model = None
+    FakeAutoTokenizer.calls = []
     FakeAutoProcessor.calls = []
     FakePeftModule.get_peft_calls = []
     FakePeftModule.load_calls = []
@@ -163,6 +205,7 @@ def reset_fakes() -> None:
 def _transformers_module() -> Any:
     return SimpleNamespace(
         AutoModelForCausalLM=FakeAutoModelForCausalLM,
+        AutoTokenizer=FakeAutoTokenizer,
         AutoProcessor=FakeAutoProcessor,
     )
 
@@ -177,10 +220,47 @@ def _loaded_adapter_config(**overrides: Any) -> dict[str, Any]:
         "lora_alpha": 64,
         "lora_dropout": 0.05,
         "init_lora_weights": True,
+        "bias": "none",
+        "use_rslora": False,
+        "use_dora": False,
+        "modules_to_save": None,
+        "rank_pattern": {},
+        "alpha_pattern": {},
         "task_type": "CAUSAL_LM",
-        "target_modules": "all-linear",
+        "target_modules": {"q_proj", "k_proj", "v_proj"},
         **overrides,
     }
+
+
+def _adapter_contract(**overrides: Any) -> dict[str, Any]:
+    contract = {
+        "schema_version": 1,
+        "requested_target_modules": "all-linear",
+        "resolved_target_modules": ["k_proj", "q_proj", "v_proj"],
+        "options": {
+            "alpha_pattern": {},
+            "bias": "none",
+            "init_lora_weights": True,
+            "lora_alpha": 64,
+            "lora_dropout": 0.05,
+            "modules_to_save": None,
+            "r": 32,
+            "rank_pattern": {},
+            "task_type": "CAUSAL_LM",
+            "use_dora": False,
+            "use_rslora": False,
+        },
+    }
+    contract.update(overrides)
+    return contract
+
+
+def _write_adapter_contract(path: Path, **overrides: Any) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "stage6_adapter_contract.json").write_text(
+        json.dumps(_adapter_contract(**overrides)) + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_build_lora_config_uses_the_project_zero_impact_settings() -> None:
@@ -196,6 +276,12 @@ def test_build_lora_config_uses_the_project_zero_impact_settings() -> None:
         "lora_alpha": 64,
         "lora_dropout": 0.05,
         "init_lora_weights": True,
+        "bias": "none",
+        "use_rslora": False,
+        "use_dora": False,
+        "modules_to_save": None,
+        "rank_pattern": {},
+        "alpha_pattern": {},
         "target_modules": "all-linear",
         "task_type": "CAUSAL_LM",
     }
@@ -215,6 +301,8 @@ def test_build_and_attach_paths_reuse_the_public_stage6_settings_validator(
     )
     lora_config = LoraConfig()
     training_config = TrainingConfig()
+    adapter_path = tmp_path / "adapter"
+    _write_adapter_contract(adapter_path)
 
     lora.build_lora_config(
         lora_config,
@@ -225,7 +313,7 @@ def test_build_and_attach_paths_reuse_the_public_stage6_settings_validator(
         FakeBaseModel(),
         lora_config,
         training_config,
-        adapter_path=tmp_path / "adapter",
+        adapter_path=adapter_path,
         peft_module=FakePeftModule,
     )
 
@@ -325,6 +413,7 @@ def test_load_shared_policy_creates_one_zero_impact_adapter_and_freezes_base_par
     ]
     assert FakeAutoModelForCausalLM.model is not None
     assert FakeAutoModelForCausalLM.model.gradient_checkpointing_calls == 1
+    assert FakeAutoModelForCausalLM.model.input_require_grads_calls == 1
     assert model.config.use_cache is False
     assert len(FakePeftModule.get_peft_calls) == 1
     assert FakePeftModule.get_peft_calls[0]["adapter_name"] == "shared_policy"
@@ -339,6 +428,7 @@ def test_load_shared_policy_creates_one_zero_impact_adapter_and_freezes_base_par
 def test_load_shared_policy_reuses_one_trainable_existing_adapter(tmp_path: Path) -> None:
     qwen35 = _qwen35_module()
     adapter_path = tmp_path / "existing-adapter"
+    _write_adapter_contract(adapter_path)
 
     model = qwen35.load_shared_qwen35_policy(
         _model_config(),
@@ -388,6 +478,12 @@ def test_attach_shared_adapter_rejects_project_settings_before_loading_an_adapte
         ({"lora_dropout": 0.1}, "lora_dropout=0.05"),
         ({"init_lora_weights": False}, "init_lora_weights=True"),
         ({"init_lora_weights": "gaussian"}, "init_lora_weights=True"),
+        ({"bias": "all"}, "bias=none"),
+        ({"use_rslora": True}, "use_rslora=False"),
+        ({"use_dora": True}, "use_dora=False"),
+        ({"modules_to_save": ["lm_head"]}, "modules_to_save=None"),
+        ({"rank_pattern": {"q_proj": 16}}, "rank_pattern"),
+        ({"alpha_pattern": {"q_proj": 32}}, "alpha_pattern"),
         ({"task_type": "SEQ_2_SEQ_LM"}, "task_type=CAUSAL_LM"),
         ({"target_modules": ""}, "target_modules"),
         ({"target_modules": "q_proj"}, "target_modules"),
@@ -399,6 +495,8 @@ def test_load_shared_policy_rejects_an_incompatible_loaded_adapter_config(
     match: str,
 ) -> None:
     qwen35 = _qwen35_module()
+    adapter_path = tmp_path / "adapter"
+    _write_adapter_contract(adapter_path)
     FakePeftModule.loaded_adapter_config = _loaded_adapter_config(**overrides)
 
     with pytest.raises(ValueError, match=match):
@@ -406,7 +504,7 @@ def test_load_shared_policy_rejects_an_incompatible_loaded_adapter_config(
             _model_config(),
             LoraConfig(),
             TrainingConfig(),
-            adapter_path=tmp_path / "adapter",
+            adapter_path=adapter_path,
             transformers_module=_transformers_module(),
             peft_module=FakePeftModule,
         )
@@ -414,6 +512,8 @@ def test_load_shared_policy_rejects_an_incompatible_loaded_adapter_config(
 
 def test_load_shared_policy_accepts_expanded_loaded_target_modules(tmp_path: Path) -> None:
     qwen35 = _qwen35_module()
+    adapter_path = tmp_path / "adapter"
+    _write_adapter_contract(adapter_path)
     FakePeftModule.loaded_adapter_config = _loaded_adapter_config(
         target_modules={"q_proj", "k_proj", "v_proj"}
     )
@@ -422,7 +522,7 @@ def test_load_shared_policy_accepts_expanded_loaded_target_modules(tmp_path: Pat
         _model_config(),
         LoraConfig(),
         TrainingConfig(),
-        adapter_path=tmp_path / "adapter",
+        adapter_path=adapter_path,
         transformers_module=_transformers_module(),
         peft_module=FakePeftModule,
     )
@@ -434,28 +534,47 @@ def test_load_shared_policy_accepts_expanded_loaded_target_modules(tmp_path: Pat
     }
 
 
-def test_load_qwen35_processor_accepts_a_model_id_or_local_path_without_loading_a_model(
+def test_load_qwen35_tokenizer_uses_the_text_only_contract_without_loading_a_model(
     tmp_path: Path,
 ) -> None:
     qwen35 = _qwen35_module()
 
-    processor = qwen35.load_qwen35_processor(
+    tokenizer = qwen35.load_qwen35_tokenizer(
         tmp_path,
         revision="model-commit-a",
         transformers_module=_transformers_module(),
     )
 
-    assert processor == {"processor_for": str(tmp_path)}
-    assert FakeAutoProcessor.calls == [
+    assert tokenizer("retail text", add_special_tokens=False) == {
+        "input_ids": [len("retail text")]
+    }
+    assert FakeAutoTokenizer.calls == [
         {"model_id": str(tmp_path), "revision": "model-commit-a"}
     ]
+    assert FakeAutoProcessor.calls == []
     assert FakeAutoModelForCausalLM.calls == []
+
+
+def test_compatibility_processor_loader_also_returns_a_text_tokenizer(tmp_path: Path) -> None:
+    qwen35 = _qwen35_module()
+
+    tokenizer = qwen35.load_qwen35_processor(
+        tmp_path,
+        local_files_only=True,
+        transformers_module=_transformers_module(),
+    )
+
+    assert tokenizer("retail text", add_special_tokens=False)["input_ids"]
+    assert FakeAutoTokenizer.calls == [
+        {"model_id": str(tmp_path), "local_files_only": True}
+    ]
+    assert FakeAutoProcessor.calls == []
 
 
 def test_qwen_loaders_can_require_cached_files_without_downloading(tmp_path: Path) -> None:
     qwen35 = _qwen35_module()
 
-    qwen35.load_qwen35_processor(
+    qwen35.load_qwen35_tokenizer(
         tmp_path,
         revision="model-commit-a",
         local_files_only=True,
@@ -471,7 +590,7 @@ def test_qwen_loaders_can_require_cached_files_without_downloading(tmp_path: Pat
         peft_module=FakePeftModule,
     )
 
-    assert FakeAutoProcessor.calls == [
+    assert FakeAutoTokenizer.calls == [
         {
             "model_id": str(tmp_path),
             "revision": "model-commit-a",
@@ -519,6 +638,48 @@ def test_save_adapter_checkpoint_writes_only_peft_adapter_tensors(tmp_path: Path
     ]
     assert (checkpoint / "adapter_config.json").is_file()
     assert (checkpoint / "adapter-model.bin").is_file()
+    assert json.loads(
+        (checkpoint / "stage6_adapter_contract.json").read_text(encoding="utf-8")
+    ) == _adapter_contract()
+
+
+def test_reload_requires_adapter_contract_before_peft_load(tmp_path: Path) -> None:
+    qwen35 = _qwen35_module()
+    adapter_path = tmp_path / "adapter"
+    adapter_path.mkdir()
+
+    with pytest.raises(ValueError, match="stage6_adapter_contract.json"):
+        qwen35.load_shared_qwen35_policy(
+            _model_config(),
+            LoraConfig(),
+            TrainingConfig(),
+            adapter_path=adapter_path,
+            transformers_module=_transformers_module(),
+            peft_module=FakePeftModule,
+        )
+
+    assert FakePeftModule.load_calls == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    (
+        ({"requested_target_modules": "q_proj"}, "all-linear"),
+        ({"resolved_target_modules": ["q_proj", "k_proj"]}, "sorted"),
+        ({"resolved_target_modules": []}, "resolved_target_modules"),
+        ({"options": {"r": 32}}, "options"),
+    ),
+)
+def test_public_adapter_contract_validator_rejects_non_exact_contracts(
+    tmp_path: Path,
+    overrides: dict[str, Any],
+    match: str,
+) -> None:
+    adapter_path = tmp_path / "adapter"
+    _write_adapter_contract(adapter_path, **overrides)
+
+    with pytest.raises(ValueError, match=match):
+        _lora_module().validate_stage6_adapter_contract(adapter_path)
 
 
 def test_save_adapter_checkpoint_returns_the_exact_path_used_for_adapter_reload(

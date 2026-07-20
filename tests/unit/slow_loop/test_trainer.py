@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,6 +17,7 @@ from tau3_retail_evolver.config import RolloutConfig, TrainingConfig
 from tau3_retail_evolver.slow_loop.alignment import render_public_prompt
 from tau3_retail_evolver.slow_loop.examples import OPDExample
 from tau3_retail_evolver.slow_loop.opd_step import OPDStepResult
+from tau3_retail_evolver.slow_loop import trainer as trainer_module
 from tau3_retail_evolver.slow_loop.trainer import OPDTrainer, TrainingRequest
 
 
@@ -81,6 +83,44 @@ class ToyPolicy(nn.Module):
         return SimpleNamespace(logits=logits)
 
 
+class StochasticToyPolicy(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        torch.rand(())
+        self.base_weight = nn.Parameter(torch.tensor(0.25), requires_grad=False)
+        self.lora_weight = nn.Parameter(torch.tensor(0.5))
+        self.generate_calls = 0
+        self.fail_on_generate_call: int | None = None
+
+    def generate(self, input_ids: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        del kwargs
+        self.generate_calls += 1
+        python_draw = random.randint(1, 18)
+        torch_draw = int(torch.randint(1, 19, ()).item())
+        if self.fail_on_generate_call == self.generate_calls:
+            raise RuntimeError("injected stochastic generation failure")
+        response_id = (python_draw + torch_draw) % 18 + 1
+        response = torch.tensor(
+            [[response_id]], dtype=input_ids.dtype, device=input_ids.device
+        )
+        return torch.cat((input_ids, response), dim=1)
+
+    def forward(
+        self, *, input_ids: torch.Tensor, attention_mask: torch.Tensor
+    ) -> SimpleNamespace:
+        assert attention_mask.shape == input_ids.shape
+        vocabulary = torch.arange(19, device=input_ids.device, dtype=torch.float32)
+        centers = input_ids.to(torch.float32).unsqueeze(-1).remainder(19)
+        logits = -(vocabulary - centers).square() / 20
+        features = (vocabulary / 19).expand_as(logits)
+        features = torch.nn.functional.dropout(
+            features,
+            p=0.4,
+            training=self.training,
+        )
+        return SimpleNamespace(logits=logits + self.lora_weight * features)
+
+
 class RecordingSGD(torch.optim.SGD):
     def __init__(self, params: Iterable[nn.Parameter], *, lr: float) -> None:
         materialized = list(params)
@@ -112,6 +152,31 @@ class ToyCheckpointSaver:
         adapter = destination / "shared_policy"
         adapter.mkdir(parents=True)
         (adapter / "adapter_config.json").write_text("{}\n", encoding="utf-8")
+        (adapter / "stage6_adapter_contract.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "requested_target_modules": "all-linear",
+                    "resolved_target_modules": ["q_proj"],
+                    "options": {
+                        "alpha_pattern": {},
+                        "bias": "none",
+                        "init_lora_weights": True,
+                        "lora_alpha": 64,
+                        "lora_dropout": 0.05,
+                        "modules_to_save": None,
+                        "r": 32,
+                        "rank_pattern": {},
+                        "task_type": "CAUSAL_LM",
+                        "use_dora": False,
+                        "use_rslora": False,
+                    },
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         torch.save({"lora_weight": model.lora_weight.detach()}, adapter / "adapter_model.bin")
         return adapter
 
@@ -215,6 +280,13 @@ def _checkpoint_adapter_path(checkpoint: Path) -> Path:
 def _load_toy_policy(adapter_path: Path) -> ToyPolicy:
     state = torch.load(adapter_path / "adapter_model.bin", weights_only=True)
     model = ToyPolicy()
+    model.lora_weight.data.copy_(state["lora_weight"])
+    return model
+
+
+def _load_stochastic_policy(adapter_path: Path) -> StochasticToyPolicy:
+    state = torch.load(adapter_path / "adapter_model.bin", weights_only=True)
+    model = StochasticToyPolicy()
     model.lora_weight.data.copy_(state["lora_weight"])
     return model
 
@@ -396,7 +468,14 @@ def test_checkpoint_contains_adapter_optimizer_and_atomic_json_manifests_only(
     assert not temporary_checkpoint.exists()
     assert stale_temp.is_dir()
     assert (checkpoint / "adapter" / "shared_policy" / "adapter_config.json").is_file()
+    assert (
+        checkpoint
+        / "adapter"
+        / "shared_policy"
+        / "stage6_adapter_contract.json"
+    ).is_file()
     assert (checkpoint / "optimizer.pt").is_file()
+    assert (checkpoint / "rng_state.pt").is_file()
     assert (checkpoint / "checkpoint_manifest.json").is_file()
     assert checkpoint_manifest["schedule_sha256"] == checkpoint_manifest[
         "schedule_fingerprint"
@@ -487,6 +566,117 @@ def test_resume_uses_latest_completed_step_and_removes_uncommitted_rows(tmp_path
     assert len({row["sequence_index"] for row in generations}) == 6
     assert result.completed_examples == 6
     assert result.optimizer_steps == 2
+
+
+def test_stochastic_resume_matches_uninterrupted_training_with_fresh_loaded_model(
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "dataset"
+    _write_dataset(dataset, {"sel": 4})
+    config = _config(
+        seed=1729,
+        per_device_batch_size=1,
+        gradient_accumulation_steps=2,
+    )
+
+    uninterrupted_model = StochasticToyPolicy()
+    uninterrupted = OPDTrainer(
+        uninterrupted_model,
+        ToyTokenizer(),
+        config,
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(dataset, tmp_path / "uninterrupted"))
+
+    interrupted_model = StochasticToyPolicy()
+    interrupted_model.fail_on_generate_call = 3
+    interrupted_output = tmp_path / "interrupted"
+    with pytest.raises(RuntimeError, match="stochastic generation failure"):
+        OPDTrainer(
+            interrupted_model,
+            ToyTokenizer(),
+            config,
+            RolloutConfig(),
+            checkpoint_saver=ToyCheckpointSaver(),
+            optimizer_factory=OptimizerFactory(),
+        ).train(_request(dataset, interrupted_output))
+
+    checkpoint = interrupted_output / "checkpoints" / "step-00000001"
+    adapter_path = _checkpoint_adapter_path(checkpoint)
+    random.seed(999)
+    torch.manual_seed(999)
+    resumed_model = _load_stochastic_policy(adapter_path)
+    resumed = OPDTrainer(
+        resumed_model,
+        ToyTokenizer(),
+        config,
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(
+        _request(
+            dataset,
+            interrupted_output,
+            resume_from=checkpoint,
+            loaded_adapter_path=adapter_path,
+        )
+    )
+
+    assert [row["response_ids"] for row in _rows(
+        uninterrupted.output_dir / "training_generations.jsonl"
+    )] == [row["response_ids"] for row in _rows(
+        resumed.output_dir / "training_generations.jsonl"
+    )]
+    torch.testing.assert_close(
+        resumed_model.lora_weight,
+        uninterrupted_model.lora_weight,
+        rtol=0,
+        atol=0,
+    )
+
+
+def test_restore_rng_state_explicitly_trusts_the_project_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "rng_state.pt"
+    path.write_bytes(b"project-owned rng state")
+    calls: list[tuple[Path, dict[str, Any]]] = []
+    state = {
+        "python_random_state": random.getstate(),
+        "torch_cpu_rng_state": torch.get_rng_state(),
+    }
+
+    def load(candidate: Path, **kwargs: Any) -> dict[str, Any]:
+        calls.append((candidate, kwargs))
+        return state
+
+    monkeypatch.setattr(trainer_module.torch, "load", load)
+    monkeypatch.setattr(trainer_module.torch.cuda, "is_available", lambda: False)
+
+    trainer_module._restore_rng_state(path)
+
+    assert calls == [(path, {"map_location": "cpu", "weights_only": False})]
+
+
+def test_restore_rng_state_validates_python_state_before_setting_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "rng_state.pt"
+    path.write_bytes(b"project-owned rng state")
+    state = {
+        "python_random_state": (3, "not-an-internal-state", None),
+        "torch_cpu_rng_state": torch.get_rng_state(),
+    }
+    setstate_calls: list[Any] = []
+    monkeypatch.setattr(trainer_module.torch, "load", lambda *args, **kwargs: state)
+    monkeypatch.setattr(trainer_module.random, "setstate", setstate_calls.append)
+    monkeypatch.setattr(trainer_module.torch.cuda, "is_available", lambda: False)
+
+    with pytest.raises(ValueError, match="Python RNG state"):
+        trainer_module._restore_rng_state(path)
+
+    assert setstate_calls == []
 
 
 @pytest.mark.parametrize(

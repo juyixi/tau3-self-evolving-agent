@@ -70,6 +70,41 @@ def test_token_forward_kl_uses_every_vocabulary_logit() -> None:
     assert not torch.isclose(loss, expected_without_last_vocab)
 
 
+def test_bfloat16_near_equal_large_vocabulary_kl_matches_float32_reference() -> None:
+    vocabulary_size = 65_536
+    base = torch.linspace(-8.0, 8.0, vocabulary_size, dtype=torch.float32)
+    teacher_logits = torch.stack((base, base.flip(0))).reshape(
+        1, 2, vocabulary_size
+    ).to(torch.bfloat16)
+    student_logits = teacher_logits.clone()
+    student_logits[..., ::257] += torch.tensor(0.03125, dtype=torch.bfloat16)
+    student_logits.requires_grad_()
+    positions = torch.tensor([0, 1], dtype=torch.long)
+
+    loss = token_forward_kl(
+        student_logits,
+        teacher_logits,
+        positions,
+        positions,
+    )
+
+    selected_student = student_logits[0, positions].float()
+    selected_teacher = teacher_logits[0, positions].float()
+    student_log_probs = torch.log_softmax(selected_student, dim=-1)
+    teacher_log_probs = torch.log_softmax(selected_teacher, dim=-1)
+    reference = (
+        teacher_log_probs.exp() * (teacher_log_probs - student_log_probs)
+    ).sum(dim=-1).mean()
+    assert loss.dtype == torch.float32
+    assert torch.isfinite(loss)
+    assert loss.item() >= -1e-7
+    torch.testing.assert_close(loss, reference, rtol=1e-5, atol=1e-7)
+
+    loss.backward()
+    assert student_logits.grad is not None
+    assert torch.isfinite(student_logits.grad).all()
+
+
 @pytest.mark.parametrize(
     ("student_logits", "teacher_logits", "student_positions", "teacher_positions", "match"),
     (

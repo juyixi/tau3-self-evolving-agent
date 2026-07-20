@@ -19,14 +19,14 @@ def test_qwen35_shared_policy_is_zero_impact_and_reloads_its_adapter(tmp_path: P
     from tau3_retail_evolver.config import LoraConfig, ModelConfig, TrainingConfig
     from tau3_retail_evolver.models.lora import save_adapter_checkpoint
     from tau3_retail_evolver.models.qwen35 import (
-        load_qwen35_processor,
+        load_qwen35_tokenizer,
         load_shared_qwen35_policy,
     )
 
     model_config = ModelConfig(base_model="Qwen/Qwen3.5-9B")
     lora_config = LoraConfig()
     training_config = TrainingConfig()
-    processor = load_qwen35_processor(model_config.base_model)
+    tokenizer = load_qwen35_tokenizer(model_config.base_model)
     model = load_shared_qwen35_policy(model_config, lora_config, training_config)
 
     base_parameters = [
@@ -41,7 +41,7 @@ def test_qwen35_shared_policy_is_zero_impact_and_reloads_its_adapter(tmp_path: P
     assert all(torch.count_nonzero(parameter).item() == 0 for parameter in lora_b_parameters)
 
     device = next(model.parameters()).device
-    inputs = processor("Return a short retail policy response.", return_tensors="pt")
+    inputs = tokenizer("Return a short retail policy response.", return_tensors="pt")
     inputs = {name: value.to(device) for name, value in inputs.items()}
     with torch.no_grad():
         output = model(**inputs)

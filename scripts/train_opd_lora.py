@@ -5,12 +5,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import random
 import sys
 from types import SimpleNamespace
 from typing import Any
 
 from tau3_retail_evolver.config import ProjectConfig, load_config
-from tau3_retail_evolver.models.lora import validate_stage6_lora_settings
+from tau3_retail_evolver.models.lora import (
+    validate_stage6_adapter_contract,
+    validate_stage6_lora_settings,
+)
 from tau3_retail_evolver.slow_loop.audit import AuditReport, audit_dataset
 
 
@@ -50,7 +54,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     runtime = _load_training_runtime()
     _require_cuda_bf16(runtime.torch, preflight.config)
-    processor = runtime.load_qwen35_processor(
+    _seed_training_rng(runtime.torch, preflight.config.training.seed)
+    tokenizer = runtime.load_qwen35_tokenizer(
         preflight.config.model.base_model,
         revision=preflight.model_revision,
     )
@@ -64,7 +69,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     model = model.to("cuda")
     trainer = runtime.OPDTrainer(
         model,
-        processor,
+        tokenizer,
         preflight.config.training,
         preflight.config.rollout,
     )
@@ -197,6 +202,7 @@ def _resolve_resume_adapter(
         raise ValueError("resume checkpoint adapter_path does not exist")
     if not (adapter_path / "adapter_config.json").is_file():
         raise ValueError("resume checkpoint adapter_config.json is missing")
+    validate_stage6_adapter_contract(adapter_path)
     adapter_weights = (
         adapter_path / "adapter_model.safetensors",
         adapter_path / "adapter_model.bin",
@@ -207,6 +213,8 @@ def _resolve_resume_adapter(
         )
     if not (checkpoint / "optimizer.pt").is_file():
         raise ValueError("resume checkpoint optimizer.pt is missing")
+    if not (checkpoint / "rng_state.pt").is_file():
+        raise ValueError("resume checkpoint rng_state.pt is missing")
     return adapter_path
 
 
@@ -253,18 +261,25 @@ def _require_cuda_bf16(torch_module: Any, config: ProjectConfig) -> None:
         raise RuntimeError("real OPD training requires CUDA BF16 support")
 
 
+def _seed_training_rng(torch_module: Any, seed: int) -> None:
+    random.seed(seed)
+    torch_module.manual_seed(seed)
+    if torch_module.cuda.is_available():
+        torch_module.cuda.manual_seed_all(seed)
+
+
 def _load_training_runtime() -> Any:
     import torch
 
     from tau3_retail_evolver.models.qwen35 import (
-        load_qwen35_processor,
+        load_qwen35_tokenizer,
         load_shared_qwen35_policy,
     )
     from tau3_retail_evolver.slow_loop.trainer import OPDTrainer, TrainingRequest
 
     return SimpleNamespace(
         torch=torch,
-        load_qwen35_processor=load_qwen35_processor,
+        load_qwen35_tokenizer=load_qwen35_tokenizer,
         load_shared_qwen35_policy=load_shared_qwen35_policy,
         OPDTrainer=OPDTrainer,
         TrainingRequest=TrainingRequest,

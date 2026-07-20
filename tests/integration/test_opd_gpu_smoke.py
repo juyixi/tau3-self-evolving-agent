@@ -73,7 +73,7 @@ def test_cached_qwen35_trains_one_example_with_adapter_only_update(tmp_path: Pat
         TrainingConfig,
     )
     from tau3_retail_evolver.models.qwen35 import (
-        load_qwen35_processor,
+        load_qwen35_tokenizer,
         load_shared_qwen35_policy,
     )
     from tau3_retail_evolver.slow_loop.trainer import OPDTrainer, TrainingRequest
@@ -89,14 +89,14 @@ def test_cached_qwen35_trains_one_example_with_adapter_only_update(tmp_path: Pat
     model_config = ModelConfig(base_model="Qwen/Qwen3.5-9B")
     training_config = TrainingConfig(
         max_sequence_length=128,
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,
         learning_rate=1e-5,
         per_device_batch_size=1,
         gradient_accumulation_steps=1,
         num_train_epochs=1,
         generation_max_new_tokens=1,
     )
-    processor = load_qwen35_processor(
+    tokenizer = load_qwen35_tokenizer(
         model_config.base_model,
         revision=model_revision,
         local_files_only=True,
@@ -131,7 +131,7 @@ def test_cached_qwen35_trains_one_example_with_adapter_only_update(tmp_path: Pat
 
     result = OPDTrainer(
         model,
-        processor,
+        tokenizer,
         training_config,
         RolloutConfig(),
         optimizer_factory=RecordingAdamW,

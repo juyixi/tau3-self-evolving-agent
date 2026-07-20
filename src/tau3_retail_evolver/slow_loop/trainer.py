@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import shutil
 from typing import Any
 import uuid
@@ -92,6 +93,8 @@ class OPDTrainer:
         output_dir = Path(request.output_dir).resolve()
         dataset_manifest = _read_json_object(dataset_dir / "dataset_manifest.json")
         source_lineage = _validate_source_lineage(dataset_manifest, request)
+        if request.resume_from is None:
+            _seed_training_rng(self.training_config.seed)
         schedule = _build_schedule(
             _load_examples(dataset_dir), self.training_config.num_train_epochs
         )
@@ -137,6 +140,7 @@ class OPDTrainer:
         if latest_checkpoint is not None:
             _load_optimizer_state(optimizer, latest_checkpoint / "optimizer.pt")
             optimizer.zero_grad(set_to_none=True)
+            _restore_rng_state(latest_checkpoint / "rng_state.pt")
             assert resume_manifest is not None
             if completed_examples == len(schedule):
                 _atomic_write_json(
@@ -273,6 +277,8 @@ class OPDTrainer:
         if manifest.get("schedule_sha256") != schedule_fingerprint:
             raise ValueError("resume schedule sha256 mismatch")
         _validate_loaded_adapter_path(manifest, request, checkpoint)
+        if not (checkpoint / "rng_state.pt").is_file():
+            raise ValueError("resume checkpoint rng_state.pt is missing")
         completed = manifest.get("completed_examples")
         steps = manifest.get("optimizer_steps")
         if type(completed) is not int or not 0 <= completed <= total_examples:
@@ -310,6 +316,7 @@ class OPDTrainer:
             except ValueError as error:
                 raise ValueError("checkpoint saver returned a path outside the checkpoint") from error
             torch.save(optimizer.state_dict(), temporary / "optimizer.pt")
+            _save_rng_state(temporary / "rng_state.pt")
             manifest = {
                 "adapter_path": adapter_relative_path.as_posix(),
                 "adapter_revision": f"opd-step-{optimizer_steps:08d}",
@@ -605,6 +612,67 @@ def _load_optimizer_state(
     except TypeError:
         state = torch.load(path, map_location="cpu")
     optimizer.load_state_dict(state)
+
+
+def _seed_training_rng(seed: int) -> None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _save_rng_state(path: Path) -> None:
+    state: dict[str, Any] = {
+        "python_random_state": random.getstate(),
+        "torch_cpu_rng_state": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["torch_cuda_rng_states"] = torch.cuda.get_rng_state_all()
+    torch.save(state, path)
+
+
+def _restore_rng_state(path: Path) -> None:
+    if not path.is_file():
+        raise ValueError(f"resume checkpoint rng_state.pt is missing: {path}")
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(state, Mapping):
+        raise ValueError("resume checkpoint rng_state.pt must contain a mapping")
+    python_state = state.get("python_random_state")
+    _validate_python_random_state(python_state)
+    torch_state = state.get("torch_cpu_rng_state")
+    if not isinstance(torch_state, Tensor):
+        raise ValueError("resume checkpoint Torch CPU RNG state is invalid")
+    cuda_states: Sequence[Tensor] | None = None
+    if torch.cuda.is_available():
+        raw_cuda_states = state.get("torch_cuda_rng_states")
+        if not isinstance(raw_cuda_states, Sequence) or not all(
+            isinstance(cuda_state, Tensor) for cuda_state in raw_cuda_states
+        ):
+            raise ValueError("resume checkpoint CUDA RNG states are invalid")
+        cuda_states = raw_cuda_states
+    try:
+        random.setstate(python_state)
+        torch.set_rng_state(torch_state)
+        if cuda_states is not None:
+            torch.cuda.set_rng_state_all(list(cuda_states))
+    except (TypeError, ValueError, RuntimeError) as error:
+        raise ValueError("resume checkpoint RNG state is invalid") from error
+
+
+def _validate_python_random_state(state: Any) -> None:
+    if (
+        not isinstance(state, tuple)
+        or len(state) != 3
+        or type(state[0]) is not int
+        or not isinstance(state[1], tuple)
+        or not state[1]
+        or any(type(value) is not int for value in state[1])
+        or (
+            state[2] is not None
+            and type(state[2]) not in {int, float}
+        )
+    ):
+        raise ValueError("resume checkpoint Python RNG state is invalid")
 
 
 def _scalar(value: Tensor) -> float:

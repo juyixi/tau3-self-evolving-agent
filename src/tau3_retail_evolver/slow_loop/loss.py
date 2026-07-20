@@ -21,10 +21,10 @@ def token_forward_kl(
 
     selected_student_logits = _select_response_logits(
         student_logits, student_positions, "student_positions"
-    )
+    ).float()
     selected_teacher_logits = _select_response_logits(
         teacher_logits, teacher_positions, "teacher_positions"
-    ).detach()
+    ).detach().float()
     if selected_student_logits.shape[0] != selected_teacher_logits.shape[0]:
         raise ValueError("student and teacher positions must select the same number of response logits")
     if not torch.isfinite(selected_student_logits).all():

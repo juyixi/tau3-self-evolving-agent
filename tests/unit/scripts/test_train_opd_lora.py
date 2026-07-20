@@ -323,6 +323,30 @@ def _write_resume_checkpoint(
     adapter.mkdir(parents=True)
     (adapter / "adapter_config.json").write_text("{}\n", encoding="utf-8")
     (adapter / "adapter_model.safetensors").write_bytes(b"adapter weights")
+    (adapter / "stage6_adapter_contract.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "requested_target_modules": "all-linear",
+                "resolved_target_modules": ["q_proj"],
+                "options": {
+                    "alpha_pattern": {},
+                    "bias": "none",
+                    "init_lora_weights": True,
+                    "lora_alpha": 64,
+                    "lora_dropout": 0.05,
+                    "modules_to_save": None,
+                    "r": 32,
+                    "rank_pattern": {},
+                    "task_type": "CAUSAL_LM",
+                    "use_dora": False,
+                    "use_rslora": False,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     manifest = {
         "adapter_path": adapter_path,
         "completed_examples": 2,
@@ -366,6 +390,7 @@ def _write_resume_checkpoint(
         json.dumps(manifest) + "\n", encoding="utf-8"
     )
     (checkpoint / "optimizer.pt").write_bytes(b"optimizer state")
+    (checkpoint / "rng_state.pt").write_bytes(b"rng state")
     return checkpoint, adapter.resolve()
 
 
@@ -493,6 +518,22 @@ def test_resume_preflight_requires_optimizer_state_file(
         )
 
 
+def test_resume_preflight_requires_rng_state_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    checkpoint, _ = _write_resume_checkpoint(output_dir)
+    (checkpoint / "rng_state.pt").unlink()
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    with pytest.raises(ValueError, match="rng_state.pt"):
+        train_opd_lora.main(
+            _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
+        )
+
+
 def test_resume_preflight_requires_adapter_config_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -504,6 +545,39 @@ def test_resume_preflight_requires_adapter_config_file(
     monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
 
     with pytest.raises(ValueError, match="adapter_config.json"):
+        train_opd_lora.main(
+            _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
+        )
+
+
+@pytest.mark.parametrize("layout", ("missing", "invalid"))
+def test_resume_preflight_requires_a_valid_stage6_adapter_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    layout: str,
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    checkpoint, adapter = _write_resume_checkpoint(output_dir)
+    contract = adapter / "stage6_adapter_contract.json"
+    if layout == "missing":
+        contract.unlink()
+    else:
+        contract.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "requested_target_modules": "q_proj",
+                    "resolved_target_modules": ["q_proj"],
+                    "options": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    with pytest.raises(ValueError, match="adapter contract|stage6_adapter_contract"):
         train_opd_lora.main(
             _argv(dataset_dir, output_dir, "--resume-from", str(checkpoint), "--dry-run")
         )
@@ -540,6 +614,10 @@ class _FakeCuda:
     def is_bf16_supported() -> bool:
         return True
 
+    @staticmethod
+    def manual_seed_all(seed: int) -> None:
+        del seed
+
 
 class _FakeModel:
     def __init__(self, events: list[Any]) -> None:
@@ -553,17 +631,17 @@ class _FakeModel:
 def _runtime(events: list[Any]) -> Any:
     model = _FakeModel(events)
 
-    def load_processor(model_id: str, *, revision: str) -> object:
-        events.append(("processor", model_id, revision))
-        return "processor"
+    def load_tokenizer(model_id: str, *, revision: str) -> object:
+        events.append(("tokenizer", model_id, revision))
+        return "tokenizer"
 
     def load_policy(*args: Any, revision: str, adapter_path: Path | None = None) -> Any:
         events.append(("policy", revision, adapter_path))
         return model
 
     class FakeTrainer:
-        def __init__(self, loaded_model: Any, processor: Any, training: Any, rollout: Any) -> None:
-            events.append(("trainer", loaded_model, processor))
+        def __init__(self, loaded_model: Any, tokenizer: Any, training: Any, rollout: Any) -> None:
+            events.append(("trainer", loaded_model, tokenizer))
 
         def train(self, request: TrainingRequest) -> Any:
             events.append(("train", request))
@@ -575,8 +653,12 @@ def _runtime(events: list[Any]) -> Any:
             )
 
     return SimpleNamespace(
-        torch=SimpleNamespace(cuda=_FakeCuda(), bfloat16="bfloat16"),
-        load_qwen35_processor=load_processor,
+        torch=SimpleNamespace(
+            cuda=_FakeCuda(),
+            bfloat16="bfloat16",
+            manual_seed=lambda seed: None,
+        ),
+        load_qwen35_tokenizer=load_tokenizer,
         load_shared_qwen35_policy=load_policy,
         OPDTrainer=FakeTrainer,
         TrainingRequest=TrainingRequest,
@@ -597,13 +679,43 @@ def test_real_fresh_mode_pins_both_loaders_moves_policy_to_cuda_and_trains(
     assert train_opd_lora.main(_argv(dataset_dir, output_dir)) == 0
 
     assert events[:3] == [
-        ("processor", "Qwen/Qwen3.5-9B", "model-commit-a"),
+        ("tokenizer", "Qwen/Qwen3.5-9B", "model-commit-a"),
         ("policy", "model-commit-a", None),
         ("model.to", "cuda"),
     ]
     request = next(event[1] for event in events if event[0] == "train")
     assert request.loaded_adapter_path is None
     assert request.resume_from is None
+
+
+def test_real_mode_seeds_python_torch_and_cuda_before_model_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "output"
+    _write_dataset_manifest(dataset_dir)
+    events: list[Any] = []
+    runtime = _runtime(events)
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+    monkeypatch.setattr(train_opd_lora, "_load_training_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        "random.seed",
+        lambda seed: events.append(("python.seed", seed)),
+    )
+    runtime.torch.manual_seed = lambda seed: events.append(("torch.manual_seed", seed))
+    runtime.torch.cuda.manual_seed_all = lambda seed: events.append(
+        ("cuda.manual_seed_all", seed)
+    )
+
+    train_opd_lora.main(_argv(dataset_dir, output_dir))
+
+    assert events[:4] == [
+        ("python.seed", 42),
+        ("torch.manual_seed", 42),
+        ("cuda.manual_seed_all", 42),
+        ("tokenizer", "Qwen/Qwen3.5-9B", "model-commit-a"),
+    ]
 
 
 def test_real_resume_loads_manifest_adapter_before_qwen_and_passes_exact_path(

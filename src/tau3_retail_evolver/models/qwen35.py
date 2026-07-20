@@ -10,6 +10,24 @@ from tau3_retail_evolver.config import LoraConfig, ModelConfig, TrainingConfig
 from tau3_retail_evolver.models.lora import attach_shared_lora_adapter
 
 
+def load_qwen35_tokenizer(
+    model_id_or_path: str | Path,
+    *,
+    revision: str | None = None,
+    local_files_only: bool = False,
+    transformers_module: Any | None = None,
+) -> Any:
+    """Load the text-only Qwen tokenizer from a local path or Hugging Face ID."""
+    transformers = transformers_module or _require_transformers()
+    load_options = _pretrained_options(
+        revision=revision,
+        local_files_only=local_files_only,
+    )
+    return transformers.AutoTokenizer.from_pretrained(
+        str(model_id_or_path), **load_options
+    )
+
+
 def load_qwen35_processor(
     model_id_or_path: str | Path,
     *,
@@ -17,14 +35,12 @@ def load_qwen35_processor(
     local_files_only: bool = False,
     transformers_module: Any | None = None,
 ) -> Any:
-    """Load a Qwen processor from either a local directory or Hugging Face ID."""
-    transformers = transformers_module or _require_transformers()
-    load_options = _pretrained_options(
+    """Compatibility name for the text-only Qwen tokenizer loader."""
+    return load_qwen35_tokenizer(
+        model_id_or_path,
         revision=revision,
         local_files_only=local_files_only,
-    )
-    return transformers.AutoProcessor.from_pretrained(
-        str(model_id_or_path), **load_options
+        transformers_module=transformers_module,
     )
 
 
@@ -61,6 +77,7 @@ def load_shared_qwen35_policy(
     )
     if training_config.gradient_checkpointing:
         model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
     model.config.use_cache = False
 
     return attach_shared_lora_adapter(
@@ -94,14 +111,14 @@ def _pretrained_options(
 
 def _require_transformers() -> Any:
     try:
-        from transformers import AutoModelForCausalLM, AutoProcessor
+        from transformers import AutoModelForCausalLM, AutoTokenizer
     except ImportError as error:
         raise RuntimeError(
             "Qwen3.5 loading requires the optional training dependency transformers"
         ) from error
     return SimpleNamespace(
         AutoModelForCausalLM=AutoModelForCausalLM,
-        AutoProcessor=AutoProcessor,
+        AutoTokenizer=AutoTokenizer,
     )
 
 
