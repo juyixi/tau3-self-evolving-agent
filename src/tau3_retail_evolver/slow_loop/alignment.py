@@ -12,10 +12,6 @@ if TYPE_CHECKING:
 
 
 _PUBLIC_INSTRUCTION = "Respond to the public input using the response schema."
-_TEACHER_INSTRUCTION = (
-    "Respond to the public input using the response schema. "
-    "Use privileged hindsight only for teacher guidance."
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,16 +38,10 @@ def render_public_prompt(example: OPDExample) -> str:
 
 
 def render_teacher_prompt(example: OPDExample) -> str:
-    """Render the teacher prompt with the same public task plus hindsight."""
-    _require_example(example)
-    return _canonical_json(
-        {
-            "instruction": _TEACHER_INSTRUCTION,
-            "kind": example.kind,
-            "public_input": example.public_input,
-            "privileged_hindsight": example.privileged_hindsight,
-            "response_schema": example.response_schema,
-        }
+    """Render the teacher prompt as the public prompt plus deterministic hindsight."""
+    public_prompt = render_public_prompt(example)
+    return public_prompt + "\n" + _canonical_json(
+        {"privileged_hindsight": example.privileged_hindsight}
     )
 
 
@@ -68,8 +58,12 @@ def build_aligned_batch(
         raise ValueError("max_length must be a positive integer")
 
     response_tokens = _response_tokens(response_ids)
+    if not response_tokens:
+        raise ValueError("response_ids must not be empty")
     if len(response_tokens) > max_length:
         raise ValueError("response_ids exceed max_length")
+    if len(response_tokens) == max_length:
+        raise ValueError("max_length must leave room for at least one prompt token")
 
     student_prompt_ids = _encode(tokenizer, render_public_prompt(example))
     teacher_prompt_ids = _encode(tokenizer, render_teacher_prompt(example))
@@ -136,16 +130,20 @@ def _make_batch(
         raise RuntimeError("build_aligned_batch requires the optional training dependency torch") from error
 
     student_input_ids = torch.tensor(
-        [*student_prompt_ids, *response_ids], dtype=torch.long
+        [[*student_prompt_ids, *response_ids]], dtype=torch.long
     )
     teacher_input_ids = torch.tensor(
-        [*teacher_prompt_ids, *response_ids], dtype=torch.long
+        [[*teacher_prompt_ids, *response_ids]], dtype=torch.long
     )
     student_response_positions = torch.arange(
-        len(student_prompt_ids), len(student_input_ids), dtype=torch.long
+        len(student_prompt_ids) - 1,
+        len(student_prompt_ids) + len(response_ids) - 1,
+        dtype=torch.long,
     )
     teacher_response_positions = torch.arange(
-        len(teacher_prompt_ids), len(teacher_input_ids), dtype=torch.long
+        len(teacher_prompt_ids) - 1,
+        len(teacher_prompt_ids) + len(response_ids) - 1,
+        dtype=torch.long,
     )
     return AlignedOPDBatch(
         student_input_ids=student_input_ids,
