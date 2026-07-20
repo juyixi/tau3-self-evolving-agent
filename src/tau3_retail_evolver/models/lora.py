@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -29,16 +30,7 @@ def build_lora_config(
         raise TypeError("lora_config must be a LoraConfig")
     if not isinstance(training_config, TrainingConfig):
         raise TypeError("training_config must be a TrainingConfig")
-    if lora_config.use_peft is not True:
-        raise ValueError("Stage 6 requires use_peft=True")
-    if lora_config.lora_r != _STAGE_6_LORA_R:
-        raise ValueError(f"Stage 6 requires lora_r={_STAGE_6_LORA_R}")
-    if lora_config.lora_alpha != _STAGE_6_LORA_ALPHA:
-        raise ValueError(f"Stage 6 requires lora_alpha={_STAGE_6_LORA_ALPHA}")
-    if lora_config.lora_dropout != _STAGE_6_LORA_DROPOUT:
-        raise ValueError(f"Stage 6 requires lora_dropout={_STAGE_6_LORA_DROPOUT}")
-    if training_config.target_modules != _STAGE_6_TARGET_MODULES:
-        raise ValueError(f"Stage 6 requires target_modules='{_STAGE_6_TARGET_MODULES}'")
+    _validate_stage_6_project_settings(lora_config, training_config)
     if init_lora_weights is not True:
         raise ValueError("zero-impact LoRA requires init_lora_weights=True")
 
@@ -62,6 +54,7 @@ def attach_shared_lora_adapter(
     peft_module: Any | None = None,
 ) -> Any:
     """Create or reload exactly one trainable adapter over ``base_model``."""
+    _validate_stage_6_project_settings(lora_config, training_config)
     peft = peft_module or _require_peft()
     if adapter_path is None:
         model = peft.get_peft_model(
@@ -76,6 +69,7 @@ def attach_shared_lora_adapter(
             adapter_name=_ADAPTER_NAME,
             is_trainable=True,
         )
+        _validate_loaded_adapter_config(model)
 
     _assert_one_adapter(model)
     _freeze_non_lora_parameters(model)
@@ -132,6 +126,59 @@ def _freeze_non_lora_parameters(model: Any) -> None:
         raise TypeError("model must expose named_parameters()")
     for name, parameter in model.named_parameters():
         parameter.requires_grad = _is_lora_parameter(name)
+
+
+def _validate_stage_6_project_settings(
+    lora_config: ProjectLoraConfig,
+    training_config: TrainingConfig,
+) -> None:
+    if lora_config.use_peft is not True:
+        raise ValueError("Stage 6 requires use_peft=True")
+    if lora_config.lora_r != _STAGE_6_LORA_R:
+        raise ValueError(f"Stage 6 requires lora_r={_STAGE_6_LORA_R}")
+    if lora_config.lora_alpha != _STAGE_6_LORA_ALPHA:
+        raise ValueError(f"Stage 6 requires lora_alpha={_STAGE_6_LORA_ALPHA}")
+    if lora_config.lora_dropout != _STAGE_6_LORA_DROPOUT:
+        raise ValueError(f"Stage 6 requires lora_dropout={_STAGE_6_LORA_DROPOUT}")
+    if training_config.target_modules != _STAGE_6_TARGET_MODULES:
+        raise ValueError(f"Stage 6 requires target_modules='{_STAGE_6_TARGET_MODULES}'")
+
+
+def _validate_loaded_adapter_config(model: Any) -> None:
+    try:
+        adapter_config = model.peft_config[_ADAPTER_NAME]
+    except (AttributeError, KeyError, TypeError) as error:
+        raise ValueError(f"loaded adapter must define {_ADAPTER_NAME!r} configuration") from error
+
+    _require_loaded_value(adapter_config, "r", _STAGE_6_LORA_R)
+    _require_loaded_value(adapter_config, "lora_alpha", _STAGE_6_LORA_ALPHA)
+    _require_loaded_value(adapter_config, "lora_dropout", _STAGE_6_LORA_DROPOUT)
+    task_type = getattr(adapter_config, "task_type", None)
+    if getattr(task_type, "value", task_type) != "CAUSAL_LM":
+        raise ValueError("loaded adapter requires task_type=CAUSAL_LM")
+    _validate_loaded_target_modules(getattr(adapter_config, "target_modules", None))
+
+
+def _require_loaded_value(adapter_config: Any, name: str, expected: int | float) -> None:
+    if getattr(adapter_config, name, None) != expected:
+        raise ValueError(f"loaded adapter requires {name}={expected}")
+
+
+def _validate_loaded_target_modules(target_modules: Any) -> None:
+    if target_modules == _STAGE_6_TARGET_MODULES:
+        return
+    if isinstance(target_modules, str):
+        raise ValueError(
+            "loaded adapter target_modules must be 'all-linear' or non-empty concrete suffixes"
+        )
+    if not isinstance(target_modules, Collection) or not target_modules:
+        raise ValueError(
+            "loaded adapter target_modules must be 'all-linear' or non-empty concrete suffixes"
+        )
+    if any(not isinstance(target, str) or not target.strip() for target in target_modules):
+        raise ValueError(
+            "loaded adapter target_modules must be 'all-linear' or non-empty concrete suffixes"
+        )
 
 
 def _assert_one_adapter(model: Any) -> None:

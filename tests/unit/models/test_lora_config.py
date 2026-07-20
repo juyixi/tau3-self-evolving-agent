@@ -31,6 +31,8 @@ class RecordingLoraConfig:
     def __init__(self, **kwargs: Any) -> None:
         self.calls.append(kwargs)
         self.kwargs = kwargs
+        for name, value in kwargs.items():
+            setattr(self, name, value)
 
 
 class FakeBaseModel(nn.Module):
@@ -92,6 +94,7 @@ class FakePeftModule:
     load_calls: list[dict[str, Any]] = []
     state_dict_calls: list[dict[str, Any]] = []
     adapter_state: dict[str, torch.Tensor] = {}
+    loaded_adapter_config: dict[str, Any] = {}
 
     @classmethod
     def get_peft_model(
@@ -123,7 +126,10 @@ class FakePeftModule:
                     "is_trainable": is_trainable,
                 }
             )
-            return FakeAdapterModel(model, RecordingLoraConfig(loaded=True))
+            return FakeAdapterModel(
+                model,
+                RecordingLoraConfig(**FakePeftModule.loaded_adapter_config),
+            )
 
     @classmethod
     def get_peft_model_state_dict(
@@ -151,6 +157,7 @@ def reset_fakes() -> None:
     FakePeftModule.load_calls = []
     FakePeftModule.state_dict_calls = []
     FakePeftModule.adapter_state = {}
+    FakePeftModule.loaded_adapter_config = _loaded_adapter_config()
 
 
 def _transformers_module() -> Any:
@@ -162,6 +169,17 @@ def _transformers_module() -> Any:
 
 def _model_config() -> ModelConfig:
     return ModelConfig(base_model="Qwen/Qwen3.5-9B")
+
+
+def _loaded_adapter_config(**overrides: Any) -> dict[str, Any]:
+    return {
+        "r": 32,
+        "lora_alpha": 64,
+        "lora_dropout": 0.05,
+        "task_type": "CAUSAL_LM",
+        "target_modules": "all-linear",
+        **overrides,
+    }
 
 
 def test_build_lora_config_uses_the_project_zero_impact_settings() -> None:
@@ -282,6 +300,76 @@ def test_load_shared_policy_reuses_one_trainable_existing_adapter(tmp_path: Path
     ]
     assert len(model.peft_config) == 1
     assert _lora_module().assert_only_lora_trainable(model) == 2
+
+
+def test_attach_shared_adapter_rejects_project_settings_before_loading_an_adapter(
+    tmp_path: Path,
+) -> None:
+    lora = _lora_module()
+
+    with pytest.raises(ValueError, match="lora_r=32"):
+        lora.attach_shared_lora_adapter(
+            FakeBaseModel(),
+            LoraConfig(lora_r=16),
+            TrainingConfig(),
+            adapter_path=tmp_path / "adapter",
+            peft_module=FakePeftModule,
+        )
+
+    assert FakePeftModule.get_peft_calls == []
+    assert FakePeftModule.load_calls == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    (
+        ({"r": 16}, "r=32"),
+        ({"lora_alpha": 32}, "lora_alpha=64"),
+        ({"lora_dropout": 0.1}, "lora_dropout=0.05"),
+        ({"task_type": "SEQ_2_SEQ_LM"}, "task_type=CAUSAL_LM"),
+        ({"target_modules": ""}, "target_modules"),
+        ({"target_modules": "q_proj"}, "target_modules"),
+    ),
+)
+def test_load_shared_policy_rejects_an_incompatible_loaded_adapter_config(
+    tmp_path: Path,
+    overrides: dict[str, Any],
+    match: str,
+) -> None:
+    qwen35 = _qwen35_module()
+    FakePeftModule.loaded_adapter_config = _loaded_adapter_config(**overrides)
+
+    with pytest.raises(ValueError, match=match):
+        qwen35.load_shared_qwen35_policy(
+            _model_config(),
+            LoraConfig(),
+            TrainingConfig(),
+            adapter_path=tmp_path / "adapter",
+            transformers_module=_transformers_module(),
+            peft_module=FakePeftModule,
+        )
+
+
+def test_load_shared_policy_accepts_expanded_loaded_target_modules(tmp_path: Path) -> None:
+    qwen35 = _qwen35_module()
+    FakePeftModule.loaded_adapter_config = _loaded_adapter_config(
+        target_modules={"q_proj", "k_proj", "v_proj"}
+    )
+
+    model = qwen35.load_shared_qwen35_policy(
+        _model_config(),
+        LoraConfig(),
+        TrainingConfig(),
+        adapter_path=tmp_path / "adapter",
+        transformers_module=_transformers_module(),
+        peft_module=FakePeftModule,
+    )
+
+    assert model.peft_config["shared_policy"].target_modules == {
+        "q_proj",
+        "k_proj",
+        "v_proj",
+    }
 
 
 def test_load_qwen35_processor_accepts_a_model_id_or_local_path_without_loading_a_model(

@@ -136,3 +136,54 @@ Observed result: `15 passed, 1 skipped in 1.45s`.
 
 The real PEFT/Qwen integration remains opt-in and skipped by default. It has not been run in
 this environment because `RUN_QWEN35_INTEGRATION` is unset and no model download is allowed.
+
+## Fix: Reloaded Adapter Contract
+
+### Changes
+
+- Stage 6 project-setting validation now runs at the start of
+  `attach_shared_lora_adapter`, before the fresh-versus-reload branch.
+- Reloaded adapters are validated from `model.peft_config["shared_policy"]` immediately after
+  `PeftModel.from_pretrained`.
+- Reload validation requires `r=32`, `lora_alpha=64`, `lora_dropout=0.05`, and
+  `task_type=CAUSAL_LM`. It accepts `target_modules="all-linear"` or a non-empty collection of
+  non-blank concrete module suffixes, matching PEFT's resolved non-default adapter layout.
+
+### TDD Evidence
+
+Red command:
+
+```powershell
+conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py -q
+```
+
+Observed before the fix: `7 failed, 16 passed in 1.49s`.
+
+- One failure showed invalid project settings could enter the reload branch.
+- Six failures showed wrong persisted numeric, task-type, blank, and unsupported scalar target
+  configurations were accepted.
+
+Green unit command:
+
+```powershell
+conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py -q
+```
+
+Observed after the fix: `23 passed in 1.44s`.
+
+Focused verification command:
+
+```powershell
+conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py tests/integration/test_qwen35_loader.py -q
+```
+
+Observed result: `23 passed, 1 skipped in 1.44s`.
+
+### Self-Review
+
+- The valid reloaded-adapter test uses a concrete `{"q_proj", "k_proj", "v_proj"}` target set;
+  invalid persisted `r`, alpha, dropout, task type, blank string, and unsupported scalar target
+  cases are independently rejected.
+- Project validation runs before both adapter branches, preventing a reload from bypassing the
+  Stage 6 contract.
+- The real-model integration remains opt-in; no download was initiated.
