@@ -187,3 +187,44 @@ Observed result: `23 passed, 1 skipped in 1.44s`.
 - Project validation runs before both adapter branches, preventing a reload from bypassing the
   Stage 6 contract.
 - The real-model integration remains opt-in; no download was initiated.
+
+## Fix: Loaded Initializer Contract
+
+### Changes
+
+- Valid loaded adapter fixtures now explicitly persist `init_lora_weights=True`.
+- Reload validation requires `init_lora_weights is True` by identity, rejecting `False` and
+  non-boolean initializer strings that could violate zero-impact loading.
+
+### TDD Evidence
+
+Red command:
+
+```powershell
+conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py -q
+```
+
+Observed before the fix: `2 failed, 23 passed in 1.56s`. The failures demonstrated that loaded
+adapter configs with `init_lora_weights=False` and `init_lora_weights="gaussian"` were accepted.
+
+Green unit command:
+
+```powershell
+conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py -q
+```
+
+Observed after the fix: `25 passed in 1.54s`.
+
+Focused verification command:
+
+```powershell
+conda run -n tau3-bench python -m pytest tests/unit/models/test_lora_config.py tests/integration/test_qwen35_loader.py -q
+```
+
+Observed result: `25 passed, 1 skipped in 1.48s`.
+
+### Self-Review
+
+- The production check uses `is not True`, so truthy strings and numeric values cannot bypass
+  the persisted zero-impact initializer contract.
+- The real-model integration remains opt-in; no model download was initiated.

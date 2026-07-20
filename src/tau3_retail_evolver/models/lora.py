@@ -153,6 +153,8 @@ def _validate_loaded_adapter_config(model: Any) -> None:
     _require_loaded_value(adapter_config, "r", _STAGE_6_LORA_R)
     _require_loaded_value(adapter_config, "lora_alpha", _STAGE_6_LORA_ALPHA)
     _require_loaded_value(adapter_config, "lora_dropout", _STAGE_6_LORA_DROPOUT)
+    if getattr(adapter_config, "init_lora_weights", None) is not True:
+        raise ValueError("loaded adapter requires init_lora_weights=True")
     task_type = getattr(adapter_config, "task_type", None)
     if getattr(task_type, "value", task_type) != "CAUSAL_LM":
         raise ValueError("loaded adapter requires task_type=CAUSAL_LM")
