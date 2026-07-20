@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -146,6 +147,13 @@ def _write_dataset(
             ),
             encoding="utf-8",
         )
+    artifacts = {
+        f"datasets/{kind}.jsonl": {
+            "line_count": len(examples[kind]),
+            "sha256": hashlib.sha256((datasets / f"{kind}.jsonl").read_bytes()).hexdigest(),
+        }
+        for kind in KINDS
+    }
     (root / "dataset_manifest.json").write_text(
         json.dumps(
             {
@@ -155,6 +163,7 @@ def _write_dataset(
                     "model_revision": model_revision,
                     "adapter_revision": adapter_revision,
                 },
+                "artifacts": artifacts,
             },
             sort_keys=True,
         )
@@ -177,18 +186,37 @@ def _config(**overrides: Any) -> TrainingConfig:
     return TrainingConfig(**values)
 
 
-def _request(dataset: Path, output: Path, *, resume_from: Path | None = None) -> TrainingRequest:
+def _request(
+    dataset: Path,
+    output: Path,
+    *,
+    resume_from: Path | None = None,
+    loaded_adapter_path: Path | None = None,
+) -> TrainingRequest:
     return TrainingRequest(
         dataset_dir=dataset,
         output_dir=output,
         model_revision="model-a",
         adapter_revision="adapter-a",
         resume_from=resume_from,
+        loaded_adapter_path=loaded_adapter_path,
     )
 
 
 def _rows(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _checkpoint_adapter_path(checkpoint: Path) -> Path:
+    manifest = json.loads((checkpoint / "checkpoint_manifest.json").read_text(encoding="utf-8"))
+    return (checkpoint / manifest["adapter_path"]).resolve()
+
+
+def _load_toy_policy(adapter_path: Path) -> ToyPolicy:
+    state = torch.load(adapter_path / "adapter_model.bin", weights_only=True)
+    model = ToyPolicy()
+    model.lora_weight.data.copy_(state["lora_weight"])
+    return model
 
 
 def test_online_generation_uses_only_public_prompts_and_balances_kinds(tmp_path: Path) -> None:
@@ -228,7 +256,7 @@ def test_online_generation_uses_only_public_prompts_and_balances_kinds(tmp_path:
     for call, example in zip(model.generate_calls, scheduled, strict=True):
         expected = tokenizer(
             render_public_prompt(example), add_special_tokens=False, return_tensors="pt"
-        )["input_ids"]
+        )["input_ids"][:, -125:]
         assert call["input_ids"].tolist() == expected.tolist()
         assert call["training"] is False
         assert call["grad_enabled"] is False
@@ -237,6 +265,32 @@ def test_online_generation_uses_only_public_prompts_and_balances_kinds(tmp_path:
         assert call["top_p"] == 0.8
     assert model.training is True
     assert all(row["response_ids"] for row in generations)
+
+
+def test_generation_caps_new_tokens_and_left_truncates_to_context(tmp_path: Path) -> None:
+    examples = _write_dataset(tmp_path / "dataset", {"sel": 1})
+    model = ToyPolicy()
+
+    OPDTrainer(
+        model,
+        ToyTokenizer(),
+        _config(generation_max_new_tokens=200),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", tmp_path / "output"))
+
+    call = model.generate_calls[0]
+    full_prompt_ids = ToyTokenizer()(
+        render_public_prompt(examples["sel"][0]),
+        add_special_tokens=False,
+        return_tensors="pt",
+    )["input_ids"]
+    assert call["max_new_tokens"] == 127
+    assert call["input_ids"].shape[1] == 1
+    assert call["input_ids"].tolist() == full_prompt_ids[:, -1:].tolist()
+    assert call["attention_mask"].shape == call["input_ids"].shape
+    assert call["input_ids"].shape[1] + call["max_new_tokens"] == 128
 
 
 def test_effective_batch_and_final_partial_average_each_optimizer_window(
@@ -309,6 +363,10 @@ def test_checkpoint_contains_adapter_optimizer_and_atomic_json_manifests_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_dataset(tmp_path / "dataset", {"sel": 2})
+    output = tmp_path / "output"
+    stale_temp = output / "checkpoints" / ".step-00000001.tmp-stale"
+    stale_temp.mkdir(parents=True)
+    (stale_temp / "incomplete").write_text("stale", encoding="utf-8")
     saver = ToyCheckpointSaver()
     replacements: list[tuple[Path, Path]] = []
     real_replace = os.replace
@@ -325,19 +383,27 @@ def test_checkpoint_contains_adapter_optimizer_and_atomic_json_manifests_only(
         RolloutConfig(),
         checkpoint_saver=saver,
         optimizer_factory=OptimizerFactory(),
-    ).train(_request(tmp_path / "dataset", tmp_path / "output"))
+    ).train(_request(tmp_path / "dataset", output))
 
     checkpoint = result.latest_checkpoint
-    assert saver.calls == [checkpoint / "adapter"]
+    temporary_checkpoint = saver.calls[0].parent
+    assert temporary_checkpoint.parent == checkpoint.parent
+    assert temporary_checkpoint.name.startswith(".step-00000001.tmp-")
+    assert temporary_checkpoint != stale_temp
+    assert not temporary_checkpoint.exists()
+    assert stale_temp.is_dir()
     assert (checkpoint / "adapter" / "shared_policy" / "adapter_config.json").is_file()
     assert (checkpoint / "optimizer.pt").is_file()
     assert (checkpoint / "checkpoint_manifest.json").is_file()
     assert (result.output_dir / "training_manifest.json").is_file()
     assert not list(result.output_dir.rglob("pytorch_model*"))
-    assert not list(result.output_dir.rglob("*.tmp-*"))
     replaced_names = [destination.name for _, destination in replacements]
     assert "checkpoint_manifest.json" in replaced_names
     assert "training_manifest.json" in replaced_names
+    assert any(
+        source == temporary_checkpoint and destination == checkpoint
+        for source, destination in replacements
+    )
 
 
 def test_failed_example_is_not_appended_and_empty_response_is_rejected(tmp_path: Path) -> None:
@@ -387,22 +453,116 @@ def test_resume_uses_latest_completed_step_and_removes_uncommitted_rows(tmp_path
         3,
         4,
     ]
+    with (output / "training_generations.jsonl").open("ab") as destination:
+        destination.write(b'{"torn":')
+    with (output / "training_metrics.jsonl").open("ab") as destination:
+        destination.write(b'\xff{"torn":')
 
-    model.fail_on_generate_call = None
+    adapter_path = _checkpoint_adapter_path(checkpoint)
+    resumed_model = _load_toy_policy(adapter_path)
     result = OPDTrainer(
-        model,
+        resumed_model,
         ToyTokenizer(),
         _config(per_device_batch_size=2, gradient_accumulation_steps=2),
         RolloutConfig(),
         checkpoint_saver=ToyCheckpointSaver(),
         optimizer_factory=OptimizerFactory(),
-    ).train(_request(tmp_path / "dataset", output, resume_from=checkpoint))
+    ).train(
+        _request(
+            tmp_path / "dataset",
+            output,
+            resume_from=checkpoint,
+            loaded_adapter_path=adapter_path,
+        )
+    )
 
     generations = _rows(result.output_dir / "training_generations.jsonl")
     assert [row["sequence_index"] for row in generations] == list(range(6))
     assert len({row["sequence_index"] for row in generations}) == 6
     assert result.completed_examples == 6
     assert result.optimizer_steps == 2
+
+
+@pytest.mark.parametrize(
+    "log_name", ("training_generations.jsonl", "training_metrics.jsonl")
+)
+def test_resume_rejects_committed_log_metadata_mismatch(
+    tmp_path: Path, log_name: str
+) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 2})
+    output = tmp_path / "output"
+    first = OPDTrainer(
+        ToyPolicy(),
+        ToyTokenizer(),
+        _config(),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", output))
+    adapter_path = _checkpoint_adapter_path(first.latest_checkpoint)
+    rows = _rows(output / log_name)
+    rows[0]["example_id"] = "wrong-example"
+    (output / log_name).write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="metadata"):
+        OPDTrainer(
+            _load_toy_policy(adapter_path),
+            ToyTokenizer(),
+            _config(),
+            RolloutConfig(),
+            checkpoint_saver=ToyCheckpointSaver(),
+            optimizer_factory=OptimizerFactory(),
+        ).train(
+            _request(
+                tmp_path / "dataset",
+                output,
+                resume_from=first.latest_checkpoint,
+                loaded_adapter_path=adapter_path,
+            )
+        )
+
+
+def test_resume_rejects_stage5_artifact_schedule_fingerprint_mismatch(
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "dataset"
+    _write_dataset(dataset, {"sel": 2})
+    output = tmp_path / "output"
+    first = OPDTrainer(
+        ToyPolicy(),
+        ToyTokenizer(),
+        _config(),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(dataset, output))
+    adapter_path = _checkpoint_adapter_path(first.latest_checkpoint)
+    manifest_path = dataset / "dataset_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["datasets/sel.jsonl"]["sha256"] = "f" * 64
+    manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    optimizer_factory = OptimizerFactory()
+
+    with pytest.raises(ValueError, match="schedule fingerprint"):
+        OPDTrainer(
+            _load_toy_policy(adapter_path),
+            ToyTokenizer(),
+            _config(),
+            RolloutConfig(),
+            checkpoint_saver=ToyCheckpointSaver(),
+            optimizer_factory=optimizer_factory,
+        ).train(
+            _request(
+                dataset,
+                output,
+                resume_from=first.latest_checkpoint,
+                loaded_adapter_path=adapter_path,
+            )
+        )
+
+    assert optimizer_factory.optimizers == []
 
 
 def test_resume_rejects_training_config_mismatch(tmp_path: Path) -> None:
@@ -416,16 +576,24 @@ def test_resume_rejects_training_config_mismatch(tmp_path: Path) -> None:
         checkpoint_saver=ToyCheckpointSaver(),
         optimizer_factory=OptimizerFactory(),
     ).train(_request(tmp_path / "dataset", output))
+    adapter_path = _checkpoint_adapter_path(first.latest_checkpoint)
 
     with pytest.raises(ValueError, match="training config"):
         OPDTrainer(
-            ToyPolicy(),
+            _load_toy_policy(adapter_path),
             ToyTokenizer(),
             _config(learning_rate=0.2),
             RolloutConfig(),
             checkpoint_saver=ToyCheckpointSaver(),
             optimizer_factory=OptimizerFactory(),
-        ).train(_request(tmp_path / "dataset", output, resume_from=first.latest_checkpoint))
+        ).train(
+            _request(
+                tmp_path / "dataset",
+                output,
+                resume_from=first.latest_checkpoint,
+                loaded_adapter_path=adapter_path,
+            )
+        )
 
 
 def test_resume_republishes_a_missing_final_training_manifest(tmp_path: Path) -> None:
@@ -441,16 +609,61 @@ def test_resume_republishes_a_missing_final_training_manifest(tmp_path: Path) ->
         optimizer_factory=OptimizerFactory(),
     ).train(_request(tmp_path / "dataset", output))
     (output / "training_manifest.json").unlink()
+    adapter_path = _checkpoint_adapter_path(first.latest_checkpoint)
 
     resumed = OPDTrainer(
-        model,
+        _load_toy_policy(adapter_path),
         ToyTokenizer(),
         _config(),
         RolloutConfig(),
         checkpoint_saver=ToyCheckpointSaver(),
         optimizer_factory=OptimizerFactory(),
-    ).train(_request(tmp_path / "dataset", output, resume_from=first.latest_checkpoint))
+    ).train(
+        _request(
+            tmp_path / "dataset",
+            output,
+            resume_from=first.latest_checkpoint,
+            loaded_adapter_path=adapter_path,
+        )
+    )
 
     assert resumed.manifest["status"] == "complete"
     assert resumed.manifest["completed_examples"] == 2
     assert resumed.manifest["latest_checkpoint"] == "checkpoints/step-00000001"
+
+
+@pytest.mark.parametrize("loaded_path", (None, Path("wrong-adapter")))
+def test_resume_rejects_missing_or_wrong_loaded_adapter_before_optimizer_creation(
+    tmp_path: Path, loaded_path: Path | None
+) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 2})
+    output = tmp_path / "output"
+    first = OPDTrainer(
+        ToyPolicy(),
+        ToyTokenizer(),
+        _config(),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", output))
+    expected_adapter = _checkpoint_adapter_path(first.latest_checkpoint)
+    optimizer_factory = OptimizerFactory()
+
+    with pytest.raises(ValueError, match="loaded_adapter_path"):
+        OPDTrainer(
+            _load_toy_policy(expected_adapter),
+            ToyTokenizer(),
+            _config(),
+            RolloutConfig(),
+            checkpoint_saver=ToyCheckpointSaver(),
+            optimizer_factory=optimizer_factory,
+        ).train(
+            _request(
+                tmp_path / "dataset",
+                output,
+                resume_from=first.latest_checkpoint,
+                loaded_adapter_path=loaded_path,
+            )
+        )
+
+    assert optimizer_factory.optimizers == []

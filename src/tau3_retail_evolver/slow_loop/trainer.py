@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,6 +38,7 @@ class TrainingRequest:
     model_revision: str
     adapter_revision: str | None
     resume_from: Path | None = None
+    loaded_adapter_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,20 +97,19 @@ class OPDTrainer:
         )
         if not schedule:
             raise ValueError("Stage 5 dataset contains no OPD examples")
+        schedule_fingerprint = _schedule_fingerprint(schedule, dataset_manifest)
 
         output_dir.mkdir(parents=True, exist_ok=True)
         generation_path = output_dir / "training_generations.jsonl"
         metric_path = output_dir / "training_metrics.jsonl"
-        trainable_parameters = _trainable_lora_parameters(self.model)
-        optimizer = self.optimizer_factory(
-            trainable_parameters, lr=self.training_config.learning_rate
-        )
-        optimizer.zero_grad(set_to_none=True)
 
         completed_examples = 0
         optimizer_steps = 0
         latest_checkpoint: Path | None = None
+        resume_manifest: Mapping[str, Any] | None = None
         if request.resume_from is None:
+            if request.loaded_adapter_path is not None:
+                raise ValueError("loaded_adapter_path requires resume_from")
             _require_fresh_output(output_dir)
         else:
             latest_checkpoint = Path(request.resume_from).resolve()
@@ -121,11 +122,22 @@ class OPDTrainer:
                 dataset_manifest=dataset_manifest,
                 source_lineage=source_lineage,
                 total_examples=len(schedule),
+                checkpoint=latest_checkpoint,
+                schedule_fingerprint=schedule_fingerprint,
             )
+            committed_schedule = schedule[:completed_examples]
+            _restore_committed_rows(generation_path, committed_schedule)
+            _restore_committed_rows(metric_path, committed_schedule)
+
+        trainable_parameters = _trainable_lora_parameters(self.model)
+        optimizer = self.optimizer_factory(
+            trainable_parameters, lr=self.training_config.learning_rate
+        )
+        optimizer.zero_grad(set_to_none=True)
+        if latest_checkpoint is not None:
             _load_optimizer_state(optimizer, latest_checkpoint / "optimizer.pt")
             optimizer.zero_grad(set_to_none=True)
-            _restore_committed_rows(generation_path, completed_examples)
-            _restore_committed_rows(metric_path, completed_examples)
+            assert resume_manifest is not None
             if completed_examples == len(schedule):
                 _atomic_write_json(
                     output_dir / "training_manifest.json",
@@ -209,6 +221,7 @@ class OPDTrainer:
                 completed_examples=completed_examples,
                 optimizer_steps=optimizer_steps,
                 total_examples=len(schedule),
+                schedule_fingerprint=schedule_fingerprint,
             )
             training_manifest = {
                 **checkpoint_manifest,
@@ -238,6 +251,8 @@ class OPDTrainer:
         dataset_manifest: Mapping[str, Any],
         source_lineage: Mapping[str, Any],
         total_examples: int,
+        checkpoint: Path,
+        schedule_fingerprint: str,
     ) -> tuple[int, int]:
         if manifest.get("schema_version") != _MANIFEST_SCHEMA_VERSION:
             raise ValueError("resume checkpoint schema mismatch")
@@ -253,6 +268,9 @@ class OPDTrainer:
             raise ValueError("resume rollout config mismatch")
         if manifest.get("total_examples") != total_examples:
             raise ValueError("resume sampling schedule mismatch")
+        if manifest.get("schedule_fingerprint") != schedule_fingerprint:
+            raise ValueError("resume schedule fingerprint mismatch")
+        _validate_loaded_adapter_path(manifest, request, checkpoint)
         completed = manifest.get("completed_examples")
         steps = manifest.get("optimizer_steps")
         if type(completed) is not int or not 0 <= completed <= total_examples:
@@ -272,20 +290,24 @@ class OPDTrainer:
         completed_examples: int,
         optimizer_steps: int,
         total_examples: int,
+        schedule_fingerprint: str,
     ) -> tuple[Path, dict[str, Any]]:
-        checkpoint = output_dir / "checkpoints" / f"step-{optimizer_steps:08d}"
+        checkpoints = output_dir / "checkpoints"
+        checkpoint = checkpoints / f"step-{optimizer_steps:08d}"
         if checkpoint.exists():
             raise FileExistsError(f"refusing to overwrite checkpoint: {checkpoint}")
-        checkpoint.mkdir(parents=True)
+        checkpoints.mkdir(parents=True, exist_ok=True)
+        temporary = checkpoints / f".{checkpoint.name}.tmp-{uuid.uuid4().hex}"
+        temporary.mkdir()
         try:
             adapter_path = Path(
-                self.checkpoint_saver(self.model, checkpoint / "adapter")
+                self.checkpoint_saver(self.model, temporary / "adapter")
             ).resolve()
             try:
-                adapter_relative_path = adapter_path.relative_to(checkpoint)
+                adapter_relative_path = adapter_path.relative_to(temporary)
             except ValueError as error:
                 raise ValueError("checkpoint saver returned a path outside the checkpoint") from error
-            torch.save(optimizer.state_dict(), checkpoint / "optimizer.pt")
+            torch.save(optimizer.state_dict(), temporary / "optimizer.pt")
             manifest = {
                 "adapter_path": adapter_relative_path.as_posix(),
                 "adapter_revision": f"opd-step-{optimizer_steps:08d}",
@@ -293,6 +315,7 @@ class OPDTrainer:
                 "dataset_build_id": dataset_manifest.get("dataset_build_id"),
                 "optimizer_steps": optimizer_steps,
                 "rollout_config": self.rollout_config.model_dump(mode="json"),
+                "schedule_fingerprint": schedule_fingerprint,
                 "schema_version": _MANIFEST_SCHEMA_VERSION,
                 "source_lineage": dict(source_lineage),
                 "status": "checkpoint",
@@ -300,9 +323,13 @@ class OPDTrainer:
                 "trainer_start": _trainer_start(request),
                 "training_config": self.training_config.model_dump(mode="json"),
             }
-            _atomic_write_json(checkpoint / "checkpoint_manifest.json", manifest)
+            _atomic_write_json(temporary / "checkpoint_manifest.json", manifest)
+            _fsync_files(temporary)
+            _fsync_directory(temporary)
+            os.replace(temporary, checkpoint)
+            _fsync_directory(checkpoints)
         except BaseException:
-            shutil.rmtree(checkpoint, ignore_errors=True)
+            shutil.rmtree(temporary, ignore_errors=True)
             raise
         return checkpoint, manifest
 
@@ -340,6 +367,47 @@ def _build_schedule(
     return tuple(schedule)
 
 
+def _schedule_fingerprint(
+    schedule: Sequence[_ScheduledExample], dataset_manifest: Mapping[str, Any]
+) -> str:
+    artifacts = dataset_manifest.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        raise ValueError("dataset manifest artifact hash metadata is missing")
+    artifact_hashes: dict[str, dict[str, Any]] = {}
+    for path in sorted(artifacts):
+        metadata = artifacts[path]
+        if not isinstance(path, str) or not isinstance(metadata, Mapping):
+            raise ValueError("dataset manifest artifact hash metadata is invalid")
+        sha256 = metadata.get("sha256")
+        if not isinstance(sha256, str) or not sha256:
+            raise ValueError("dataset manifest artifact hash metadata is invalid")
+        artifact_hashes[path] = {
+            "line_count": metadata.get("line_count"),
+            "sha256": sha256,
+        }
+    payload = {
+        "artifacts": artifact_hashes,
+        "schedule": [_schedule_identity(item) for item in schedule],
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _schedule_identity(scheduled: _ScheduledExample) -> dict[str, Any]:
+    return {
+        "epoch": scheduled.epoch,
+        "example_id": scheduled.example.example_id,
+        "kind": scheduled.example.kind,
+        "sequence_index": scheduled.sequence_index,
+    }
+
+
 def _generate_student_response(
     model: nn.Module,
     tokenizer: Any,
@@ -364,6 +432,13 @@ def _generate_student_response(
         attention_mask = torch.ones_like(input_ids)
     if not isinstance(attention_mask, Tensor) or attention_mask.shape != input_ids.shape:
         raise TypeError("generation attention_mask must match input_ids")
+    max_new_tokens = min(
+        training_config.generation_max_new_tokens,
+        training_config.max_sequence_length - 1,
+    )
+    prompt_budget = training_config.max_sequence_length - max_new_tokens
+    input_ids = input_ids[:, -prompt_budget:]
+    attention_mask = attention_mask[:, -prompt_budget:]
     input_ids = input_ids.to(device)
     attention_mask = attention_mask.to(device)
 
@@ -375,7 +450,7 @@ def _generate_student_response(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 do_sample=True,
-                max_new_tokens=training_config.generation_max_new_tokens,
+                max_new_tokens=max_new_tokens,
                 temperature=rollout_config.temperature,
                 top_p=rollout_config.top_p,
             )
@@ -443,6 +518,23 @@ def _trainer_start(request: TrainingRequest) -> dict[str, Any]:
     }
 
 
+def _validate_loaded_adapter_path(
+    manifest: Mapping[str, Any], request: TrainingRequest, checkpoint: Path
+) -> None:
+    relative_path = manifest.get("adapter_path")
+    if not isinstance(relative_path, str) or not relative_path:
+        raise ValueError("resume checkpoint adapter_path is invalid")
+    expected = (checkpoint / relative_path).resolve()
+    try:
+        expected.relative_to(checkpoint)
+    except ValueError as error:
+        raise ValueError("resume checkpoint adapter_path escapes the checkpoint") from error
+    if request.loaded_adapter_path is None:
+        raise ValueError("resume requires loaded_adapter_path")
+    if Path(request.loaded_adapter_path).resolve() != expected:
+        raise ValueError("loaded_adapter_path does not match resume checkpoint adapter_path")
+
+
 def _validate_revision(value: str, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must not be empty")
@@ -453,23 +545,53 @@ def _require_fresh_output(output_dir: Path) -> None:
         output_dir / "training_generations.jsonl",
         output_dir / "training_metrics.jsonl",
         output_dir / "training_manifest.json",
-        output_dir / "checkpoints",
     )
     if any(path.exists() for path in managed):
         raise FileExistsError("training output already exists; resume from a checkpoint")
-
-
-def _restore_committed_rows(path: Path, completed_examples: int) -> None:
-    rows = list(iter_jsonl_objects(path)) if path.exists() else []
-    if len(rows) < completed_examples:
-        raise ValueError(f"resume log has fewer committed rows than checkpoint: {path}")
-    committed = rows[:completed_examples]
-    if [row.get("sequence_index") for row in committed] != list(
-        range(completed_examples)
+    checkpoints = output_dir / "checkpoints"
+    if checkpoints.exists() and any(
+        not (child.name.startswith(".step-") and ".tmp-" in child.name)
+        for child in checkpoints.iterdir()
     ):
-        raise ValueError(f"resume log sequence does not match checkpoint: {path}")
-    if len(rows) != completed_examples:
-        _atomic_write_jsonl(path, committed)
+        raise FileExistsError("training output already exists; resume from a checkpoint")
+
+
+def _restore_committed_rows(
+    path: Path, committed_schedule: Sequence[_ScheduledExample]
+) -> None:
+    committed = _read_committed_jsonl_prefix(path, len(committed_schedule))
+    for row, scheduled in zip(committed, committed_schedule, strict=True):
+        identity = _schedule_identity(scheduled)
+        if any(row.get(name) != value for name, value in identity.items()):
+            raise ValueError(f"resume log metadata does not match schedule: {path}")
+    _atomic_write_jsonl(path, committed)
+
+
+def _read_committed_jsonl_prefix(path: Path, count: int) -> list[dict[str, Any]]:
+    try:
+        source = path.open("rb")
+    except OSError as error:
+        raise ValueError(f"unable to read resume JSONL file: {path}") from error
+    rows: list[dict[str, Any]] = []
+    with source:
+        for line_number in range(1, count + 1):
+            raw_line = source.readline()
+            if not raw_line or not raw_line.endswith(b"\n"):
+                raise ValueError(
+                    f"resume log has fewer complete committed rows than checkpoint: {path}"
+                )
+            try:
+                value = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError(
+                    f"invalid committed JSONL at {path}:{line_number}"
+                ) from error
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"committed JSONL row must be an object at {path}:{line_number}"
+                )
+            rows.append(value)
+    return rows
 
 
 def _load_optimizer_state(
@@ -551,3 +673,11 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _fsync_files(root: Path) -> None:
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        with path.open("r+b") as source:
+            os.fsync(source.fileno())
