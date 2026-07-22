@@ -91,6 +91,11 @@ class TrainingConfig(_ConfigModel):
     loss_type: Literal["forward_kl"] = "forward_kl"
 
 
+class PipelineConfig(_ConfigModel):
+    iteration_task_count: int = Field(default=74, ge=1, le=74)
+    shuffle_train_tasks: StrictBool = True
+
+
 class SlowLoopConfig(_ConfigModel):
     tier_priors: dict[Literal["trajectory", "tip", "skill", "tool"], float] = Field(
         default_factory=lambda: {
@@ -152,6 +157,7 @@ class ProjectConfig(_ConfigModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     slow_loop: SlowLoopConfig = Field(default_factory=SlowLoopConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
 
 

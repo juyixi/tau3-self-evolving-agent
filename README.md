@@ -48,8 +48,9 @@ Fast Loop 和 Slow Loop 使用同一个模型谱系。一次 OPD 数据构建只
 | `src/tau3_retail_evolver/memory/` | 四层 JSON Memory、Embedding、检索、原子写入、快照和维护操作 |
 | `src/tau3_retail_evolver/fast_loop/` | Baseline/Fast Loop prompt、决策、动作编解码、生命周期事件和维护编排 |
 | `src/tau3_retail_evolver/slow_loop/` | Evidence、任务分组、归因、泄漏检查、OPD 数据、token 对齐、KL 和 Trainer |
+| `src/tau3_retail_evolver/pipeline/` | train-only task sampling、六态 iteration、artifact 哈希恢复和 checkpoint/Memory promotion |
 | `src/tau3_retail_evolver/models/` | OpenAI-compatible Qwen policy、Qwen3.5 Transformers loader 和 PEFT LoRA 生命周期 |
-| `scripts/` | Baseline、Fast Loop、OPD 数据构建/审计和 LoRA 训练入口 |
+| `scripts/` | Baseline、Fast Loop、OPD 数据构建/审计、LoRA 训练和完整 iteration 入口 |
 | `tools/preflight/` | Tau2 Retail 环境与固定 revision 预检工具 |
 | `tests/` | 单元测试、合成端到端测试以及显式开启的真实 Tau2/Qwen GPU 集成测试 |
 | `docs/` | 分阶段设计、实施计划、验证说明和长期交付归档 |
@@ -153,6 +154,19 @@ training:
 ```
 
 初始 LoRA 为零影响初始化；adapter 合同记录基础模型全部可用线性层和 PEFT 实际目标实例，禁止层过滤或排除模块。Checkpoint 只保存 adapter、optimizer、RNG 和 lineage，不保存 Qwen 基础权重；恢复训练只接受最高的已发布 step。
+
+### Iteration 协同演化
+
+Stage 7 将一次学习迭代固定为以下状态序列：
+
+```text
+created -> rollout_complete -> attribution_complete
+        -> dataset_complete -> training_complete -> promoted
+```
+
+每个状态只在对应 artifact 已发布、train-only 扫描通过并记录 SHA-256 后推进。恢复时重新计算所有已完成产物的哈希，不重跑已经提交的阶段；不完整 adapter、断裂的 Memory snapshot 或不连续的父子 revision 不能进入 `promoted`。下一轮必须继承上一轮 promotion 中的 checkpoint、adapter revision、Memory snapshot 和累计 train task 数。
+
+任务 curriculum 使用 `training.seed` 与 `iteration` 共同生成确定性随机序列，生产默认每轮覆盖全部 74 个官方 train tasks；`pipeline.iteration_task_count` 可在 smoke 阶段缩小任务数量。`sel/act/write/maint` 使用同一个均衡 round-robin 调度，只循环已有类别，不伪造缺失的 write 或 maintenance 样本。
 
 ## 实验设计
 
@@ -396,7 +410,40 @@ python -m scripts.train_opd_lora \
 
 确认后移除 `--dry-run` 执行恢复。Trainer 会加载该 checkpoint 的 adapter、optimizer 和 Python/Torch RNG 状态。
 
-### 9. 测试
+### 9. 运行完整 Fast/Slow Iteration
+
+Iteration 0 必须显式声明当前零影响 LoRA revision 和此前累计完成的 train task 数。以下命令先运行五任务 smoke，并在数据集独立审计通过后暂停：
+
+```powershell
+python -m scripts.run_iteration `
+  --config configs/default.yaml `
+  --iteration-id iteration-0000 `
+  --iteration 0 `
+  --model-revision $env:QWEN_MODEL_REVISION `
+  --adapter-revision "<zero-impact-adapter-revision>" `
+  --completed-train-tasks-before 0 `
+  --task-count 5 `
+  --stop-after dataset_complete
+```
+
+在单 GPU 机器上，此时停止 vLLM 释放显存，然后使用相同参数移除 `--stop-after` 再次执行。状态机会验证已完成 artifact，并直接从 LoRA 训练继续。若 rollout endpoint 和训练 GPU 相互独立，可以省略暂停参数一次执行到底。
+
+下一轮只需要指定上一轮目录；adapter、checkpoint、Memory snapshot 和累计任务数会从 promotion manifest 继承：
+
+```powershell
+python -m scripts.run_iteration `
+  --config configs/default.yaml `
+  --iteration-id iteration-0001 `
+  --iteration 1 `
+  --model-revision $env:QWEN_MODEL_REVISION `
+  --parent-iteration-dir runs/iterations/iteration-0000 `
+  --task-count 5 `
+  --stop-after dataset_complete
+```
+
+不传 `--task-count` 时使用配置中的生产默认值 74。真实五任务 Memory-enabled build/audit 和 Qwen3.5-9B GPU update gate 仍保持 pending，在 Stage 8 验收实验中执行。
+
+### 10. 测试
 
 不下载大模型即可运行完整本地测试：
 

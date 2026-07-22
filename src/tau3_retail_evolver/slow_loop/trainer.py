@@ -18,6 +18,7 @@ from torch import Tensor, nn
 from tau3_retail_evolver.config import RolloutConfig, TrainingConfig
 from tau3_retail_evolver.io.jsonl import JsonlWriter, iter_jsonl_objects
 from tau3_retail_evolver.models.lora import save_adapter_checkpoint
+from tau3_retail_evolver.pipeline.sampling import balanced_kind_schedule
 from tau3_retail_evolver.slow_loop.alignment import (
     AlignedOPDBatch,
     build_aligned_batch,
@@ -375,23 +376,19 @@ def _require_latest_published_checkpoint(checkpoint: Path) -> None:
 def _build_schedule(
     examples: Mapping[str, Sequence[OPDExample]], num_epochs: int
 ) -> tuple[_ScheduledExample, ...]:
-    active_kinds = [kind for kind in _KINDS if examples.get(kind)]
-    if not active_kinds:
-        return ()
-    rounds = max(len(examples[kind]) for kind in active_kinds)
-    schedule: list[_ScheduledExample] = []
-    for epoch in range(num_epochs):
-        for round_index in range(rounds):
-            for kind in active_kinds:
-                kind_examples = examples[kind]
-                schedule.append(
-                    _ScheduledExample(
-                        sequence_index=len(schedule),
-                        epoch=epoch,
-                        example=kind_examples[round_index % len(kind_examples)],
-                    )
-                )
-    return tuple(schedule)
+    balanced = balanced_kind_schedule(
+        {kind: len(examples.get(kind, ())) for kind in _KINDS},
+        num_epochs=num_epochs,
+        kind_order=_KINDS,
+    )
+    return tuple(
+        _ScheduledExample(
+            sequence_index=sequence_index,
+            epoch=sample.epoch,
+            example=examples[sample.kind][sample.index],
+        )
+        for sequence_index, sample in enumerate(balanced)
+    )
 
 
 def _schedule_fingerprint(

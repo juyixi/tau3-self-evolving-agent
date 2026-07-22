@@ -468,7 +468,7 @@
 - [ ] 已编码 LoRA gradient/update、零基础模型 gradient、有限 KL、adapter-only reload 断言；等待真实 GPU smoke 执行。
 - [x] 提交为 `feat: train qwen35 lora with shared policy opd`。
 
-**阶段 6 gate：** 本地 toy、trainer、CLI/dry-run、resume 与 adapter-only 契约通过；真实 Qwen3.5-9B GPU smoke 尚未运行，因此完整阶段 gate 保持 pending。
+**阶段 6 gate：** 本地 toy、trainer、CLI/dry-run、resume 与 adapter-only 契约通过；真实 Qwen3.5-9B GPU smoke 尚未运行，按已确认边界延期到 Stage 8 验收实验，真实 gate 保持 pending。
 
 ---
 
@@ -481,20 +481,21 @@
 **文件：**
 - 创建：`src/tau3_retail_evolver/pipeline/state.py`
 - 创建：`src/tau3_retail_evolver/pipeline/iteration.py`
+- 创建：`src/tau3_retail_evolver/pipeline/executor.py`
 - 创建：`scripts/run_iteration.py`
 - 测试：`tests/unit/pipeline/test_iteration.py`
 
 **接口：**
 - 状态：`created -> rollout_complete -> attribution_complete -> dataset_complete -> training_complete -> promoted`
-- 产出：`run_iteration(config, parent_checkpoint, parent_memory_snapshot) -> IterationResult`
+- 产出：`run_iteration(request, executor, stop_after=None) -> IterationResult`
 - 接口：`open_training_memory(config.memory)`；iteration records the returned Repository's pre/post snapshot IDs and never resets it.
 
-- [ ] 编写端到端 fake 失败测试，覆盖精确阶段顺序、artifact hash、parent/child revision 和 promoted output。
-- [ ] 为每个已完成状态编写 resume 测试，并断言已完成阶段通过 hash 验证，而不是重新运行。
-- [ ] 编写失败测试，证明不完整的 adapter 或 memory 输出永远不会被 promote。
-- [ ] 实现原子状态转换，以及限定在单个 run ID 内的 lock file。
-- [ ] 重新运行测试并确认 PASS。
-- [ ] 提交为 `feat: orchestrate resumable opd iterations`。
+- [x] 编写端到端 fake 失败测试，覆盖精确阶段顺序、artifact hash、parent/child revision 和 promoted output。
+- [x] 为每个已完成状态编写 resume 测试，并断言已完成阶段通过 hash 验证，而不是重新运行。
+- [x] 编写失败测试，证明不完整的 adapter 或 memory 输出永远不会被 promote。
+- [x] 实现原子状态转换，以及限定在单个 run ID 内的 lock file。
+- [x] 重新运行测试并确认 PASS。
+- [x] 提交为 `feat: orchestrate resumable opd iterations`。
 
 ### 任务 7.2：Curriculum 与 Sampling 控制
 
@@ -502,20 +503,20 @@
 - 创建：`src/tau3_retail_evolver/pipeline/sampling.py`
 - 测试：`tests/unit/pipeline/test_sampling.py`
 
-- [ ] 根据已记录 seed 实现确定性的 train task 排序/打乱。
-- [ ] 防止 task ID 通过 override 或 resume manifest 跨入 test/base。
-- [ ] 平衡 `sel/act/write/maint` 样本，同时不得伪造缺失的 write/maintenance 监督。
-- [ ] 添加可配置的 iteration task count，生产默认值仍为完整官方 train set。
-- [ ] 重新运行测试并确认 PASS。
-- [ ] 提交为 `feat: add train-only opd iteration sampling`。
+- [x] 根据已记录 seed 实现确定性的 train task 排序/打乱。
+- [x] 防止 task ID 通过 override 或 resume manifest 跨入 test/base。
+- [x] 平衡 `sel/act/write/maint` 样本，同时不得伪造缺失的 write/maintenance 监督。
+- [x] 添加可配置的 iteration task count，生产默认值仍为完整官方 train set。
+- [x] 重新运行测试并确认 PASS。
+- [x] 提交为 `feat: add train-only opd iteration sampling`。
 
 ### 任务 7.3：多 Iteration Smoke
 
-- [ ] 运行两个完整 fake iteration，并验证 checkpoint N+1 只消费 checkpoint N 生成的数据。
-- [ ] 在 train 任务上运行一个小型真实 iteration 和 dry-run training，然后执行一个真实 LoRA update batch。
-- [ ] 验证从最终 manifest 到初始 checkpoint 的 memory 和 adapter lineage。
+- [x] 运行两个完整 fake iteration，并验证 checkpoint N+1 只消费 checkpoint N 生成的数据。
+- [ ] 在 train 任务上运行一个小型真实 iteration 和 dry-run training，然后执行一个真实 LoRA update batch；按已确认边界延期到 Stage 8 验收实验。
+- [x] 验证从最终 manifest 到初始 checkpoint 的 memory 和 adapter lineage。
 
-**阶段 7 gate：** 中断的 run 能够确定性恢复；promoted checkpoint 具有完整 lineage；所有学习 artifact 中都不存在 test ID。
+**阶段 7 gate：** 本地代码 gate 要求中断 run 可确定性恢复、promoted checkpoint 具有完整 lineage、所有学习 artifact 不存在 test ID；真实五任务与 Qwen3.5-9B GPU iteration gate 保持 pending，并在 Stage 8 验收实验中完成。
 
 ---
 

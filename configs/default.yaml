@@ -56,6 +56,9 @@ training:
   num_train_epochs: 3
   generation_max_new_tokens: 512
   loss_type: forward_kl
+pipeline:
+  iteration_task_count: 74
+  shuffle_train_tasks: true
 evaluation:
   nl_assertions:
     model: openrouter/openai/gpt-4.1

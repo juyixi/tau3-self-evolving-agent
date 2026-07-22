@@ -82,6 +82,8 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.training.max_sequence_length == 8192
     assert config.training.loss_type == "forward_kl"
     assert config.training.target_modules == "all-linear"
+    assert config.pipeline.iteration_task_count == 74
+    assert config.pipeline.shuffle_train_tasks is True
     assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
     assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}
     assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
