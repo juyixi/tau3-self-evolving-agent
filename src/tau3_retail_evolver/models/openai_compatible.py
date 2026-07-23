@@ -115,11 +115,12 @@ class OpenAICompatibleHttpClient:
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": list(messages),
-            "tools": list(tools),
             "temperature": temperature,
             "top_p": top_p,
             **self._generation_settings,
         }
+        if tools:
+            payload["tools"] = list(tools)
         if self._max_tokens is not None:
             payload["max_tokens"] = self._max_tokens
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

@@ -815,10 +815,35 @@ def test_http_client_posts_openai_compatible_request_with_generation_settings() 
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
-            b'{"max_tokens":256,"messages":[{"content":"Hello","role":"user"}],"model":"Qwen/Qwen3.5-9B","presence_penalty":0.2,"temperature":1.0,"tools":[],"top_p":0.95}',
+            b'{"max_tokens":256,"messages":[{"content":"Hello","role":"user"}],"model":"Qwen/Qwen3.5-9B","presence_penalty":0.2,"temperature":1.0,"top_p":0.95}',
         )
     ]
     assert response == {"choices": [{"message": {"role": "assistant", "content": "Done."}}]}
+
+
+def test_http_client_includes_nonempty_tool_schemas() -> None:
+    requests: list[bytes] = []
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+        requests.append(body)
+        return 200, b'{"choices":[{"message":{"role":"assistant","content":"Done."}}]}'
+
+    client = OpenAICompatibleHttpClient(
+        base_url="https://qwen.example/v1",
+        model="Qwen/Qwen3.5-9B",
+        api_key="test-api-key",
+        transport=transport,
+    )
+    tool = {"type": "function", "function": {"name": "lookup_order"}}
+
+    client.create_chat_completion(
+        messages=[],
+        tools=[tool],
+        temperature=1.0,
+        top_p=0.95,
+    )
+
+    assert json.loads(requests[0])["tools"] == [tool]
 
 
 def test_http_client_default_transport_forwards_request_timeout(
