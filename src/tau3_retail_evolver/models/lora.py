@@ -146,7 +146,6 @@ def save_adapter_checkpoint(
     destination = Path(checkpoint_path)
     model.save_pretrained(
         destination,
-        state_dict=adapter_state,
         safe_serialization=True,
         selected_adapters=[_ADAPTER_NAME],
     )

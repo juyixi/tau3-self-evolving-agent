@@ -691,10 +691,6 @@ def test_save_adapter_checkpoint_writes_only_peft_adapter_tensors(tmp_path: Path
     assert model.save_calls == [
         {
             "directory": tmp_path / "adapter",
-            "state_dict": {
-                "base_model.model.lora_A.shared_policy.weight": model.lora_A,
-                "base_model.model.lora_B.shared_policy.weight": model.lora_B,
-            },
             "safe_serialization": True,
             "selected_adapters": ["shared_policy"],
         }

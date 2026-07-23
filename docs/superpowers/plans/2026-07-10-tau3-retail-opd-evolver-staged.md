@@ -464,11 +464,11 @@
 - [x] 编写 CPU toy-model 测试，覆盖 gradient accumulation、四类样本 sampling、checkpoint manifest、resume 和仅保存 adapter。
 - [x] 实现 batch/epoch 控制，同时保留论文默认值：learning rate 1e-5、per-device batch 2、accumulation 4、训练三轮。
 - [x] 拒绝 `source_adapter_revision` 与 trainer 起始 adapter 不一致的数据集。
-- [ ] opt-in GPU smoke 已实现且默认跳过；尚未在真实 Qwen3.5-9B/BF16 CUDA 上执行一个 batch。
-- [ ] 已编码 LoRA gradient/update、零基础模型 gradient、有限 KL、adapter-only reload 断言；等待真实 GPU smoke 执行。
+- [x] opt-in GPU smoke 已在 RTX 4090 48GB 上使用真实 Qwen3.5-9B/BF16 执行一个 optimizer batch。
+- [x] LoRA gradient/update、零基础模型 gradient、有限 KL、adapter-only artifact 与逐 tensor reload 断言均已通过。
 - [x] 提交为 `feat: train qwen35 lora with shared policy opd`。
 
-**阶段 6 gate：** 本地 toy、trainer、CLI/dry-run、resume 与 adapter-only 契约通过；真实 Qwen3.5-9B GPU smoke 尚未运行，按已确认边界延期到 Stage 8 验收实验，真实 gate 保持 pending。
+**阶段 6 gate：** 已通过。本地 toy、trainer、CLI/dry-run、resume 与 adapter-only 契约通过；真实 Stage 5 数据集审计与 dry-run 通过；Qwen3.5-9B BF16 GPU smoke 于 2026-07-23 完成一个 optimizer step，并验证 adapter tensor 可无损重载。验证中发现并修复了 PEFT 二次筛选生成空 adapter checkpoint 的问题。
 
 ---
 
@@ -513,10 +513,10 @@
 ### 任务 7.3：多 Iteration Smoke
 
 - [x] 运行两个完整 fake iteration，并验证 checkpoint N+1 只消费 checkpoint N 生成的数据。
-- [ ] 在 train 任务上运行一个小型真实 iteration 和 dry-run training，然后执行一个真实 LoRA update batch；按已确认边界延期到 Stage 8 验收实验。
+- [ ] 在 train 任务上运行一个小型完整真实 iteration；真实数据 dry-run 与独立单 batch Qwen3.5-9B GPU update 已通过，端到端 iteration 仍在 Stage 8 验收实验中完成。
 - [x] 验证从最终 manifest 到初始 checkpoint 的 memory 和 adapter lineage。
 
-**阶段 7 gate：** 本地代码 gate 要求中断 run 可确定性恢复、promoted checkpoint 具有完整 lineage、所有学习 artifact 不存在 test ID；真实五任务 rollout 与 Stage 5 build/audit gate 已通过，Qwen3.5-9B GPU update 和完整真实 iteration gate 保持 pending，并在 Stage 8 验收实验中完成。
+**阶段 7 gate：** 本地代码 gate 要求中断 run 可确定性恢复、promoted checkpoint 具有完整 lineage、所有学习 artifact 不存在 test ID；真实五任务 rollout、Stage 5 build/audit 与独立 Qwen3.5-9B GPU update gate 已通过，完整真实 iteration gate 保持 pending，并在 Stage 8 验收实验中完成。
 
 ---
 

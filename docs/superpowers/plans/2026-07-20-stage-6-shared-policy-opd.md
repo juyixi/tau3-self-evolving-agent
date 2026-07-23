@@ -291,9 +291,9 @@ Expected: FAIL because the script is absent.
 
 Dry-run loads and audits the Stage 5 dataset, checks lineage and output paths, resolves training settings, and prints a JSON summary without importing PEFT or loading Qwen weights. Real mode loads the local Transformers model and calls `OPDTrainer.train()`.
 
-- [x] **Step 4: Add opt-in GPU smoke contract (real GPU execution pending)**
+- [x] **Step 4: Add and execute the opt-in GPU smoke contract**
 
-Gate with `RUN_OPD_GPU_SMOKE=1`; train one example and assert finite KL, non-zero LoRA gradient norm, zero base gradient tensors, adapter-only artifacts, and reload success.
+Gate with `RUN_OPD_GPU_SMOKE=1`; train one example and assert finite KL, non-zero LoRA gradient norm, zero base gradient tensors, adapter-only artifacts, and exact tensor equality after reload. The gate passed on 2026-07-23 with Qwen3.5-9B/BF16 on an RTX 4090 48GB. The first execution exposed an empty adapter artifact caused by passing an already-filtered PEFT state dict back through `save_pretrained`; the save path and reload assertion were corrected before the final passing run.
 
 - [x] **Step 5: Document AutoDL execution**
 

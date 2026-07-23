@@ -14,6 +14,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_qwen35_shared_policy_is_zero_impact_and_reloads_its_adapter(tmp_path: Path) -> None:
+    import peft
     import torch
 
     from tau3_retail_evolver.config import LoraConfig, ModelConfig, TrainingConfig
@@ -48,6 +49,13 @@ def test_qwen35_shared_policy_is_zero_impact_and_reloads_its_adapter(tmp_path: P
     assert torch.isfinite(output.logits).all()
 
     checkpoint = save_adapter_checkpoint(model, tmp_path / "adapter")
+    saved_adapter_state = {
+        name: tensor.detach().cpu().clone()
+        for name, tensor in peft.get_peft_model_state_dict(
+            model, adapter_name="shared_policy"
+        ).items()
+    }
+    assert saved_adapter_state
     del model
     gc.collect()
     if torch.cuda.is_available():
@@ -60,6 +68,17 @@ def test_qwen35_shared_policy_is_zero_impact_and_reloads_its_adapter(tmp_path: P
         adapter_path=checkpoint,
     )
     assert len(reloaded.peft_config) == 1
+    reloaded_adapter_state = {
+        name: tensor.detach().cpu()
+        for name, tensor in peft.get_peft_model_state_dict(
+            reloaded, adapter_name="shared_policy"
+        ).items()
+    }
+    assert reloaded_adapter_state.keys() == saved_adapter_state.keys()
+    assert all(
+        torch.equal(saved_adapter_state[name], reloaded_adapter_state[name])
+        for name in saved_adapter_state
+    )
     assert not any(
         parameter.requires_grad
         for name, parameter in reloaded.named_parameters()

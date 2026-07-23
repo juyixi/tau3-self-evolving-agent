@@ -2,7 +2,7 @@
 
 **目标：** 将既有 Fast Loop、Outcome-Calibrated Attribution、OPD 数据审计和共享策略 LoRA 训练组合为可恢复、train-only、具备完整父子 lineage 的 iteration。
 
-**真实实验边界：** 本阶段完成代码、CLI 和合成双 iteration 验证；真实五任务 Memory-enabled build/audit 已于 2026-07-23 通过，Qwen3.5-9B GPU update 与完整真实 iteration 仍延期到 Stage 8 验收实验。
+**真实实验边界：** 本阶段完成代码、CLI 和合成双 iteration 验证；真实五任务 Memory-enabled build/audit 与独立 Qwen3.5-9B 单步 GPU update 已于 2026-07-23 通过，完整真实 iteration 仍延期到 Stage 8 验收实验。
 
 ## 任务 1：Iteration 状态与恢复
 
@@ -36,7 +36,7 @@
 ## 任务 5：验证与收尾
 
 - [x] 完成各状态恢复、artifact 篡改、不完整 adapter、非 train ID 和双 iteration 合成测试。
-- [x] 运行完整默认测试套件：`661 passed, 5 skipped`。
+- [x] 运行完整默认测试套件；Stage 6 GPU 修复后复跑结果为 `668 passed, 5 skipped`。
 - [x] 执行代码生命周期审计。
 - [x] 提交 Stage 7 功能分支。
-- [ ] Stage 8 执行单 batch GPU update、真实 30 任务四类样本覆盖和真实多 iteration 验收。
+- [ ] Stage 8 执行真实 30 任务四类样本覆盖和完整真实多 iteration 验收；独立单 batch GPU update 已通过。

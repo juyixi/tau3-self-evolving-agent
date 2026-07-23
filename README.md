@@ -443,7 +443,7 @@ python -m scripts.run_iteration `
   --stop-after dataset_complete
 ```
 
-不传 `--task-count` 时使用配置中的生产默认值 74。真实五任务 Memory-enabled build/audit gate 已通过；真实 30 任务四类样本覆盖和 Qwen3.5-9B GPU update gate 仍保持 pending，在扩大数据采集和 Stage 8 验收实验中执行。
+不传 `--task-count` 时使用配置中的生产默认值 74。真实五任务 Memory-enabled build/audit gate 和 Qwen3.5-9B 单步 GPU update gate 均已通过；真实 30 任务四类样本覆盖与完整真实多 iteration 仍在扩大数据采集和 Stage 8 验收实验中执行。
 
 ### 10. 测试
 
@@ -460,6 +460,8 @@ export RUN_OPD_GPU_SMOKE=1
 export OPD_GPU_SMOKE_MODEL_REVISION="$MODEL_REVISION"
 python -m pytest tests/integration/test_opd_gpu_smoke.py -q
 ```
+
+2026-07-23 已在 RTX 4090 48GB 上完成该 gate：固定 revision 的 Qwen3.5-9B 以 BF16 执行 1 个 optimizer step，forward KL 有限，LoRA 产生非零梯度与参数更新，基础模型无梯度；保存的 adapter 含 496 个 tensor，并通过训练前后逐 tensor 重载一致性检查。详见 [Stage 6 OPD GPU 验证记录](docs/stage-6-opd-gpu-validation.md)。
 
 ## 参考资料
 

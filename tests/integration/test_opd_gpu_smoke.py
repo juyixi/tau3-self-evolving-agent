@@ -64,6 +64,7 @@ def _write_one_example_dataset(root: Path, model_revision: str) -> None:
 
 
 def test_cached_qwen35_trains_one_example_with_adapter_only_update(tmp_path: Path) -> None:
+    import peft
     import torch
 
     from tau3_retail_evolver.config import (
@@ -167,6 +168,13 @@ def test_cached_qwen35_trains_one_example_with_adapter_only_update(tmp_path: Pat
         (result.latest_checkpoint / "checkpoint_manifest.json").read_text(encoding="utf-8")
     )
     adapter_path = (result.latest_checkpoint / manifest["adapter_path"]).resolve()
+    trained_adapter_state = {
+        name: tensor.detach().cpu().clone()
+        for name, tensor in peft.get_peft_model_state_dict(
+            model, adapter_name="shared_policy"
+        ).items()
+    }
+    assert trained_adapter_state
     del model
     torch.cuda.empty_cache()
     reloaded = load_shared_qwen35_policy(
@@ -178,3 +186,14 @@ def test_cached_qwen35_trains_one_example_with_adapter_only_update(tmp_path: Pat
         local_files_only=True,
     )
     assert len(reloaded.peft_config) == 1
+    reloaded_adapter_state = {
+        name: tensor.detach().cpu()
+        for name, tensor in peft.get_peft_model_state_dict(
+            reloaded, adapter_name="shared_policy"
+        ).items()
+    }
+    assert reloaded_adapter_state.keys() == trained_adapter_state.keys()
+    assert all(
+        torch.equal(trained_adapter_state[name], reloaded_adapter_state[name])
+        for name in trained_adapter_state
+    )
