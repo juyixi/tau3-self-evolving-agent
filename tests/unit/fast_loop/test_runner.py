@@ -400,6 +400,41 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
     assert environment.close_calls == 1
 
 
+def test_write_prompt_uses_latest_nonblank_observation_after_terminal_empty_step(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    terminal = _terminal_step()
+    terminal = StepResult(
+        observation="",
+        reward=terminal.reward,
+        done=terminal.done,
+        terminated=terminal.terminated,
+        truncated=terminal.truncated,
+        info=terminal.info,
+    )
+    environment = FakeEnvironment(_reset(), [terminal])
+    policy = ScriptedLifecyclePolicy(
+        [
+            '{"memory_ids":[]}',
+            '{"action":"finish"}',
+            '{"memories":[]}',
+        ]
+    )
+
+    result = _run(
+        repository=repository,
+        environment=environment,
+        policy=policy,
+    )
+
+    write_prompt = policy.prompts[-1]
+    assert write_prompt.kind == "write"
+    assert write_prompt.payload["observation"] == "Customer asks for a refund"
+    assert write_prompt.payload["trajectory"][0]["next_observation"] == ""
+    assert result.final_reward == 0.8
+
+
 @pytest.mark.parametrize(
     ("split", "mode"),
     [

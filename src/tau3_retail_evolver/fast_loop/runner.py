@@ -210,6 +210,7 @@ def run_fast_loop_episode(
             _emit(context, task_id, "MemoryDisabled", reason="config")
 
         observation = public_observation
+        last_nonblank_observation = public_observation
         trajectory: list[dict[str, Any]] = []
         terminal_evaluation: Mapping[str, Any] = {}
         simulation_result: Mapping[str, Any] = {}
@@ -273,6 +274,8 @@ def run_fast_loop_episode(
             )
             steps += 1
             observation = step.observation
+            if observation.strip():
+                last_nonblank_observation = observation
             final_reward = step.reward
             if step.done:
                 terminal_evaluation = _terminal_json_mapping(
@@ -306,7 +309,7 @@ def run_fast_loop_episode(
                 task_instruction=public_task_instruction,
                 policy=public_policy,
                 tools=public_tools,
-                observation=observation,
+                observation=last_nonblank_observation,
                 trajectory=trajectory,
                 terminal_evaluation=terminal_evaluation,
             )
