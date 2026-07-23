@@ -74,8 +74,14 @@ ACTION_SYSTEM = (
     "Do not include hidden data."
 )
 WRITE_SYSTEM = (
-    'Return exactly one strict JSON object matching WriteDecision: {"memories":[...]}. '
-    "Attribution fields are not allowed. Do not use tools or include any other text."
+    "Return exactly one strict JSON object matching WriteDecision. Use this shape: "
+    '{"memories":[{"tier":"tip","content":"durable reusable lesson",'
+    '"retrieval_text":"optional retrieval query","metadata":{}}]}. '
+    'Every memory must contain "tier" and "content". The only allowed tier values are '
+    '"trajectory", "tip", "skill", and "tool"; retrieval_text and metadata are optional. '
+    'Use {"memories":[]} when there is no durable reusable lesson. Never use a "summary" '
+    "field. Attribution fields are not allowed. Do not use tools, Markdown fences, or "
+    "include any other text."
 )
 MAINTENANCE_SYSTEM = (
     "Return exactly one strict JSON object matching MaintenanceDecision: "
