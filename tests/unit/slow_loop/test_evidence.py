@@ -281,6 +281,27 @@ def test_build_evidence_reconstructs_episode_from_frozen_snapshot(
     assert episode.source_event_end == 8
 
 
+def test_build_evidence_accepts_selected_details_in_retrieval_order(
+    tmp_path: Path,
+) -> None:
+    def select_in_teacher_order(
+        events: list[dict[str, Any]], ids: dict[str, str]
+    ) -> None:
+        events[2]["selected_memory_ids"] = [ids["tool"], ids["tip"]]
+        events[2]["selected"] = list(events[1]["candidates"])
+
+    source, memory_root = _mutated_source(tmp_path, select_in_teacher_order)
+
+    ledger = build_evidence(source, memory_root=memory_root)
+
+    assert ledger.episodes[0].selected_memory_ids == (
+        stable_memory_id(MemoryTier.TOOL, "Use lookup_order before a mutation."),
+        stable_memory_id(
+            MemoryTier.TIP, "Confirm the order number before changing it."
+        ),
+    )
+
+
 def _mutated_source(
     tmp_path: Path,
     mutation: Callable[[list[dict[str, Any]], dict[str, str]], None],
@@ -308,6 +329,7 @@ def _mutated_source(
         ("proposal_without_commit", "incomplete write lifecycle"),
         ("candidate_missing_from_snapshot", "candidate missing from snapshot"),
         ("candidate_version_mismatch", "candidate version mismatch"),
+        ("selected_detail_mismatch", "selected candidate details mismatch"),
         ("cross_run_provenance", "event provenance"),
     ],
 )
@@ -329,6 +351,8 @@ def test_build_evidence_rejects_invalid_lifecycle(
             events[1]["candidates"][1]["memory_id"] = ids["skill"]
         elif mutation == "candidate_version_mismatch":
             events[1]["candidates"][0]["memory_version"] = 2
+        elif mutation == "selected_detail_mismatch":
+            events[2]["selected"][0]["similarity"] = 0.1
         elif mutation == "cross_run_provenance":
             events[4]["run_id"] = "other-run"
 

@@ -400,6 +400,54 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
     assert environment.close_calls == 1
 
 
+def test_selected_candidate_details_follow_teacher_preference_order(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    first = repository.add(
+        tier="tip",
+        content="First by retrieval score.",
+        source_task_ids=("seed-task",),
+        created_round=0,
+        embedding=(1.0, 0.0),
+        embedding_model_revision="fake-embedding@1",
+    )
+    second = repository.add(
+        tier="skill",
+        content="Second by retrieval score.",
+        source_task_ids=("seed-task",),
+        created_round=0,
+        embedding=(0.8, 0.6),
+        embedding_model_revision="fake-embedding@1",
+    )
+    environment = FakeEnvironment(_reset(), [_terminal_step()])
+    policy = ScriptedLifecyclePolicy(
+        [
+            json.dumps({"memory_ids": [second.id, first.id]}),
+            json.dumps({"action": "lookup_order(order_id='123')"}),
+            json.dumps({"memories": []}),
+        ]
+    )
+    events = EventCollector()
+
+    run_fast_loop_episode(
+        task_id="selection-order-task",
+        task_instruction="Help the customer complete a refund",
+        environment=environment,
+        policy=policy,
+        repository=repository,
+        retriever=Retriever(DeterministicEmbeddings()),
+        config=FastLoopConfig(retrieve_top_k=2),
+        context=_context(events),
+    )
+
+    selected = next(
+        event for event in events.events if event["event_type"] == "MemorySelected"
+    )
+    assert selected["selected_memory_ids"] == [second.id, first.id]
+    assert [item["memory_id"] for item in selected["selected"]] == [second.id, first.id]
+
+
 def test_write_prompt_uses_latest_nonblank_observation_after_terminal_empty_step(
     tmp_path: Path,
 ) -> None:

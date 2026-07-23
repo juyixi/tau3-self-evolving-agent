@@ -343,10 +343,16 @@ def _build_episode(
     if not set(selected_ids) <= set(candidate_ids):
         raise ValueError(f"selected memory is not a candidate for task {task_id}")
     raw_selected = _list_of_mappings(selected_event.get("selected"), "selected candidates")
-    if tuple(raw.get("memory_id") for raw in raw_selected) != selected_ids:
+    selected_detail_ids = tuple(
+        _nonblank(raw, "memory_id", "selected candidate") for raw in raw_selected
+    )
+    if (
+        len(selected_detail_ids) != len(set(selected_detail_ids))
+        or set(selected_detail_ids) != set(selected_ids)
+    ):
         raise ValueError(f"selected candidate details mismatch for task {task_id}")
     raw_by_id = {raw["memory_id"]: raw for raw in raw_candidates}
-    if any(raw != raw_by_id[raw["memory_id"]] for raw in raw_selected):
+    if any(raw != raw_by_id.get(raw["memory_id"]) for raw in raw_selected):
         raise ValueError(f"selected candidate details mismatch for task {task_id}")
 
     trajectory = _trajectory(block[3:-3], task_id=task_id)

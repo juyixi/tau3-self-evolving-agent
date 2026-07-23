@@ -183,10 +183,10 @@ def run_fast_loop_episode(
                 label="selection",
             )
             selected_ids = selection.memory_ids
-            selected_set = set(selected_ids)
-            selected = [
-                candidate for candidate in candidates if candidate.memory_id in selected_set
-            ]
+            candidates_by_id = {
+                candidate.memory_id: candidate for candidate in candidates
+            }
+            selected = [candidates_by_id[memory_id] for memory_id in selected_ids]
             _emit(
                 context,
                 task_id,
