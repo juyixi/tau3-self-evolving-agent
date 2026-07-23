@@ -104,8 +104,21 @@ def _episode_events(
             "event_type": "EpisodeFinished",
             "steps": 1,
             "final_reward": 1.0,
-            "terminal_evaluation": {"reward": 1.0},
-            "simulation_result": {"status": "done"},
+            "terminal_evaluation": {
+                "reward": 1.0,
+                "nl_assertions": [
+                    {
+                        "nl_assertion": "Private evaluator rubric.",
+                        "justification": "Private evaluator reasoning.",
+                        "met": True,
+                    }
+                ],
+                "action_checks": [{"arguments": {"private": "golden"}}],
+            },
+            "simulation_result": {
+                "status": "done",
+                "messages": [{"raw_data": {"reasoning_content": "private"}}],
+            },
             "truncated": False,
             "project_truncated": False,
         },
@@ -273,6 +286,8 @@ def test_build_evidence_reconstructs_episode_from_frozen_snapshot(
     assert episode.selected_memory_ids == (ids["tip"],)
     assert episode.trajectory[0].action == "lookup_order(order_id='1')"
     assert episode.final_reward == 1.0
+    assert episode.terminal_evaluation == {"reward": 1.0}
+    assert episode.simulation_result == {}
     assert episode.terminated is True
     assert episode.truncated is False
     assert episode.committed_new_memory_ids == (ids["skill"],)

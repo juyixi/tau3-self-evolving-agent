@@ -404,12 +404,8 @@ def _build_episode(
     tools = started.get("tools")
     if not isinstance(tools, list) or not all(isinstance(tool, dict) for tool in tools):
         raise ValueError(f"EpisodeStarted tools are invalid for task {task_id}")
-    terminal_evaluation = _json_mapping(
-        finished.get("terminal_evaluation"), "terminal_evaluation"
-    )
-    simulation_result = _json_mapping(
-        finished.get("simulation_result"), "simulation_result"
-    )
+    _json_mapping(finished.get("terminal_evaluation"), "terminal_evaluation")
+    _json_mapping(finished.get("simulation_result"), "simulation_result")
     truncated = _strict_bool(finished.get("truncated"), "truncated")
     return EpisodeEvidence(
         episode_id=f"{source_run.run_id}:{task_id}",
@@ -437,8 +433,8 @@ def _build_episode(
         candidates=candidates,
         selected_memory_ids=selected_ids,
         trajectory=trajectory,
-        terminal_evaluation=terminal_evaluation,
-        simulation_result=simulation_result,
+        terminal_evaluation={"reward": final_reward},
+        simulation_result={},
         final_reward=final_reward,
         terminated=trajectory[-1].terminated,
         truncated=truncated,
