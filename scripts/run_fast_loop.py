@@ -45,6 +45,7 @@ MODEL_SERVING_CONTRACT = {
     "tool_call_parser": "qwen3_coder",
     "enable_thinking": True,
     "max_tokens": 8192,
+    "request_timeout_s": 600.0,
     "top_k": 20,
     "presence_penalty": 1.5,
     "parallel_tool_calls": False,
@@ -138,6 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         model=config.model.base_model,
         api_key=os.environ.get("QWEN_API_KEY") or "EMPTY",
         max_tokens=MODEL_SERVING_CONTRACT["max_tokens"],
+        request_timeout_s=MODEL_SERVING_CONTRACT["request_timeout_s"],
         generation_settings=QWEN_GENERATION_SETTINGS,
     )
     policy = OpenAICompatibleFastLoopPolicy(

@@ -736,6 +736,7 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         "model": "Qwen/Qwen3.5-9B",
         "api_key": "qwen-secret",
         "max_tokens": 8192,
+        "request_timeout_s": 600.0,
         "generation_settings": run_fast_loop.QWEN_GENERATION_SETTINGS,
     }
     assert captured["policy_kwargs"]["temperature"] == 1.0
