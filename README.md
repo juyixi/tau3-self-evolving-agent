@@ -342,6 +342,8 @@ python -m scripts.audit_opd_dataset `
 
 审计退出码 `0` 表示数据满足 lineage、hash、public/privileged 隔离和在线采样合同。
 
+2026-07-23 已在 AutoDL 完成真实五任务 Memory-enabled schema-2 验证。两个连续 source runs 成功构建 `opd-iter0-5tasks-20260723g`，独立审计返回 `passed=true`；产物包含 5 条 episode evidence、11 条 Memory score、4 条 `sel` 和 1 条 `write`。本次小样本未产生 `act`，且未达到 `Q=30`，因此没有 `maint`；四类 builder 的非空与确定性重建继续由合成集成测试覆盖。
+
 ### 7. AutoDL 上运行 LoRA OPD
 
 训练直接由 Transformers 加载 Qwen，不经过 vLLM。先停止 vLLM 释放 GPU 显存：
@@ -441,7 +443,7 @@ python -m scripts.run_iteration `
   --stop-after dataset_complete
 ```
 
-不传 `--task-count` 时使用配置中的生产默认值 74。真实五任务 Memory-enabled build/audit 和 Qwen3.5-9B GPU update gate 仍保持 pending，在 Stage 8 验收实验中执行。
+不传 `--task-count` 时使用配置中的生产默认值 74。真实五任务 Memory-enabled build/audit gate 已通过；真实 30 任务四类样本覆盖和 Qwen3.5-9B GPU update gate 仍保持 pending，在扩大数据采集和 Stage 8 验收实验中执行。
 
 ### 10. 测试
 

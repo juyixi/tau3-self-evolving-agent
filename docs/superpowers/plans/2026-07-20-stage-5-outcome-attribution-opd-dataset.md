@@ -886,9 +886,9 @@ Expected: failure until cross-module manifest normalization excludes build-speci
 
 Ensure source run ordering, evidence IDs, attribution ordering, example ordering, and artifact serialization are independent of CLI input order. Compare content artifacts, not `dataset_build_id` or absolute output paths, in the determinism assertion.
 
-- [x] **Step 4: Document the deferred real five-task schema-2 validation**
+- [x] **Step 4: Complete and document the real five-task schema-2 validation**
 
-Add commands that run five official train tasks with `memory.enabled=true`, then invoke `build_opd_dataset` and `audit_opd_dataset`. State explicitly that real execution remains pending until Qwen, Tau2 user simulator, embedding model, and API credentials are available together, and that passing it is required before Stage 6.
+The AutoDL validation completed on 2026-07-23 with Qwen, the Tau2 user simulator, the embedding model, and evaluator credentials available together. Two continuous schema-2 runs produced `opd-iter0-5tasks-20260723g`; the independent audit passed with 5 evidence episodes, 11 Memory scores, 4 selection examples, and 1 writing example. Action and maintenance remained empty under the five-task evidence thresholds, so real 30-task four-view coverage remains a follow-up rather than a Stage 6 minimum-gate blocker.
 
 - [x] **Step 5: Run all Stage 5 and Stage 4 unit/integration tests**
 
@@ -935,4 +935,4 @@ git commit -m "test: verify stage 5 opd dataset pipeline"
 - [x] Dataset build is deterministic and independently auditable.
 - [x] Schema-1, Memory-disabled, failed, test/base, stale, duplicate, and broken-lineage inputs fail closed.
 - [x] Full runnable test suite and `git diff --check` pass.
-- [ ] Real five-task validation remains visibly pending and gates Stage 6.
+- [x] Real five-task schema-2 build and independent audit passed on `opd-iter0-5tasks-20260723g`; real 30-task four-view coverage remains a follow-up.

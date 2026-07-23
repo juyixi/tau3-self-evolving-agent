@@ -6,6 +6,8 @@
 
 Stage 5 不执行 LoRA 优化，也不提前固化 Slow Loop 的学生 completion。学生 completion、同前缀教师前向和 token KL 属于 Stage 6。
 
+实现状态：Stage 5 代码 gate、合成四类数据集集成测试和真实五任务 Memory-enabled build/audit gate 均已通过。真实五任务结果记录于 `opd-iter0-5tasks-20260723g`，build revision 为 `509715aa9375eb77a93c7f47438c38444a58599e`。
+
 ## 参考资料与优先级
 
 实现必须同时参考：
@@ -502,4 +504,4 @@ Stage 5 完成必须满足：
 - 全部 Stage 4/Stage 5 自动化测试通过。
 - 设计中没有从 test artifact 返回训练路径。
 
-真实五任务 Memory-enabled run 已明确延期，不阻塞本阶段代码开始；Stage 5 完成后必须用 schema 2 补跑，并成功构建/审计 evidence，作为进入 Stage 6 的硬门槛。
+真实五任务 Memory-enabled schema-2 run 已于 2026-07-23 补跑完成，并成功构建和独立审计 evidence，进入 Stage 6 的真实数据硬门槛已经通过。该小样本产生 4 条 `sel` 和 1 条 `write`，未产生 `act`，也未达到 `Q=30` maintenance 边界；真实 30 任务四类样本覆盖仍属于扩大训练前的后续验证，不回退本次已通过的 Stage 5 最小 gate。

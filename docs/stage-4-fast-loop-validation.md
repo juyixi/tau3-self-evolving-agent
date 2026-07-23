@@ -146,6 +146,15 @@ python -m scripts.audit_opd_dataset `
 
 ## 进入 Stage 6 的硬门槛
 
-真实五任务 Memory-enabled schema-2 验证目前仍为待执行项。只有 Qwen、Tau2 用户模拟器、Embedding 模型和 evaluator 凭证在同一机器上可用时，才运行前五任务命令，并随后成功执行 Stage 5 build 与独立 audit。
+真实五任务 Memory-enabled schema-2 验证已于 2026-07-23 在 AutoDL 完成：
 
-五任务 run 不保证四类数据都非空，因为 attribution 需要同 task group 的 selected/control 证据，maintenance 还要求累计到 `Q=30`。硬门槛要求真实 evidence 能被严格构建和审计；四类非空与确定性重建由离线两段连续 run 集成测试覆盖。该真实验证通过前，不进入 Stage 6 在线 OPD 训练。
+- 连续 source runs：`stage5-clean-iter0-task0-20260723a` 与 `stage5-clean-v2-iter0-task1-4-20260723a`。
+- Memory snapshot chain：`ed80c101... -> 969e4cf5... -> 82032ba1...`。
+- 数据集：`opd-iter0-5tasks-20260723g`。
+- Build revision：`509715aa9375eb77a93c7f47438c38444a58599e`。
+- 产出：5 条 episode evidence、11 条 Memory score、4 条 `sel`、1 条 `write`、0 条 `act`、0 条 `maint`。
+- 独立审计：`passed=true`，检查 6 个 JSONL artifact，`errors=[]`。
+
+本次同时修复了教师选择顺序与检索顺序不一致导致的 evidence 拒绝，以及 Tau2 evaluator/simulator 私有明细进入发布 evidence 的问题。原始 NL assertions 和模拟器明细仍保留在只读 source run，OPD evidence 只发布标量 outcome。
+
+五任务 run 不保证四类数据都非空，因为 attribution 需要同 task group 的 selected/control 证据，maintenance 还要求累计到 `Q=30`。真实 evidence 构建与审计硬门槛已经通过，可以进入 Stage 6 最小训练验证；真实 30 任务四类样本覆盖仍作为扩大训练前的后续验证。四类 builder 非空与确定性重建已由离线两段连续 run 集成测试覆盖。

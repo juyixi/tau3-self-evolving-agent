@@ -324,12 +324,12 @@
 
 ### 任务 4.4：真实 Train 快循环 Smoke
 
-- [ ] 初始化一个小型四层 repository。
-- [ ] 使用当前 Qwen LoRA checkpoint 运行五个固定 train 任务。
-- [ ] 验证 candidate/selected set、环境轨迹、memory 写入、官方 reward 和 snapshot 变化。
-- [ ] 使用 fake 环境运行 30 任务 scheduler smoke，在不产生外部 API 成本的情况下覆盖 maintenance。
+- [x] 初始化一个小型四层 repository。
+- [x] 使用当前 Qwen LoRA checkpoint 运行五个固定 train 任务。
+- [x] 验证 candidate/selected set、环境轨迹、memory 写入、官方 reward 和 snapshot 变化。
+- [x] 使用 fake 环境运行 30 任务 scheduler smoke，在不产生外部 API 成本的情况下覆盖 maintenance。
 
-**阶段 4 gate：** 真实 train 任务携带完整生命周期日志完成；任何 test/base 路径都无法修改 train-derived memory。
+**阶段 4 gate：** 已通过。真实五任务 train run 携带完整 schema-2 生命周期日志完成，形成连续 Memory snapshot chain；任何 test/base 路径都无法修改 train-derived memory。
 
 ---
 
@@ -343,10 +343,10 @@
 - 创建：`src/tau3_retail_evolver/slow_loop/task_grouping.py`
 - 测试：`tests/unit/slow_loop/test_task_grouping.py`
 
-- [ ] 编写失败测试，确保移除只读 lookup tool，规范化并排序所需 action 名称，为语义等价的 action set 生成相同 group，并且绝不包含 evaluator 参数或 expected value。
-- [ ] 在 rollout 后根据特权任务元数据实现分组。公开事件元数据中只存储 group signature。
-- [ ] 重新运行测试并确认 PASS。
-- [ ] 提交为 `feat: add retail attribution task grouping`。
+- [x] 编写失败测试，确保移除只读 lookup tool，规范化并排序所需 action 名称，为语义等价的 action set 生成相同 group，并且绝不包含 evaluator 参数或 expected value。
+- [x] 在 rollout 后根据特权任务元数据实现分组。公开事件元数据中只存储 group signature。
+- [x] 重新运行测试并确认 PASS。
+- [x] 提交为 `feat: add retail attribution task grouping`。
 
 ### 任务 5.2：严格对应论文的 Memory Attribution
 
@@ -362,12 +362,12 @@
   - `gamma = 1 - 1 / sqrt(1 + N_selected)`
   - `V = tier_prior * gamma * A_hat`
 
-- [ ] 编写合成失败测试，覆盖候选集受控集合、group weighting、空 group 忽略、confidence、tier prior、负值和 0.01 监督阈值。
-- [ ] 运行聚焦测试并确认失败。
-- [ ] 根据 retrieved 和 selected event ID 实现。绝不与未检索到该 memory 的任务进行比较。
-- [ ] 随每个 score 导出 count 和 group delta，确保可以审计。
-- [ ] 重新运行测试并确认 PASS。
-- [ ] 提交为 `feat: add outcome calibrated memory attribution`。
+- [x] 编写合成失败测试，覆盖候选集受控集合、group weighting、空 group 忽略、confidence、tier prior、负值和 0.01 监督阈值。
+- [x] 运行聚焦测试并确认失败。
+- [x] 根据 retrieved 和 selected event ID 实现。绝不与未检索到该 memory 的任务进行比较。
+- [x] 随每个 score 导出 count 和 group delta，确保可以审计。
+- [x] 重新运行测试并确认 PASS。
+- [x] 提交为 `feat: add outcome calibrated memory attribution`。
 
 ### 任务 5.3：四类 Hindsight Builder
 
@@ -380,13 +380,13 @@
 - 产出：`OPDExample(kind, public_input, privileged_hindsight, student_output, response_schema, provenance)`
 - 对 `sel`、`act`、`write` 和 `maint` 实现公式 13
 
-- [ ] 为每个生命周期视图编写失败测试，并断言 privileged value 永远不会出现在 `public_input` 中。
-- [ ] 对 `act`，公开输入排除 memory；教师 hindsight 在可用时包含有正价值的 selected memory 和同组成功轨迹。
-- [ ] 对 `write`，只在写入的 memory 具有未来 retrieved/selected 证据后完成样本；不得使用创建它的 episode 为其赋值。
-- [ ] 对 `maint`，仅在教师 hindsight 中包含 score、confidence、usage 和 redundancy diagnostics。
-- [ ] 添加严格 leakage scan，拒绝 `split != train`、test task ID、evaluator criteria 和 `eval/` 下的路径。
-- [ ] 重新运行测试并确认 PASS。
-- [ ] 提交为 `feat: build four-view opd hindsight data`。
+- [x] 为每个生命周期视图编写失败测试，并断言 privileged value 永远不会出现在 `public_input` 中。
+- [x] 对 `act`，公开输入排除 memory；教师 hindsight 在可用时包含有正价值的 selected memory 和同组成功轨迹。
+- [x] 对 `write`，只在写入的 memory 具有未来 retrieved/selected 证据后完成样本；不得使用创建它的 episode 为其赋值。
+- [x] 对 `maint`，仅在教师 hindsight 中包含 score、confidence、usage 和 redundancy diagnostics。
+- [x] 添加严格 leakage scan，拒绝 `split != train`、test task ID、evaluator criteria 和 `eval/` 下的路径。
+- [x] 重新运行测试并确认 PASS。
+- [x] 提交为 `feat: build four-view opd hindsight data`。
 
 ### 任务 5.4：数据集 CLI 与审计
 
@@ -395,12 +395,12 @@
 - 创建：`scripts/audit_opd_dataset.py`
 - 测试：`tests/unit/slow_loop/test_dataset_cli.py`
 
-- [ ] 让 builder 为每种决策类型写入独立 JSONL 文件，并生成包含 source run、checkpoint、memory snapshot、count 和 hash 的 dataset manifest。
-- [ ] 当出现重复 example ID、过期 checkpoint provenance、缺失 student output、privileged/public 重叠或非 train source event 时，让 audit 失败。
-- [ ] 运行单元测试和合成端到端 build。
-- [ ] 提交为 `feat: add auditable opd dataset pipeline`。
+- [x] 让 builder 为每种决策类型写入独立 JSONL 文件，并生成包含 source run、checkpoint、memory snapshot、count 和 hash 的 dataset manifest。
+- [x] 当出现重复 example ID、过期 checkpoint provenance、缺失 student output、privileged/public 重叠或非 train source event 时，让 audit 失败。
+- [x] 运行单元测试和合成端到端 build。
+- [x] 提交为 `feat: add auditable opd dataset pipeline`。
 
-**阶段 5 gate：** attribution 与手工计算 fixture 一致；四类数据集全部通过 leakage 和 provenance audit。
+**阶段 5 gate：** 已通过。Attribution 与手工计算 fixture 一致，四类 builder 通过 leakage 和 provenance audit；真实五任务 build `opd-iter0-5tasks-20260723g` 的独立审计返回 `passed=true`。本次真实小样本产出 4 条 `sel` 和 1 条 `write`，真实 `act/maint` 非空覆盖仍待 30 任务验证。
 
 ---
 
@@ -516,7 +516,7 @@
 - [ ] 在 train 任务上运行一个小型真实 iteration 和 dry-run training，然后执行一个真实 LoRA update batch；按已确认边界延期到 Stage 8 验收实验。
 - [x] 验证从最终 manifest 到初始 checkpoint 的 memory 和 adapter lineage。
 
-**阶段 7 gate：** 本地代码 gate 要求中断 run 可确定性恢复、promoted checkpoint 具有完整 lineage、所有学习 artifact 不存在 test ID；真实五任务与 Qwen3.5-9B GPU iteration gate 保持 pending，并在 Stage 8 验收实验中完成。
+**阶段 7 gate：** 本地代码 gate 要求中断 run 可确定性恢复、promoted checkpoint 具有完整 lineage、所有学习 artifact 不存在 test ID；真实五任务 rollout 与 Stage 5 build/audit gate 已通过，Qwen3.5-9B GPU update 和完整真实 iteration gate 保持 pending，并在 Stage 8 验收实验中完成。
 
 ---
 
