@@ -7,6 +7,7 @@ import unicodedata
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from tau3_retail_evolver.fast_loop.baseline_prompt import normalize_tool_schema
 from tau3_retail_evolver.fast_loop.decisions import maintenance_command_schemas
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate
 from tau3_retail_evolver.memory.types import MemoryItem
@@ -210,7 +211,10 @@ def project_public_context(
     if isinstance(tools, (str, bytes)) or isinstance(history, (str, bytes)):
         raise ValueError("tools and history must be sequences")
     normalized_policy = _json_copy(sanitize_artifact_data(policy), "policy")
-    normalized_tools = _json_copy(sanitize_artifact_data(list(tools)), "tools")
+    normalized_tools = _json_copy(
+        sanitize_artifact_data([normalize_tool_schema(tool) for tool in tools]),
+        "tools",
+    )
     _reject_forbidden_fields(normalized_policy, "policy")
     _reject_forbidden_fields(normalized_tools, "tools")
     context = {

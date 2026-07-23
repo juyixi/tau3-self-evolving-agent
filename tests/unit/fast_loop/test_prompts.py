@@ -52,6 +52,37 @@ def _public_context() -> dict[str, object]:
     }
 
 
+class _Tau2Tool:
+    @property
+    def openai_schema(self) -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "lookup_order",
+                "description": "Look up an order.",
+                "parameters": {"type": "object"},
+            },
+        }
+
+
+def test_public_context_normalizes_official_tau2_tool_objects() -> None:
+    context = _public_context()
+    context["tools"] = [_Tau2Tool()]
+
+    prompt = build_action_prompt(**context, memories=())
+
+    assert prompt.payload["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_order",
+                "description": "Look up an order.",
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
+
+
 def _diagnostic_item(index: int = 1, tier: str = "tip") -> dict[str, object]:
     return {
         "id": f"memory-{index}",
