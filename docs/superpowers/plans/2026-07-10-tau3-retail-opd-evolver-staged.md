@@ -530,17 +530,17 @@
 - 创建：`src/tau3_retail_evolver/eval/guard.py`
 - 创建：`src/tau3_retail_evolver/eval/runner.py`
 - 测试：`tests/unit/eval/test_guard.py`
-- 测试：`tests/unit/eval/test_runner.py`
+- 测试：`tests/unit/eval/test_evaluation_runner.py`
 
 **协议：**
 - `test_static`：以只读方式加载由 train 产生的冻结 memory snapshot；不允许 test memory 写入。
 - `test_streaming`：从空的隔离 memory 开始，允许在 test stream 内进行快循环 memory 演化，以复现论文评测协议；绝不将该 memory 导出到训练。
 
-- [ ] 编写失败测试，确保两种协议都禁用 optimizer 创建、attribution、dataset 写入、checkpoint 保存和 train-memory 修改。
-- [ ] 断言 `test_static` 拒绝所有 memory operation。
-- [ ] 断言 `test_streaming` 只写入 `history/evaluations/<run_id>/<agent_id>/quarantine/` via `evaluation_quarantine_root(run_id, agent_id)`，并且训练 artifact loader 拒绝该路径。
-- [ ] 重新运行测试并确认 PASS。
-- [ ] 提交为 `feat: isolate static and streaming test evaluation`。
+- [x] 编写失败测试，确保两种协议都禁用 optimizer 创建、attribution、dataset 写入、checkpoint 保存和 train-memory 修改。
+- [x] 断言 `test_static` 拒绝所有 memory operation。
+- [x] 断言 `test_streaming` 只写入 `history/evaluations/<run_id>/<agent_id>/quarantine/` via `evaluation_quarantine_root(run_id, agent_id)`，并且训练 artifact loader 拒绝该路径。
+- [x] 重新运行测试并确认 PASS。
+- [x] 提交为 `feat: isolate static and streaming test evaluation`。
 
 ### 任务 8.2：官方指标与可复现 CLI
 
@@ -549,13 +549,13 @@
 - 创建：`scripts/evaluate_retail.py`
 - 测试：`tests/unit/eval/test_metrics.py`
 
-- [ ] 保留每个 episode 的 tau2 reward 和解析后的 `reward_info`，不得重新实现官方 evaluator。
-- [ ] 报告 task count、completed count、mean reward/success、逐任务结果、failure category、step count、parse-error rate 和配置的重复 trial。
-- [ ] 最终报告默认每个任务运行四个带 seed 的 trial；允许显式执行单 trial smoke。
-- [ ] 记录 checkpoint、base model、tau2 commit、split hash、精确的 40 个 test ID、task order、用户模拟器、seed、protocol 和 memory snapshot。
-- [ ] 只添加 `--split test`。单独的 `--official-base-reproduction` flag 可以运行 `base`，但必须写入独立标记的报告。
-- [ ] 重新运行测试并确认 PASS。
-- [ ] 提交为 `feat: evaluate opd evolver on retail test split`。
+- [x] 保留每个 episode 的 tau2 reward 和解析后的 `reward_info`，不得重新实现官方 evaluator。
+- [x] 报告 task count、completed count、mean reward/success、逐任务结果、failure category、step count、parse-error rate 和配置的重复 trial。
+- [x] 最终报告默认每个任务运行四个带 seed 的 trial；允许显式执行单 trial smoke。
+- [x] 记录 checkpoint、base model、tau2 commit、split hash、精确的 40 个 test ID、task order、用户模拟器、seed、protocol 和 memory snapshot。
+- [x] 只添加 `--split test`。单独的 `--official-base-reproduction` flag 可以运行 `base`，但必须写入独立标记的报告。
+- [x] 重新运行测试并确认 PASS。
+- [x] 提交为 `feat: evaluate opd evolver on retail test split`。
 
 ### 任务 8.3：Baseline、Ablation 与最终报告
 
@@ -565,11 +565,11 @@
 - 修改：`README.md`
 
 - [ ] 至少评测：无 memory 的 base Qwen、无 memory 的训练后 LoRA、训练后 LoRA 加 `test_static` memory，以及训练后 LoRA `test_streaming`。
-- [ ] 只在主流程稳定后添加 selection、writing 和 maintenance ablation。
-- [ ] 只比较 tau2 commit、split hash、用户模拟器、protocol、task order 和 seed set 完全相同的 run。
-- [ ] 记录：在不使用 dev 的设计中，test 结果绝不用于超参数调整或 checkpoint 选择。
+- [x] 只在主流程稳定后添加 selection、writing 和 maintenance ablation。
+- [x] 将 protocol、adapter、checkpoint 和 Memory snapshot 作为处理变量；只比较 tau2 commit、split hash、基础模型 revision、用户模拟器、NL evaluator、task order、seed set、trial 数和最大步数完全相同的 run。
+- [x] 记录：在不使用 dev 的设计中，test 结果绝不用于超参数调整或 checkpoint 选择。
 - [ ] 运行 `pytest -v`、所有已启用 integration test、dataset audit 和 manifest lineage audit。
-- [ ] 提交为 `docs: finalize tau3 retail opd evaluation protocol`。
+- [x] 提交为 `docs: finalize tau3 retail opd evaluation protocol`。
 
 **阶段 8 gate：** 完整官方 test 报告可根据记录的 revision 复现，并且不存在从 test artifact 返回训练流程的路径。
 

@@ -45,12 +45,13 @@ Fast Loop 和 Slow Loop 使用同一个模型谱系。一次 OPD 数据构建只
 | `configs/default.yaml` | Tau2、模型、LoRA、rollout、Memory、归因、训练和评估器默认配置 |
 | `src/tau3_retail_evolver/envs/` | Tau2 Retail 运行时探测、任务目录、split guard 和 Gym 适配器 |
 | `src/tau3_retail_evolver/evaluation/` | Tau2 NL assertion evaluator 接入与 provider 配置 |
+| `src/tau3_retail_evolver/eval/` | 留出集隔离、static/streaming runner、官方指标聚合和受控报告比较 |
 | `src/tau3_retail_evolver/memory/` | 四层 JSON Memory、Embedding、检索、原子写入、快照和维护操作 |
 | `src/tau3_retail_evolver/fast_loop/` | Baseline/Fast Loop prompt、决策、动作编解码、生命周期事件和维护编排 |
 | `src/tau3_retail_evolver/slow_loop/` | Evidence、任务分组、归因、泄漏检查、OPD 数据、token 对齐、KL 和 Trainer |
 | `src/tau3_retail_evolver/pipeline/` | train-only task sampling、六态 iteration、artifact 哈希恢复和 checkpoint/Memory promotion |
 | `src/tau3_retail_evolver/models/` | OpenAI-compatible Qwen policy、Qwen3.5 Transformers loader 和 PEFT LoRA 生命周期 |
-| `scripts/` | Baseline、Fast Loop、OPD 数据构建/审计、LoRA 训练和完整 iteration 入口 |
+| `scripts/` | Baseline、Fast Loop、OPD 数据构建/审计、LoRA 训练、iteration 和正式评测入口 |
 | `tools/preflight/` | Tau2 Retail 环境与固定 revision 预检工具 |
 | `tests/` | 单元测试、合成端到端测试以及显式开启的真实 Tau2/Qwen GPU 集成测试 |
 | `docs/` | 分阶段设计、实施计划、验证说明和长期交付归档 |
@@ -445,7 +446,36 @@ python -m scripts.run_iteration `
 
 不传 `--task-count` 时使用配置中的生产默认值 74。2026-07-24 已完成真实五任务 iteration 到 `dataset_complete`，验证失败后的 Memory 回滚、同 ID 恢复、train-only guard、artifact 哈希和独立 audit；Qwen3.5-9B 单步 GPU update gate 也已通过。本轮随机五任务没有生成满足条件的 OPD 样本，因此没有发布空 checkpoint；真实 30 任务四类样本覆盖、非空 promotion 与完整真实多 iteration 仍在 Stage 8 验收实验中执行。
 
-### 10. 测试
+### 10. 运行留出集评测
+
+Stage 8 使用统一入口运行基础 Qwen、训练后 LoRA、冻结 train Memory 和隔离 streaming Memory 四类实验。不传 `--task-id` 时按官方顺序运行全部 40 个 test task；不传 `--num-trials` 时每个任务运行四个 seed trial。
+
+```powershell
+python -m scripts.evaluate_retail `
+  --config configs/default.yaml `
+  --protocol no_memory `
+  --run-id eval-base-qwen `
+  --qwen-base-url $env:QWEN_BASE_URL `
+  --model-revision $env:QWEN_MODEL_REVISION
+```
+
+训练后 LoRA 实验增加 `--adapter-revision` 和 `--checkpoint`；`test_static` 还必须指定 `history/agents/retail/memory/snapshots/<snapshot-id>`，`test_streaming` 则为每个 trial 创建独立 quarantine。入口不会替服务端加载 LoRA，vLLM 必须已经运行对应 adapter。
+
+报告写入 `runs/<run_id>/evaluation_report.json`。四组报告通过以下入口进行受控比较：
+
+```powershell
+python -m scripts.compare_evaluations `
+  --report base_qwen=runs/eval-base-qwen/evaluation_report.json `
+  --report trained_no_memory=runs/eval-lora-no-memory/evaluation_report.json `
+  --report trained_static=runs/eval-lora-static/evaluation_report.json `
+  --report trained_streaming=runs/eval-lora-streaming/evaluation_report.json `
+  --baseline-label base_qwen `
+  --output runs/evaluation-comparison.json
+```
+
+完整协议、smoke 命令、报告字段和隔离规则见 [Retail 留出集评测协议](docs/evaluation_protocol.md)。
+
+### 11. 测试
 
 不下载大模型即可运行完整本地测试：
 
