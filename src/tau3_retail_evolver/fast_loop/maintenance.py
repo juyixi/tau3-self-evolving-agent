@@ -114,10 +114,54 @@ def run_due_maintenance(
         raise ValueError("period must be a positive integer")
     if context.split != "train" or context.mode != RunMode.LEARN:
         raise ValueError("maintenance requires train split and learn mode")
+    return _run_due_maintenance(
+        completed_tasks=completed_train_tasks,
+        period=period,
+        repository=repository,
+        policy=policy,
+        context=context,
+        per_tier_limit=per_tier_limit,
+    )
+
+
+def run_evaluation_maintenance(
+    *,
+    completed_tasks: int,
+    period: int,
+    repository: MemoryRepository,
+    policy: FastLoopPolicy,
+    context: RunContext,
+    per_tier_limit: int = 100,
+) -> MaintenanceResult:
+    if type(completed_tasks) is not int or completed_tasks < 0:
+        raise ValueError("completed tasks must be a non-negative integer")
+    if type(period) is not int or period <= 0:
+        raise ValueError("period must be a positive integer")
+    if context.split not in {"test", "base"} or context.mode != RunMode.EVALUATE:
+        raise ValueError("evaluation maintenance requires test/base and EVALUATE mode")
+    return _run_due_maintenance(
+        completed_tasks=completed_tasks,
+        period=period,
+        repository=repository,
+        policy=policy,
+        context=context,
+        per_tier_limit=per_tier_limit,
+    )
+
+
+def _run_due_maintenance(
+    *,
+    completed_tasks: int,
+    period: int,
+    repository: MemoryRepository,
+    policy: FastLoopPolicy,
+    context: RunContext,
+    per_tier_limit: int,
+) -> MaintenanceResult:
     if not isinstance(repository, MemoryRepository) or repository.is_read_only:
         raise TypeError("maintenance requires a mutable MemoryRepository")
 
-    maintenance_round = completed_train_tasks // period
+    maintenance_round = completed_tasks // period
     state_path = repository.root / _STATE_FILENAME
     scheduler_lock = reentrant_process_lock(
         repository.root,
@@ -138,7 +182,7 @@ def run_due_maintenance(
                 maintenance_round=maintenance_round,
             )
         return _execute_round(
-            completed_train_tasks=completed_train_tasks,
+            completed_train_tasks=completed_tasks,
             period=period,
             maintenance_round=maintenance_round,
             repository=repository,

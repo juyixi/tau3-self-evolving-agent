@@ -24,6 +24,7 @@ from tau3_retail_evolver.fast_loop.prompts import (
     build_write_prompt,
     project_public_context,
 )
+from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate, Retriever
 from tau3_retail_evolver.memory.types import (
@@ -83,6 +84,11 @@ class EpisodeResult:
     selected_memory_ids: tuple[str, ...]
     written_memory_ids: tuple[str, ...]
     truncated: bool
+    parse_error_count: int = 0
+    response_parse_error_count: int = 0
+    response_count: int = 0
+    completed: bool = True
+    project_truncated: bool = False
 
 
 DecisionT = TypeVar("DecisionT", bound=Decision)
@@ -114,6 +120,41 @@ def run_fast_loop_episode(
         retriever=retriever,
     )
     _require_learning_context(context)
+    return _run_lifecycle_episode(
+        task_id=task_id,
+        task_instruction=task_instruction,
+        environment=environment,
+        policy=policy,
+        repository=repository,
+        retriever=retriever,
+        config=config,
+        context=context,
+        write_memory=config.memory_enabled,
+        memory_disabled_reason="config",
+    )
+
+
+def _run_lifecycle_episode(
+    *,
+    task_id: str,
+    task_instruction: str,
+    environment: FastLoopEnvironment,
+    policy: FastLoopPolicy,
+    repository: MemoryRepository | ReadOnlyMemoryRepository | None,
+    retriever: Retriever | None,
+    config: FastLoopConfig,
+    context: RunContext,
+    write_memory: bool,
+    memory_disabled_reason: str,
+) -> EpisodeResult:
+    if type(write_memory) is not bool:
+        raise ValueError("write_memory must be a bool")
+    if write_memory and (
+        not config.memory_enabled
+        or not isinstance(repository, MemoryRepository)
+        or repository.is_read_only
+    ):
+        raise ValueError("Memory writes require an enabled mutable repository")
     write_failure_emitted = False
     try:
         reset = environment.reset(seed=context.seed)
@@ -138,6 +179,8 @@ def run_fast_loop_episode(
             tools=public_tools,
         )
 
+        response_parse_error_count = 0
+        response_count = 0
         if config.memory_enabled:
             assert repository is not None
             assert retriever is not None
@@ -182,6 +225,9 @@ def run_fast_loop_episode(
                 candidate_ids=[candidate.memory_id for candidate in candidates],
                 label="selection",
             )
+            response_count += 1
+            if selection_audit["error"] is not None:
+                response_parse_error_count += 1
             selected_ids = selection.memory_ids
             candidates_by_id = {
                 candidate.memory_id: candidate for candidate in candidates
@@ -207,7 +253,12 @@ def run_fast_loop_episode(
         else:
             selected: list[MemoryCandidate] = []
             selected_ids = ()
-            _emit(context, task_id, "MemoryDisabled", reason="config")
+            _emit(
+                context,
+                task_id,
+                "MemoryDisabled",
+                reason=memory_disabled_reason,
+            )
 
         observation = public_observation
         last_nonblank_observation = public_observation
@@ -217,6 +268,8 @@ def run_fast_loop_episode(
         final_reward = 0.0
         truncated = False
         project_truncated = False
+        completed = False
+        parse_error_count = 0
         steps = 0
         while steps < config.max_episode_steps:
             action_prompt = build_action_prompt(
@@ -233,6 +286,9 @@ def run_fast_loop_episode(
                 ActionDecision,
                 label="action",
             )
+            response_count += 1
+            if action_audit["error"] is not None:
+                response_parse_error_count += 1
             _emit(
                 context,
                 task_id,
@@ -246,6 +302,8 @@ def run_fast_loop_episode(
             )
             step = environment.step(action.action)
             public_info = _public_step_info(step.info)
+            if public_info.get("parse_error") not in (None, "", False):
+                parse_error_count += 1
             _emit(
                 context,
                 task_id,
@@ -278,6 +336,7 @@ def run_fast_loop_episode(
                 last_nonblank_observation = observation
             final_reward = step.reward
             if step.done:
+                completed = True
                 terminal_evaluation = _terminal_json_mapping(
                     step.info, "reward_info", task_id
                 )
@@ -303,7 +362,7 @@ def run_fast_loop_episode(
         )
 
         written_ids: tuple[str, ...] = ()
-        if config.memory_enabled:
+        if write_memory:
             assert repository is not None
             write_prompt = build_write_prompt(
                 task_instruction=public_task_instruction,
@@ -320,6 +379,9 @@ def run_fast_loop_episode(
                 validator=_validate_write_decision,
                 label="write",
             )
+            response_count += 1
+            if write_audit["error"] is not None:
+                response_parse_error_count += 1
             proposals = [
                 _write_proposal(memory, task_id, context, final_reward, selected_ids)
                 for memory in write_decision.memories
@@ -369,6 +431,11 @@ def run_fast_loop_episode(
             selected_memory_ids=selected_ids,
             written_memory_ids=written_ids,
             truncated=truncated,
+            parse_error_count=parse_error_count,
+            response_parse_error_count=response_parse_error_count,
+            response_count=response_count,
+            completed=completed,
+            project_truncated=project_truncated,
         )
     except BaseException as error:
         if not write_failure_emitted:

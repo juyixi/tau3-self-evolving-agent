@@ -11,6 +11,9 @@ from types import MappingProxyType
 from typing import Any
 
 from tau3_retail_evolver.envs.task_catalog import RetailTaskCatalog
+from tau3_retail_evolver.eval.guard import (
+    reject_evaluation_artifact_for_training,
+)
 from tau3_retail_evolver.io.jsonl import iter_jsonl_objects
 
 
@@ -399,9 +402,4 @@ def _is_nonnegative_int(value: Any) -> bool:
 
 
 def _reject_quarantine_path(path: Path) -> None:
-    lowered = tuple(part.casefold() for part in path.parts)
-    if any(
-        lowered[index : index + 2] == ("history", "evaluations")
-        for index in range(len(lowered) - 1)
-    ):
-        raise ValueError(f"source run is inside the evaluation quarantine: {path}")
+    reject_evaluation_artifact_for_training(path)
