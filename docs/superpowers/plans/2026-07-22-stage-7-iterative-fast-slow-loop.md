@@ -36,7 +36,9 @@
 ## 任务 5：验证与收尾
 
 - [x] 完成各状态恢复、artifact 篡改、不完整 adapter、非 train ID 和双 iteration 合成测试。
-- [x] 运行完整默认测试套件；Stage 6 GPU 修复后复跑结果为 `668 passed, 5 skipped`。
+- [x] 运行完整默认测试套件；2026-07-24 远程验收结果为 `670 passed, 5 skipped`。
 - [x] 执行代码生命周期审计。
 - [x] 提交 Stage 7 功能分支。
+- [x] 完成真实五任务 iteration 到 `dataset_complete`，验证两次真实失败后的
+  Memory 回滚、同 ID 恢复、artifact 哈希和独立 dataset audit。
 - [ ] Stage 8 执行真实 30 任务四类样本覆盖和完整真实多 iteration 验收；独立单 batch GPU update 已通过。

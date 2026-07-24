@@ -516,7 +516,7 @@
 - [ ] 在 train 任务上运行一个小型完整真实 iteration；真实数据 dry-run 与独立单 batch Qwen3.5-9B GPU update 已通过，端到端 iteration 仍在 Stage 8 验收实验中完成。
 - [x] 验证从最终 manifest 到初始 checkpoint 的 memory 和 adapter lineage。
 
-**阶段 7 gate：** 本地代码 gate 要求中断 run 可确定性恢复、promoted checkpoint 具有完整 lineage、所有学习 artifact 不存在 test ID；真实五任务 rollout、Stage 5 build/audit 与独立 Qwen3.5-9B GPU update gate 已通过，完整真实 iteration gate 保持 pending，并在 Stage 8 验收实验中完成。
+**阶段 7 gate：** 本地代码 gate 要求中断 run 可确定性恢复、promoted checkpoint 具有完整 lineage、所有学习 artifact 不存在 test ID；2026-07-24 已完成真实五任务 iteration 到 `dataset_complete`，并验证两次真实失败后的 Memory 回滚、同 ID 恢复、artifact 哈希、train-only guard 和独立 audit。该随机五任务数据集没有产生满足条件的 OPD 样本，因此没有发布空 checkpoint；独立 Qwen3.5-9B GPU update gate 已通过，非空真实 promotion 与多 iteration gate 保持 pending，并在 Stage 8 验收实验中完成。
 
 ---
 

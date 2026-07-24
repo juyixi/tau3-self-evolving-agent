@@ -10,6 +10,10 @@ import sys
 from typing import Any
 
 from tau3_retail_evolver.memory.json_store import write_bytes_atomic
+from tau3_retail_evolver.memory.locking import reentrant_process_lock
+from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
+from tau3_retail_evolver.memory.repository import MemoryRepository
+from tau3_retail_evolver.memory.types import MemoryTier
 from tau3_retail_evolver.pipeline.iteration import IterationRequest, StageResult
 
 
@@ -27,6 +31,7 @@ class CommandIterationExecutor:
         if target.is_dir():
             return _rollout_stage_result(target)
         work_root = request.iteration_dir / ".work" / "rollout"
+        _restore_input_memory_snapshot(request)
         if work_root.exists():
             shutil.rmtree(work_root)
         command = [
@@ -56,10 +61,23 @@ class CommandIterationExecutor:
             command.extend(("--task-id", task_id))
         if request.qwen_base_url is not None:
             command.extend(("--qwen-base-url", request.qwen_base_url))
-        self.command_runner(command, cwd=request.project_root)
-        source = work_root / "rollout"
-        _publish_directory(source, target)
-        return _rollout_stage_result(target)
+        try:
+            self.command_runner(command, cwd=request.project_root)
+            source = work_root / "rollout"
+            work_result = _rollout_stage_result(source)
+            _publish_directory(source, target)
+        except BaseException:
+            try:
+                _restore_input_memory_snapshot(request)
+            except Exception as restore_error:
+                raise RuntimeError(
+                    "rollout failed and input Memory snapshot could not be restored"
+                ) from restore_error
+            raise
+        return StageResult(
+            artifacts={"rollout": target},
+            metadata=work_result.metadata,
+        )
 
     def build_dataset(
         self,
@@ -192,6 +210,29 @@ def _publish_directory(source: Path, target: Path) -> None:
         raise FileExistsError(f"iteration stage output already exists: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
     os.replace(source, target)
+
+
+def _restore_input_memory_snapshot(request: IterationRequest) -> None:
+    memory_root = Path(request.memory_snapshots_dir).resolve().parent
+    snapshot_path = (
+        Path(request.memory_snapshots_dir).resolve()
+        / request.input_memory_snapshot_id
+    )
+    snapshot = ReadOnlyMemoryRepository(snapshot_path)
+    if snapshot.memory_snapshot_id != request.input_memory_snapshot_id:
+        raise ValueError("input Memory snapshot ID does not match iteration")
+    files = {
+        f"{tier.value}_memory.json": (
+            snapshot_path / f"{tier.value}_memory.json"
+        ).read_bytes()
+        for tier in MemoryTier
+    }
+    with reentrant_process_lock(memory_root, namespace="memory-repository"):
+        for name, content in files.items():
+            write_bytes_atomic(memory_root / name, content)
+        restored = MemoryRepository(memory_root).snapshot()
+    if restored.memory_snapshot_id != request.input_memory_snapshot_id:
+        raise ValueError("restored Memory snapshot does not match iteration")
 
 
 def _latest_checkpoint(output_dir: Path) -> Path | None:

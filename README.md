@@ -443,7 +443,7 @@ python -m scripts.run_iteration `
   --stop-after dataset_complete
 ```
 
-不传 `--task-count` 时使用配置中的生产默认值 74。真实五任务 Memory-enabled build/audit gate 和 Qwen3.5-9B 单步 GPU update gate 均已通过；真实 30 任务四类样本覆盖与完整真实多 iteration 仍在扩大数据采集和 Stage 8 验收实验中执行。
+不传 `--task-count` 时使用配置中的生产默认值 74。2026-07-24 已完成真实五任务 iteration 到 `dataset_complete`，验证失败后的 Memory 回滚、同 ID 恢复、train-only guard、artifact 哈希和独立 audit；Qwen3.5-9B 单步 GPU update gate 也已通过。本轮随机五任务没有生成满足条件的 OPD 样本，因此没有发布空 checkpoint；真实 30 任务四类样本覆盖、非空 promotion 与完整真实多 iteration 仍在 Stage 8 验收实验中执行。
 
 ### 10. 测试
 

@@ -80,6 +80,8 @@ def _build_request(args: argparse.Namespace) -> IterationRequest:
     project_root = (args.project_root or Path.cwd()).resolve()
     config_path = _resolve(project_root, args.config)
     output_root = _resolve(project_root, args.output_root)
+    iteration_dir = output_root / args.iteration_id
+    persisted_input_snapshot = _persisted_input_memory_snapshot(iteration_dir)
     config = load_config(config_path)
     official_train_task_ids = _load_official_train_tasks(config, project_root)
     task_count = args.task_count or config.pipeline.iteration_task_count
@@ -100,7 +102,9 @@ def _build_request(args: argparse.Namespace) -> IterationRequest:
     parent_checkpoint: Path | None = None
     adapter_revision = args.adapter_revision
     completed_before = args.completed_train_tasks_before
-    input_snapshot = current_snapshot.memory_snapshot_id
+    input_snapshot = (
+        persisted_input_snapshot or current_snapshot.memory_snapshot_id
+    )
     if args.parent_iteration_dir is not None:
         parent_iteration_dir = _resolve(project_root, args.parent_iteration_dir)
         promotion = _read_json(parent_iteration_dir / "promotion_manifest.json")
@@ -127,8 +131,18 @@ def _build_request(args: argparse.Namespace) -> IterationRequest:
             memory.get("output_snapshot_id"),
             "parent memory snapshot",
         )
-        if current_snapshot.memory_snapshot_id != inherited_snapshot:
+        if (
+            persisted_input_snapshot is None
+            and current_snapshot.memory_snapshot_id != inherited_snapshot
+        ):
             raise ValueError("current Memory repository does not match promoted parent snapshot")
+        if (
+            persisted_input_snapshot is not None
+            and persisted_input_snapshot != inherited_snapshot
+        ):
+            raise ValueError(
+                "persisted iteration Memory snapshot does not match promoted parent"
+            )
         input_snapshot = inherited_snapshot
     else:
         if args.iteration != 0:
@@ -143,7 +157,7 @@ def _build_request(args: argparse.Namespace) -> IterationRequest:
     return IterationRequest(
         iteration_id=args.iteration_id,
         iteration=args.iteration,
-        iteration_dir=output_root / args.iteration_id,
+        iteration_dir=iteration_dir,
         project_root=project_root,
         config_path=config_path,
         model_revision=_nonblank(args.model_revision, "model revision"),
@@ -191,6 +205,20 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"parent promotion manifest must be an object: {path}")
     return value
+
+
+def _persisted_input_memory_snapshot(iteration_dir: Path) -> str | None:
+    state_path = iteration_dir / "iteration_state.json"
+    if not state_path.exists():
+        return None
+    record = _read_json(state_path)
+    identity = record.get("identity")
+    if not isinstance(identity, Mapping):
+        raise ValueError(f"iteration identity is missing: {state_path}")
+    return _nonblank(
+        identity.get("input_memory_snapshot_id"),
+        "persisted input memory snapshot",
+    )
 
 
 def _nonblank(value: Any, name: str) -> str:

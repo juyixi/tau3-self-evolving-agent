@@ -1,0 +1,69 @@
+tau2:
+  repo_path: external/tau2-bench
+  domain: retail
+  train_split: train
+  eval_split: test
+  user_llm: deepseek/deepseek-v4-pro
+  user_llm_args:
+    thinking:
+      type: disabled
+    temperature: 0.0
+    max_tokens: 8192
+  solo_mode: false
+model:
+  base_model: Qwen/Qwen3.5-9B
+lora:
+  use_peft: true
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+rollout:
+  temperature: 1.0
+  top_p: 0.95
+  max_episode_steps: 40
+memory:
+  enabled: true
+  agent_id: retail
+  tiers: [trajectory, tip, skill, tool]
+  retrieve_top_k: 50
+  teacher_memory_cap: 20
+  score_threshold: 0.01
+  maintenance_period: 30
+  embedding_provider: local
+  embedding_model: Qwen/Qwen3-Embedding-0.6B
+  embedding_device: cuda
+  embedding_dtype: float16
+  embedding_max_length: 2048
+  embedding_batch_size: 16
+  embedding_cache: true
+slow_loop:
+  tier_priors:
+    trajectory: 0.9
+    tip: 0.8
+    skill: 1.0
+    tool: 1.2
+  redundancy_threshold: 0.90
+  max_redundancy_pairs: 50
+training:
+  seed: 42
+  dtype: bfloat16
+  target_modules: all-linear
+  max_sequence_length: 512
+  gradient_checkpointing: true
+  learning_rate: 1.0e-5
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 1
+  num_train_epochs: 1
+  generation_max_new_tokens: 1
+  loss_type: forward_kl
+pipeline:
+  iteration_task_count: 5
+  shuffle_train_tasks: true
+evaluation:
+  nl_assertions:
+    model: deepseek/deepseek-v4-pro
+    model_args:
+      temperature: 0.0
+      thinking:
+        type: disabled
+    api_key_env: DEEPSEEK_API_KEY

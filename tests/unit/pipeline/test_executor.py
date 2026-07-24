@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 from typing import Any, Sequence
 
+import pytest
+
+from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.pipeline.executor import CommandIterationExecutor
 from tau3_retail_evolver.pipeline.iteration import IterationRequest
 
@@ -89,6 +93,7 @@ class FakeCommandRunner:
 
 
 def _request(tmp_path: Path) -> IterationRequest:
+    snapshot = MemoryRepository(tmp_path / "history").snapshot()
     return IterationRequest(
         iteration_id="iteration-0000",
         iteration=0,
@@ -99,8 +104,8 @@ def _request(tmp_path: Path) -> IterationRequest:
         adapter_revision="adapter-a",
         parent_checkpoint=None,
         parent_iteration_dir=None,
-        input_memory_snapshot_id="memory-0",
-        memory_snapshots_dir=tmp_path / "history" / "snapshots",
+        input_memory_snapshot_id=snapshot.memory_snapshot_id,
+        memory_snapshots_dir=snapshot.path.parent,
         task_ids=("0", "1"),
         official_train_task_ids=("0", "1", "2"),
         completed_train_tasks_before=0,
@@ -151,3 +156,66 @@ def test_command_executor_maps_each_stage_to_existing_cli(tmp_path: Path) -> Non
     assert dataset.metadata["dataset_build_id"] == "dataset"
     assert audit.metadata["passed"] is True
     assert training.metadata["child_adapter_revision"] == "adapter-b"
+
+
+def test_rollout_failure_and_retry_restore_input_memory_snapshot(
+    tmp_path: Path,
+) -> None:
+    memory_root = tmp_path / "history"
+    repository = MemoryRepository(memory_root)
+    initial = repository.snapshot()
+    request = replace(
+        _request(tmp_path),
+        input_memory_snapshot_id=initial.memory_snapshot_id,
+        memory_snapshots_dir=initial.path.parent,
+    )
+    request.iteration_dir.mkdir(parents=True)
+
+    def failing_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+    ) -> dict[str, Any]:
+        repository.add(
+            tier="tip",
+            content="Partial failed rollout write",
+            source_task_ids=("0",),
+            created_round=0,
+        )
+        raise RuntimeError("simulated rollout failure")
+
+    with pytest.raises(RuntimeError, match="simulated rollout failure"):
+        CommandIterationExecutor(command_runner=failing_runner).rollout(request)
+
+    assert MemoryRepository(memory_root).snapshot().memory_snapshot_id == (
+        initial.memory_snapshot_id
+    )
+
+    repository.add(
+        tier="tip",
+        content="Interrupted process write",
+        source_task_ids=("0",),
+        created_round=0,
+    )
+    (request.iteration_dir / ".work" / "rollout").mkdir(parents=True)
+
+    def retry_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+    ) -> dict[str, Any]:
+        assert MemoryRepository(memory_root).snapshot().memory_snapshot_id == (
+            initial.memory_snapshot_id
+        )
+        root = Path(_value(command, "--output-root")) / _value(command, "--run-id")
+        summary = {
+            "completed_train_tasks_after": 2,
+            "input_memory_snapshot_id": initial.memory_snapshot_id,
+            "output_memory_snapshot_id": initial.memory_snapshot_id,
+        }
+        _write_json(root / "fast_loop_summary.json", summary)
+        return summary
+
+    result = CommandIterationExecutor(command_runner=retry_runner).rollout(request)
+
+    assert result.metadata["input_memory_snapshot_id"] == initial.memory_snapshot_id

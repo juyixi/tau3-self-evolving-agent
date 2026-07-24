@@ -11,6 +11,11 @@ from urllib.request import Request, urlopen
 
 from tau3_retail_evolver.fast_loop.action_codec import Tau2ActionCodec
 from tau3_retail_evolver.fast_loop.baseline_prompt import build_baseline_prompt
+from tau3_retail_evolver.fast_loop.decisions import (
+    MaintenanceDecision,
+    SelectionDecision,
+    WriteDecision,
+)
 from tau3_retail_evolver.fast_loop.prompts import LifecyclePrompt
 from tau3_retail_evolver.fast_loop.runner import LifecycleResponse
 from tau3_retail_evolver.models.policy import DecisionRequest, DecisionResponse, Policy
@@ -26,6 +31,7 @@ class OpenAICompatibleClient(Protocol):
         tools: Sequence[Mapping[str, Any]],
         temperature: float,
         top_p: float,
+        response_format: Mapping[str, Any] | None = None,
     ) -> object: ...
 
 
@@ -63,6 +69,11 @@ _SYSTEM_INSTRUCTIONS = {
     "write": _WRITE_SYSTEM,
     "maintenance": _MAINTENANCE_SYSTEM,
 }
+_NON_ACTION_DECISIONS = {
+    "selection": SelectionDecision,
+    "write": WriteDecision,
+    "maintenance": MaintenanceDecision,
+}
 _MAX_INVALID_OUTPUT_REPR_CHARS = 4_096
 
 
@@ -98,7 +109,15 @@ class OpenAICompatibleHttpClient:
         self._api_key = api_key
         self._max_tokens = max_tokens
         self._generation_settings = dict(generation_settings or {})
-        reserved = {"model", "messages", "tools", "temperature", "top_p", "max_tokens"}
+        reserved = {
+            "model",
+            "messages",
+            "tools",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "response_format",
+        }
         if reserved.intersection(self._generation_settings):
             raise ValueError("generation settings must not override chat completion fields")
         self._transport = (
@@ -117,6 +136,7 @@ class OpenAICompatibleHttpClient:
         tools: Sequence[Mapping[str, Any]],
         temperature: float,
         top_p: float,
+        response_format: Mapping[str, Any] | None = None,
     ) -> object:
         payload: dict[str, Any] = {
             "model": self._model,
@@ -127,6 +147,8 @@ class OpenAICompatibleHttpClient:
         }
         if tools:
             payload["tools"] = list(tools)
+        if response_format is not None:
+            payload["response_format"] = dict(response_format)
         if self._max_tokens is not None:
             payload["max_tokens"] = self._max_tokens
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -263,6 +285,11 @@ class OpenAICompatibleFastLoopPolicy:
                 tools=tools,
                 temperature=self._temperature,
                 top_p=self._top_p,
+                response_format=(
+                    _decision_response_format(prompt.kind)
+                    if prompt.kind != "action"
+                    else None
+                ),
             )
         except Exception:
             raise RuntimeError("OpenAI-compatible fast-loop policy request failed") from None
@@ -304,6 +331,18 @@ class OpenAICompatibleFastLoopPolicy:
                 }
             )
         return _canonical_json({"action": action})
+
+
+def _decision_response_format(kind: str) -> dict[str, Any]:
+    decision_type = _NON_ACTION_DECISIONS[kind]
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": f"{kind}_decision",
+            "schema": decision_type.model_json_schema(),
+            "strict": True,
+        },
+    }
 
 
 def parse_openai_qwen_tool_call(completion: object) -> str | None:

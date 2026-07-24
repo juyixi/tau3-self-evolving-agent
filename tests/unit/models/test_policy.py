@@ -8,7 +8,13 @@ import pytest
 
 from tau3_retail_evolver.models import openai_compatible
 from tau3_retail_evolver.envs.base import ResetResult, StepResult
-from tau3_retail_evolver.fast_loop.decisions import ActionDecision, parse_decision
+from tau3_retail_evolver.fast_loop.decisions import (
+    ActionDecision,
+    MaintenanceDecision,
+    SelectionDecision,
+    WriteDecision,
+    parse_decision,
+)
 from tau3_retail_evolver.fast_loop.events import RunContext, RunMode
 from tau3_retail_evolver.fast_loop.prompts import (
     LifecyclePrompt,
@@ -88,6 +94,22 @@ MAINTENANCE_SYSTEM = (
     '{"commands":[...]}. Use only the provided command schemas and diagnostics. '
     "Do not use external tools or include any other text."
 )
+
+
+def _decision_response_format(kind: str) -> dict[str, Any]:
+    decision_type = {
+        "selection": SelectionDecision,
+        "write": WriteDecision,
+        "maintenance": MaintenanceDecision,
+    }[kind]
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": f"{kind}_decision",
+            "schema": decision_type.model_json_schema(),
+            "strict": True,
+        },
+    }
 
 
 def _public_context() -> dict[str, object]:
@@ -360,6 +382,7 @@ def test_fast_loop_non_action_requests_use_exact_public_json_and_no_tools(
             "tools": [],
             "temperature": 0.7,
             "top_p": 0.9,
+            "response_format": _decision_response_format(kind),
         }
     ]
     assert response.raw_output == output
@@ -397,6 +420,7 @@ def test_fast_loop_action_passes_exact_official_tools_and_converts_qwen_tool_cal
             "tools": prompt.payload["tools"],
             "temperature": 0.6,
             "top_p": 0.8,
+            "response_format": None,
         }
     ]
     assert response.raw_output == (
@@ -609,6 +633,7 @@ def test_fast_loop_repair_sends_only_public_prompt_invalid_output_and_error() ->
             "tools": [],
             "temperature": 0.7,
             "top_p": 0.9,
+            "response_format": _decision_response_format("selection"),
         }
     ]
     assert response.raw_output == '{"memory_ids":["memory-1"]}'
@@ -811,6 +836,7 @@ def test_http_client_posts_openai_compatible_request_with_generation_settings() 
         tools=[],
         temperature=1.0,
         top_p=0.95,
+        response_format={"type": "json_object"},
     )
 
     assert requests == [
@@ -821,7 +847,7 @@ def test_http_client_posts_openai_compatible_request_with_generation_settings() 
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
-            b'{"max_tokens":256,"messages":[{"content":"Hello","role":"user"}],"model":"Qwen/Qwen3.5-9B","presence_penalty":0.2,"temperature":1.0,"top_p":0.95}',
+            b'{"max_tokens":256,"messages":[{"content":"Hello","role":"user"}],"model":"Qwen/Qwen3.5-9B","presence_penalty":0.2,"response_format":{"type":"json_object"},"temperature":1.0,"top_p":0.95}',
         )
     ]
     assert response == {"choices": [{"message": {"role": "assistant", "content": "Done."}}]}

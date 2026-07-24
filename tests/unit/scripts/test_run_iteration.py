@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -157,3 +158,71 @@ def test_child_request_inherits_promoted_parent_lineage(
     assert request.input_memory_snapshot_id == "memory-1"
     assert request.completed_train_tasks_before == 2
     assert request.task_ids == ("0", "1")
+
+
+def test_initial_iteration_resume_reuses_persisted_input_memory_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    iteration_dir = tmp_path / "iterations" / "iteration-0000"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration_state.json").write_text(
+        json.dumps(
+            {
+                "identity": {
+                    "input_memory_snapshot_id": "memory-before-failed-rollout"
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = SimpleNamespace(
+        pipeline=SimpleNamespace(iteration_task_count=1, shuffle_train_tasks=False),
+        training=SimpleNamespace(seed=42),
+        memory=SimpleNamespace(),
+        tau2=SimpleNamespace(repo_path=Path("external/tau2-bench")),
+    )
+    monkeypatch.setattr(cli, "load_config", lambda path: config)
+    monkeypatch.setattr(
+        cli,
+        "_load_official_train_tasks",
+        lambda config, project_root: ("0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "open_training_memory",
+        lambda config, root: SimpleNamespace(
+            snapshot=lambda: SimpleNamespace(
+                memory_snapshot_id="memory-mutated-by-failed-rollout",
+                path=tmp_path
+                / "history"
+                / "snapshots"
+                / "memory-mutated-by-failed-rollout",
+            )
+        ),
+    )
+    args = cli.parse_args(
+        [
+            "--iteration-id",
+            "iteration-0000",
+            "--iteration",
+            "0",
+            "--model-revision",
+            "model-a",
+            "--adapter-revision",
+            "adapter-a",
+            "--completed-train-tasks-before",
+            "0",
+            "--output-root",
+            "iterations",
+            "--project-root",
+            str(tmp_path),
+        ]
+    )
+
+    request = cli._build_request(args)
+
+    assert (
+        request.input_memory_snapshot_id
+        == "memory-before-failed-rollout"
+    )
