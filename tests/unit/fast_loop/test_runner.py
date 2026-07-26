@@ -943,6 +943,43 @@ def test_full_width_attribution_failed_repair_stops_before_proposal_or_persisten
     assert sentinel not in json.dumps(events.events)
 
 
+def test_invalid_non_sensitive_write_after_repair_skips_memory_and_keeps_episode(
+    tmp_path: Path,
+) -> None:
+    invalid_tool = _tool_write("Look up the order before deciding the next action.")
+    invalid_tool["payload"]["argument_rules"] = {}
+    invalid_write = _write_output(invalid_tool)
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    policy = ScriptedLifecyclePolicy(
+        ['{"memory_ids":[]}', '{"action":"finish"}', invalid_write],
+        [invalid_write],
+    )
+
+    result = _run(
+        repository=repository,
+        environment=FakeEnvironment(_reset(), [_terminal_step()]),
+        policy=policy,
+        events=events,
+    )
+
+    proposed = next(
+        event for event in events.events if event["event_type"] == "MemoryWriteProposed"
+    )
+    committed = next(
+        event for event in events.events if event["event_type"] == "MemoryWriteCommitted"
+    )
+    assert len(policy.repair_calls) == 1
+    assert result.final_reward == 0.8
+    assert result.written_memory_ids == ()
+    assert result.response_parse_error_count == 1
+    assert proposed["proposals"] == []
+    assert proposed["invalid_output_skipped"] is True
+    assert committed["written_memory_ids"] == []
+    assert committed["replayed_memory_ids"] == []
+    assert repository.list() == []
+
+
 def test_invalid_action_with_failed_repair_never_steps_environment(tmp_path: Path) -> None:
     repository = MemoryRepository(tmp_path / "memory")
     events = EventCollector()

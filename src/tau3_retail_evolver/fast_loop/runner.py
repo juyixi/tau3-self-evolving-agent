@@ -429,6 +429,7 @@ def _run_lifecycle_episode(
                     trajectory=trajectory,
                 ),
                 label="write",
+                invalid_fallback=_empty_write_decision,
             )
             response_count += 1
             if write_audit["error"] is not None:
@@ -461,6 +462,7 @@ def _run_lifecycle_episode(
                 "MemoryWriteProposed",
                 proposals=[proposal["evidence"] for proposal in proposals],
                 repair_used=write_audit["repaired_output"] is not None,
+                invalid_output_skipped=write_audit["fallback_used"],
                 sampling_params=write_audit["sampling_params"],
                 latency_s=write_audit["latency_s"],
                 prompt_tokens=write_audit["prompt_tokens"],
@@ -620,6 +622,7 @@ def _generate_decision(
     *,
     candidate_ids: Sequence[str] | None = None,
     validator: Callable[[DecisionT], Any] | None = None,
+    invalid_fallback: Callable[[str], DecisionT] | None = None,
     label: str,
 ) -> tuple[DecisionT, dict[str, Any]]:
     response = policy.generate(prompt)
@@ -642,13 +645,20 @@ def _generate_decision(
             validator=validator,
             candidate_ids=candidate_ids,
         )
-    if result.decision is None:
-        raise ValueError(f"invalid {label} decision after repair: {result.error}")
+    fallback_used = False
+    decision = result.decision
+    if decision is None:
+        terminal_error = result.error or "invalid output"
+        if invalid_fallback is None:
+            raise ValueError(f"invalid {label} decision after repair: {terminal_error}")
+        decision = invalid_fallback(terminal_error)
+        fallback_used = True
     prompt_tokens, completion_tokens = _combined_token_usage(responses)
-    return result.decision, {
+    return decision, {
         "raw_output": response.raw_output,
         "repaired_output": repaired_output,
         "error": initial_error,
+        "fallback_used": fallback_used,
         "sampling_params": dict(response.sampling_params),
         "latency_s": sum(item.latency_s for item in responses),
         "prompt_tokens": prompt_tokens,
@@ -806,6 +816,13 @@ def _validate_write_decision(
             trajectory=trajectory,
         )
     return decision
+
+
+def _empty_write_decision(error: str) -> WriteDecision:
+    normalized = unicodedata.normalize("NFKC", error).casefold()
+    if "credential" in normalized or "attribution score" in normalized:
+        raise ValueError(f"invalid write decision after repair: {error}")
+    return WriteDecision(memories=())
 
 
 def _validate_write_metadata(value: Any) -> None:
