@@ -329,8 +329,6 @@ def _validate_run_set(
     if len(lineages) != 1:
         raise ValueError("source runs must share one on-policy policy lineage")
     all_task_ids = [task_id for run in runs for task_id in run.manifest["task_ids"]]
-    if len(all_task_ids) != len(set(all_task_ids)):
-        raise ValueError("source runs contain duplicate task ID")
     official_train = set(catalog.task_ids("train"))
     if not set(all_task_ids) <= official_train:
         raise ValueError("source runs contain task IDs outside the official train split")

@@ -12,10 +12,11 @@ from tau3_retail_evolver.eval.guard import EvaluationProtocol
 from tau3_retail_evolver.eval.runner import EvaluationRunResult, TrialEpisode
 from tau3_retail_evolver.fast_loop.runner import EpisodeResult
 from tau3_retail_evolver.memory.json_store import write_bytes_atomic
+from tau3_retail_evolver.memory.types import MEMORY_TIERS
 from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
 
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 REPORT_TYPE = "tau3-retail-evaluation"
 COMPARISON_TYPE = "tau3-retail-evaluation-comparison"
 
@@ -40,6 +41,7 @@ class EvaluationProvenance:
     max_episode_steps: int
     model_serving_contract: Mapping[str, Any]
     capabilities: Mapping[str, bool]
+    memory_counts: Mapping[str, int] | None = None
 
     def __post_init__(self) -> None:
         for field, value in (
@@ -79,6 +81,16 @@ class EvaluationProvenance:
             raise ValueError(
                 f"{self.protocol.value} provenance must not use a source Memory snapshot"
             )
+        counts = dict(self.memory_counts or {})
+        if counts and set(counts) != set(MEMORY_TIERS):
+            raise ValueError("memory counts must contain every Memory tier")
+        if any(type(value) is not int or value < 0 for value in counts.values()):
+            raise ValueError("memory counts must be non-negative integers")
+        if (
+            self.protocol is not EvaluationProtocol.TEST_STATIC
+            and any(counts.values())
+        ):
+            raise ValueError("only test_static may have source Memory items")
 
     def as_dict(
         self,
@@ -104,6 +116,7 @@ class EvaluationProvenance:
                 "user_simulator_config": dict(self.user_simulator_config),
                 "nl_evaluator": dict(self.nl_evaluator),
                 "memory_snapshot_id": self.memory_snapshot_id,
+                "memory_counts": dict(self.memory_counts or {}),
                 "output_memory_snapshot_ids": list(output_memory_snapshot_ids),
                 "max_episode_steps": self.max_episode_steps,
                 "model_serving_contract": dict(self.model_serving_contract),
@@ -136,6 +149,20 @@ def build_evaluation_report(
         for category in row["failure_categories"]
     )
     episode_count = len(episode_rows)
+    token_rows = [
+        row for row in episode_rows if row["agent_total_tokens"] is not None
+    ]
+    successful_token_rows = [row for row in token_rows if row["success"]]
+    selected_memory_ids = {
+        memory_id
+        for row in episode_rows
+        for memory_id in row["selected_memory_ids"]
+    }
+    memory_counts = dict(provenance.memory_counts or {})
+    memory_item_count = sum(memory_counts.values())
+    memory_selection_count = sum(
+        len(row["selected_memory_ids"]) for row in episode_rows
+    )
     task_results = [
         _task_result(task_id, episode_rows)
         for task_id in provenance.task_ids
@@ -154,6 +181,44 @@ def build_evaluation_report(
             "mean_reward": _mean(row["reward"] for row in episode_rows),
             "success_rate": _mean(
                 1.0 if row["success"] else 0.0 for row in episode_rows
+            ),
+            "pass_at_1": _mean(
+                1.0 if row["success"] else 0.0 for row in episode_rows
+            ),
+            "token_usage_episode_count": len(token_rows),
+            "total_agent_prompt_tokens": sum(
+                row["agent_prompt_tokens"] for row in token_rows
+            ),
+            "total_agent_completion_tokens": sum(
+                row["agent_completion_tokens"] for row in token_rows
+            ),
+            "total_agent_tokens": sum(
+                row["agent_total_tokens"] for row in token_rows
+            ),
+            "mean_agent_tokens": (
+                _mean(row["agent_total_tokens"] for row in token_rows)
+                if token_rows
+                else None
+            ),
+            "mean_agent_tokens_successful": (
+                _mean(
+                    row["agent_total_tokens"]
+                    for row in successful_token_rows
+                )
+                if successful_token_rows
+                else None
+            ),
+            "memory_counts": memory_counts,
+            "memory_item_count": memory_item_count,
+            "memory_selection_count": memory_selection_count,
+            "unique_reused_memory_count": len(selected_memory_ids),
+            "memory_reuse_coverage": (
+                len(selected_memory_ids) / memory_item_count
+                if memory_item_count
+                else None
+            ),
+            "mean_selected_memories": (
+                memory_selection_count / episode_count if episode_count else 0.0
             ),
             "total_steps": total_steps,
             "mean_steps": _mean(row["steps"] for row in episode_rows),
@@ -277,11 +342,15 @@ def compare_evaluation_reports(
                     summary["mean_reward"] - baseline_summary["mean_reward"]
                 ),
                 "success_rate": summary["success_rate"],
+                "pass_at_1": summary["pass_at_1"],
                 "success_rate_delta": (
                     summary["success_rate"] - baseline_summary["success_rate"]
                 ),
                 "completed_count": summary["completed_count"],
                 "parse_error_rate": summary["parse_error_rate"],
+                "mean_agent_tokens": summary.get("mean_agent_tokens"),
+                "memory_item_count": summary.get("memory_item_count", 0),
+                "memory_reuse_coverage": summary.get("memory_reuse_coverage"),
             }
         )
     comparison = {
@@ -361,6 +430,19 @@ def _episode_row(episode: TrialEpisode) -> dict[str, Any]:
     total_parse_errors = (
         result.parse_error_count + result.response_parse_error_count
     )
+    if (result.agent_prompt_tokens is None) != (
+        result.agent_completion_tokens is None
+    ):
+        raise ValueError("episode token usage must be complete or entirely absent")
+    for value in (result.agent_prompt_tokens, result.agent_completion_tokens):
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError("episode token usage must be non-negative")
+    total_agent_tokens = (
+        result.agent_prompt_tokens + result.agent_completion_tokens
+        if result.agent_prompt_tokens is not None
+        and result.agent_completion_tokens is not None
+        else None
+    )
     parse_error_opportunities = result.steps + result.response_count
     return sanitize_artifact_data(
         {
@@ -371,6 +453,11 @@ def _episode_row(episode: TrialEpisode) -> dict[str, Any]:
             "success": _is_success(result.final_reward),
             "completed": result.completed,
             "steps": result.steps,
+            "agent_prompt_tokens": result.agent_prompt_tokens,
+            "agent_completion_tokens": result.agent_completion_tokens,
+            "agent_total_tokens": total_agent_tokens,
+            "selected_memory_ids": list(result.selected_memory_ids),
+            "written_memory_ids": list(result.written_memory_ids),
             "environment_parse_error_count": result.parse_error_count,
             "environment_parse_error_rate": (
                 result.parse_error_count / result.steps if result.steps else 0.0
@@ -404,6 +491,10 @@ def _task_result(
     total_steps = sum(episode["steps"] for episode in selected)
     response_count = sum(episode["response_count"] for episode in selected)
     parse_errors = sum(episode["parse_error_count"] for episode in selected)
+    token_rows = [
+        episode for episode in selected
+        if episode["agent_total_tokens"] is not None
+    ]
     parse_error_opportunities = total_steps + response_count
     return {
         "task_id": task_id,
@@ -413,6 +504,11 @@ def _task_result(
             1.0 if episode["success"] else 0.0 for episode in selected
         ),
         "mean_steps": _mean(episode["steps"] for episode in selected),
+        "mean_agent_tokens": (
+            _mean(episode["agent_total_tokens"] for episode in token_rows)
+            if token_rows
+            else None
+        ),
         "parse_error_rate": (
             parse_errors / parse_error_opportunities
             if parse_error_opportunities

@@ -10,7 +10,7 @@ from scripts import compare_evaluations
 
 def _report(run_id: str, reward: float) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "report_type": "tau3-retail-evaluation",
         "provenance": {
             "run_id": run_id,
@@ -38,6 +38,7 @@ def _report(run_id: str, reward: float) -> dict[str, object]:
         "summary": {
             "mean_reward": reward,
             "success_rate": reward,
+            "pass_at_1": reward,
             "completed_count": 1,
             "parse_error_rate": 0.0,
         },

@@ -25,6 +25,8 @@ class DecisionResponse:
     parsed_action: str
     sampling_params: Mapping[str, float]
     latency_s: float
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 class Policy(ABC):

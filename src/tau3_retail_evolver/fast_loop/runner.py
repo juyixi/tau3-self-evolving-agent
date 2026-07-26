@@ -53,6 +53,16 @@ class LifecycleResponse:
     raw_output: str
     sampling_params: Mapping[str, float]
     latency_s: float
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("prompt_tokens", self.prompt_tokens),
+            ("completion_tokens", self.completion_tokens),
+        ):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"{name} must be a non-negative integer or None")
 
 
 class FastLoopPolicy(Protocol):
@@ -89,6 +99,8 @@ class EpisodeResult:
     response_count: int = 0
     completed: bool = True
     project_truncated: bool = False
+    agent_prompt_tokens: int | None = None
+    agent_completion_tokens: int | None = None
 
 
 DecisionT = TypeVar("DecisionT", bound=Decision)
@@ -181,6 +193,9 @@ def _run_lifecycle_episode(
 
         response_parse_error_count = 0
         response_count = 0
+        agent_prompt_tokens = 0
+        agent_completion_tokens = 0
+        token_usage_complete = True
         if config.memory_enabled:
             assert repository is not None
             assert retriever is not None
@@ -228,6 +243,16 @@ def _run_lifecycle_episode(
             response_count += 1
             if selection_audit["error"] is not None:
                 response_parse_error_count += 1
+            (
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+            ) = _accumulate_token_usage(
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+                selection_audit,
+            )
             selected_ids = selection.memory_ids
             candidates_by_id = {
                 candidate.memory_id: candidate for candidate in candidates
@@ -249,6 +274,8 @@ def _run_lifecycle_episode(
                 repair_used=selection_audit["repaired_output"] is not None,
                 sampling_params=selection_audit["sampling_params"],
                 latency_s=selection_audit["latency_s"],
+                prompt_tokens=selection_audit["prompt_tokens"],
+                completion_tokens=selection_audit["completion_tokens"],
             )
         else:
             selected: list[MemoryCandidate] = []
@@ -289,6 +316,16 @@ def _run_lifecycle_episode(
             response_count += 1
             if action_audit["error"] is not None:
                 response_parse_error_count += 1
+            (
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+            ) = _accumulate_token_usage(
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+                action_audit,
+            )
             _emit(
                 context,
                 task_id,
@@ -299,6 +336,8 @@ def _run_lifecycle_episode(
                 sampling_params=action_audit["sampling_params"],
                 latency_s=action_audit["latency_s"],
                 repair_used=action_audit["repaired_output"] is not None,
+                prompt_tokens=action_audit["prompt_tokens"],
+                completion_tokens=action_audit["completion_tokens"],
             )
             step = environment.step(action.action)
             public_info = _public_step_info(step.info)
@@ -382,6 +421,16 @@ def _run_lifecycle_episode(
             response_count += 1
             if write_audit["error"] is not None:
                 response_parse_error_count += 1
+            (
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+            ) = _accumulate_token_usage(
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+                write_audit,
+            )
             proposals = [
                 _write_proposal(memory, task_id, context, final_reward, selected_ids)
                 for memory in write_decision.memories
@@ -394,6 +443,8 @@ def _run_lifecycle_episode(
                 repair_used=write_audit["repaired_output"] is not None,
                 sampling_params=write_audit["sampling_params"],
                 latency_s=write_audit["latency_s"],
+                prompt_tokens=write_audit["prompt_tokens"],
+                completion_tokens=write_audit["completion_tokens"],
             )
             try:
                 written_ids, replayed_ids = _persist_proposals(repository, proposals)
@@ -436,6 +487,12 @@ def _run_lifecycle_episode(
             response_count=response_count,
             completed=completed,
             project_truncated=project_truncated,
+            agent_prompt_tokens=(
+                agent_prompt_tokens if token_usage_complete else None
+            ),
+            agent_completion_tokens=(
+                agent_completion_tokens if token_usage_complete else None
+            ),
         )
     except BaseException as error:
         if not write_failure_emitted:
@@ -546,6 +603,7 @@ def _generate_decision(
     label: str,
 ) -> tuple[DecisionT, dict[str, Any]]:
     response = policy.generate(prompt)
+    responses = [response]
     result = parse_decision(
         response.raw_output,
         decision_type,
@@ -556,6 +614,7 @@ def _generate_decision(
     initial_error = result.error
     if result.decision is None:
         repair = policy.repair(prompt, response.raw_output, result.error or "invalid output")
+        responses.append(repair)
         repaired_output = repair.raw_output
         result = parse_decision(
             repair.raw_output,
@@ -565,13 +624,47 @@ def _generate_decision(
         )
     if result.decision is None:
         raise ValueError(f"invalid {label} decision after repair: {result.error}")
+    prompt_tokens, completion_tokens = _combined_token_usage(responses)
     return result.decision, {
         "raw_output": response.raw_output,
         "repaired_output": repaired_output,
         "error": initial_error,
         "sampling_params": dict(response.sampling_params),
-        "latency_s": response.latency_s,
+        "latency_s": sum(item.latency_s for item in responses),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
     }
+
+
+def _combined_token_usage(
+    responses: Sequence[LifecycleResponse],
+) -> tuple[int | None, int | None]:
+    if any(
+        response.prompt_tokens is None or response.completion_tokens is None
+        for response in responses
+    ):
+        return None, None
+    return (
+        sum(response.prompt_tokens or 0 for response in responses),
+        sum(response.completion_tokens or 0 for response in responses),
+    )
+
+
+def _accumulate_token_usage(
+    prompt_total: int,
+    completion_total: int,
+    complete: bool,
+    audit: Mapping[str, Any],
+) -> tuple[int, int, bool]:
+    prompt_tokens = audit["prompt_tokens"]
+    completion_tokens = audit["completion_tokens"]
+    if prompt_tokens is None or completion_tokens is None:
+        return prompt_total, completion_total, False
+    return (
+        prompt_total + prompt_tokens,
+        completion_total + completion_tokens,
+        complete,
+    )
 
 
 def _validate_step_boundary(step: StepResult) -> None:

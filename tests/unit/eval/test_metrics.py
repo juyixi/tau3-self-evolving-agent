@@ -117,7 +117,7 @@ def _run_result() -> EvaluationRunResult:
 def test_report_preserves_official_rewards_and_aggregates_metrics() -> None:
     report = build_evaluation_report(_provenance(), _run_result())
 
-    assert report["schema_version"] == 1
+    assert report["schema_version"] == 2
     assert report["report_type"] == "tau3-retail-evaluation"
     assert report["summary"] == {
         "task_count": 2,
@@ -126,6 +126,19 @@ def test_report_preserves_official_rewards_and_aggregates_metrics() -> None:
         "completed_count": 4,
         "mean_reward": pytest.approx(0.625),
         "success_rate": pytest.approx(0.5),
+        "pass_at_1": pytest.approx(0.5),
+        "token_usage_episode_count": 0,
+        "total_agent_prompt_tokens": 0,
+        "total_agent_completion_tokens": 0,
+        "total_agent_tokens": 0,
+        "mean_agent_tokens": None,
+        "mean_agent_tokens_successful": None,
+        "memory_counts": {},
+        "memory_item_count": 0,
+        "memory_selection_count": 0,
+        "unique_reused_memory_count": 0,
+        "memory_reuse_coverage": None,
+        "mean_selected_memories": pytest.approx(0.0),
         "total_steps": 10,
         "mean_steps": pytest.approx(2.5),
         "environment_parse_error_count": 1,
@@ -157,6 +170,7 @@ def test_report_preserves_official_rewards_and_aggregates_metrics() -> None:
             "mean_reward": pytest.approx(0.75),
             "success_rate": pytest.approx(0.5),
             "mean_steps": pytest.approx(3.0),
+            "mean_agent_tokens": None,
             "parse_error_rate": pytest.approx(0.0),
         },
         {
@@ -165,6 +179,7 @@ def test_report_preserves_official_rewards_and_aggregates_metrics() -> None:
             "mean_reward": pytest.approx(0.5),
             "success_rate": pytest.approx(0.5),
             "mean_steps": pytest.approx(2.0),
+            "mean_agent_tokens": None,
             "parse_error_rate": pytest.approx(0.25),
         },
     ]
@@ -221,6 +236,40 @@ def test_report_separates_environment_and_response_parse_errors() -> None:
     assert report["summary"]["environment_parse_error_rate"] == pytest.approx(0.5)
     assert report["summary"]["response_parse_error_rate"] == pytest.approx(1 / 3)
     assert report["summary"]["parse_error_rate"] == pytest.approx(2 / 5)
+
+
+def test_report_aggregates_agent_tokens_and_memory_reuse() -> None:
+    result = replace(
+        _episode("75", 1.0),
+        selected_memory_ids=("memory-a", "memory-b"),
+        agent_prompt_tokens=90,
+        agent_completion_tokens=30,
+    )
+    provenance = replace(
+        _provenance(),
+        task_ids=("75",),
+        seeds=(42,),
+        memory_counts={
+            "trajectory": 0,
+            "tip": 2,
+            "skill": 1,
+            "tool": 0,
+        },
+    )
+    run = EvaluationRunResult(
+        episodes=(TrialEpisode(0, 42, result),),
+        maintenance_rounds_by_trial=((),),
+        output_memory_snapshot_ids=("memory-sha",),
+    )
+
+    report = build_evaluation_report(provenance, run)
+
+    assert report["summary"]["pass_at_1"] == 1.0
+    assert report["summary"]["mean_agent_tokens"] == 120
+    assert report["summary"]["mean_agent_tokens_successful"] == 120
+    assert report["summary"]["memory_item_count"] == 3
+    assert report["summary"]["unique_reused_memory_count"] == 2
+    assert report["summary"]["memory_reuse_coverage"] == pytest.approx(2 / 3)
 
 
 def test_report_rejects_missing_or_out_of_order_trials() -> None:

@@ -561,17 +561,29 @@
 
 **文件：**
 - 创建：`scripts/compare_evaluations.py`
+- 创建：`src/tau3_retail_evolver/eval/experiment.py`
+- 创建：`src/tau3_retail_evolver/eval/visualization.py`
+- 创建：`scripts/build_stage8_report.py`
 - 创建：`docs/evaluation_protocol.md`
 - 修改：`README.md`
+- 测试：`tests/unit/eval/test_experiment.py`
+- 测试：`tests/unit/scripts/test_build_stage8_report.py`
 
-- [ ] 至少评测：无 memory 的 base Qwen、无 memory 的训练后 LoRA、训练后 LoRA 加 `test_static` memory，以及训练后 LoRA `test_streaming`。
+- [x] 将主实验固定为 2×2：A 基础 Qwen 无 Memory、B 基础 Qwen 加冻结 S1、C 训练后 C1 加同一 S1、D 同一 C1 无 Memory；`test_streaming` 降为补充协议。
+- [x] 支持基础模型在全部 74 个 train task 上连续运行三次，使用固定但不同的 task shuffle seed，并持续积累同一个 agent 的 Memory。
+- [x] Stage 5 source loader、task grouping 和 dataset audit 支持跨 pass 重复 task ID，并以 `run_id:task_id` 保持 222 个 episode 的唯一身份。
+- [x] 校验三个 train pass 的 74-task 完整性、Memory snapshot chain、OPD dataset source run lineage、C/D checkpoint 一致性和 B/C snapshot 一致性。
+- [x] 汇总 `pass@1`、平均 Agent Token、Memory 总量与复用覆盖率、OPD 四类样本量、response token、optimizer step 和 forward-KL。
+- [x] 计算主要对照差值、按 task 聚类的 paired bootstrap 95% CI，以及 Memory 与 OPD 的交互效应。
+- [x] 生成无外部依赖的 HTML 仪表盘，展示四组结果、Token、Memory 增长/复用、OPD 样本构成、KL 曲线和 lineage。
 - [x] 只在主流程稳定后添加 selection、writing 和 maintenance ablation。
 - [x] 将 protocol、adapter、checkpoint 和 Memory snapshot 作为处理变量；只比较 tau2 commit、split hash、基础模型 revision、用户模拟器、NL evaluator、task order、seed set、trial 数和最大步数完全相同的 run。
 - [x] 记录：在不使用 dev 的设计中，test 结果绝不用于超参数调整或 checkpoint 选择。
+- [ ] 真实运行三个 74-task train pass、一次 OPD Slow Loop 和 A/B/C/D 各 `40 task × 4 trial`。
 - [ ] 运行 `pytest -v`、所有已启用 integration test、dataset audit 和 manifest lineage audit。
 - [x] 提交为 `docs: finalize tau3 retail opd evaluation protocol`。
 
-**阶段 8 gate：** 完整官方 test 报告可根据记录的 revision 复现，并且不存在从 test artifact 返回训练流程的路径。
+**阶段 8 gate：** 三个真实 74-task train pass、一次真实 OPD 训练和 A/B/C/D 各 `40 task × 4 trial` 全部完成；统一报告通过 lineage/control 校验、生成 JSON 与 HTML 图表，并且不存在从 test artifact 返回训练流程的路径。
 
 ---
 

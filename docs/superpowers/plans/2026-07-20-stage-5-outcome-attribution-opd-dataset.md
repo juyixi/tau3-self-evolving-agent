@@ -283,12 +283,22 @@ def test_source_runs_require_same_on_policy_revision_and_continuous_snapshots(tm
     assert [run.run_id for run in loaded.runs] == ["run-a", "run-b"]
 
 
-@pytest.mark.parametrize("mutation", ["test_split", "memory_disabled", "adapter_mismatch", "snapshot_gap", "duplicate_task"])
+@pytest.mark.parametrize("mutation", ["test_split", "memory_disabled", "adapter_mismatch", "snapshot_gap"])
 def test_source_runs_fail_closed_on_invalid_lineage(tmp_path: Path, mutation: str) -> None:
     paths, catalog, memory_root = _invalid_source_fixture(tmp_path, mutation)
     with pytest.raises(ValueError, match=_EXPECTED_ERRORS[mutation]):
         load_source_runs(paths, catalog=catalog, memory_root=memory_root)
+
+
+def test_source_runs_allow_repeated_tasks_across_distinct_passes(tmp_path: Path) -> None:
+    paths, catalog, memory_root = _continuous_repeated_task_fixture(tmp_path)
+    loaded = load_source_runs(paths, catalog=catalog, memory_root=memory_root)
+    assert [run.manifest["task_ids"] for run in loaded.runs] == [("1",), ("1",)]
 ```
+
+Stage 8 扩展约束：单个 source run 内 task ID 必须唯一；不同 on-policy pass
+可以重复同一个 train task。episode 身份始终使用 `run_id:task_id`，因此重复采样
+不会覆盖 evidence、attribution 或 OPD example。
 
 - [x] **Step 5: Run source loader tests and verify RED**
 

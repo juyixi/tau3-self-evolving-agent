@@ -28,7 +28,9 @@ from tau3_retail_evolver.fast_loop.runner import FastLoopConfig
 from tau3_retail_evolver.io.jsonl import JsonlWriter
 from tau3_retail_evolver.memory.embeddings import build_embedding_provider
 from tau3_retail_evolver.memory.paths import project_root as default_project_root
+from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.retrieval import Retriever
+from tau3_retail_evolver.memory.types import MEMORY_TIERS, MemoryTier
 from tau3_retail_evolver.models.openai_compatible import (
     OpenAICompatibleFastLoopPolicy,
     OpenAICompatibleHttpClient,
@@ -101,6 +103,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileExistsError(f"refusing to reuse existing evaluation run: {run_path}")
 
     config = load_config(args.config)
+    model_serving_contract = {
+        **MODEL_SERVING_CONTRACT,
+        "temperature": config.rollout.temperature,
+        "top_p": config.rollout.top_p,
+    }
     seeds = _resolve_seeds(
         args.seeds,
         num_trials=args.num_trials,
@@ -131,6 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         memory_snapshot_path=args.memory_snapshot,
     )
     source_memory_snapshot_id = guard.source_memory_snapshot_id()
+    source_memory_counts = _source_memory_counts(guard)
     task_groups = RetailTaskGroups.from_file(
         runtime.retail_tasks_path,
         task_ids=task_ids,
@@ -202,12 +210,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "memory_agent_id": (
                 config.memory.agent_id if memory_enabled else None
             ),
+            "source_memory_counts": source_memory_counts,
             "num_trials": len(seeds),
             "seeds": list(seeds),
             "task_order": list(task_ids),
             "capabilities": guard.capabilities.as_dict(),
         },
-        model_serving_contract=MODEL_SERVING_CONTRACT,
+        model_serving_contract=model_serving_contract,
         evaluation_config={
             "nl_assertions": nl_evaluator,
             "protocol": args.protocol.value,
@@ -264,8 +273,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         nl_evaluator=nl_evaluator,
         memory_snapshot_id=source_memory_snapshot_id,
         max_episode_steps=config.rollout.max_episode_steps,
-        model_serving_contract=MODEL_SERVING_CONTRACT,
+        model_serving_contract=model_serving_contract,
         capabilities=guard.capabilities.as_dict(),
+        memory_counts=source_memory_counts,
     )
     report = build_evaluation_report(provenance, run)
     report_path = run_path / "evaluation_report.json"
@@ -333,6 +343,17 @@ def _resolve_seeds(
     if len(seeds) != len(set(seeds)):
         raise ValueError("evaluation seeds must be unique")
     return seeds
+
+
+def _source_memory_counts(guard: EvaluationGuard) -> dict[str, int]:
+    if guard.protocol is not EvaluationProtocol.TEST_STATIC:
+        return {tier: 0 for tier in MEMORY_TIERS}
+    assert guard.memory_snapshot_path is not None
+    repository = ReadOnlyMemoryRepository(guard.memory_snapshot_path)
+    return {
+        tier.value: len(repository.list(tier=tier))
+        for tier in MemoryTier
+    }
 
 
 def _resolve_task_ids(

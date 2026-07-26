@@ -6,6 +6,7 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import random
 import re
 import sys
 from typing import Any
@@ -31,6 +32,7 @@ from tau3_retail_evolver.memory.factory import open_training_memory
 from tau3_retail_evolver.memory.json_store import write_bytes_atomic
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import Retriever
+from tau3_retail_evolver.memory.types import MEMORY_TIERS
 from tau3_retail_evolver.models.openai_compatible import (
     OpenAICompatibleFastLoopPolicy,
     OpenAICompatibleHttpClient,
@@ -66,7 +68,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run canonical Qwen retail fast-loop learning.")
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--split", required=True)
-    parser.add_argument("--task-id", dest="task_ids", action="append", required=True)
+    tasks = parser.add_mutually_exclusive_group(required=True)
+    tasks.add_argument("--task-id", dest="task_ids", action="append")
+    tasks.add_argument("--all-train-tasks", action="store_true")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output-root", type=Path, default=Path("runs"))
     parser.add_argument("--iteration", type=int, default=0)
@@ -75,6 +79,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--adapter-revision")
     parser.add_argument("--project-root", type=Path)
     parser.add_argument("--completed-train-tasks-before", type=int, required=True)
+    parser.add_argument("--seed", type=int)
     return parser.parse_args(argv)
 
 
@@ -92,7 +97,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     Tau2Runtime.require_pinned_commit(runtime)
     catalog = RetailTaskCatalog.from_files(runtime.retail_tasks_path, runtime.retail_split_path)
     catalog.require_official_compatibility()
-    _require_explicit_train_tasks(args.task_ids, catalog.task_ids("train"))
+    run_seed = config.training.seed if args.seed is None else args.seed
+    task_ids = _resolve_train_tasks(
+        args.task_ids,
+        all_train_tasks=args.all_train_tasks,
+        official_train_task_ids=catalog.task_ids("train"),
+        seed=run_seed,
+    )
 
     base_url = _validate_qwen_base_url(args.qwen_base_url or os.environ.get("QWEN_BASE_URL"))
     if not base_url:
@@ -100,12 +111,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     task_groups = RetailTaskGroups.from_file(
         runtime.retail_tasks_path,
-        task_ids=args.task_ids,
+        task_ids=task_ids,
     )
 
     gym_factory = Tau2Runtime.load_verified_gym_factory(runtime.repo_path)
     evaluation_provenance = bind_tau2_nl_assertions(config.evaluation.nl_assertions)
-    probe = Tau2RetailEnv(args.task_ids[0], config, gym_factory=gym_factory)
+    probe = Tau2RetailEnv(task_ids[0], config, gym_factory=gym_factory)
     try:
         user_simulator_config = probe.user_simulator_config
     finally:
@@ -130,9 +141,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if fast_loop_config.memory_enabled:
         assert repository is not None
-        input_memory_snapshot_id = repository.snapshot().memory_snapshot_id
+        input_memory_snapshot = repository.snapshot()
+        input_memory_snapshot_id = input_memory_snapshot.memory_snapshot_id
+        input_memory_counts = input_memory_snapshot.counts
     else:
         input_memory_snapshot_id = None
+        input_memory_counts = {tier: 0 for tier in MEMORY_TIERS}
 
     client = OpenAICompatibleHttpClient(
         base_url=base_url,
@@ -159,8 +173,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         tau2_commit=runtime.git_commit,
         split=args.split,
         split_hash=catalog.split_sha256,
-        task_ids=tuple(args.task_ids),
-        seed=config.training.seed,
+        task_ids=task_ids,
+        seed=run_seed,
         user_simulator_config=user_simulator_config,
         environment_options={
             "domain": config.tau2.domain,
@@ -174,6 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "memory_agent_id": (
                 config.memory.agent_id if fast_loop_config.memory_enabled else None
             ),
+            "task_order_seed": run_seed,
         },
         model_serving_contract=MODEL_SERVING_CONTRACT,
         evaluation_config={"nl_assertions": evaluation_provenance},
@@ -186,18 +201,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_revision=args.model_revision,
         adapter_revision=args.adapter_revision,
         memory_snapshot_id=input_memory_snapshot_id,
-        seed=config.training.seed,
+        seed=run_seed,
         event_writer=JsonlWriter(run_path / "rollouts" / "events.jsonl"),
         mode=RunMode.LEARN,
         task_groups={
-            task_id: task_groups.signature_for(task_id) for task_id in args.task_ids
+            task_id: task_groups.signature_for(task_id) for task_id in task_ids
         },
         temperature=config.rollout.temperature,
         top_p=config.rollout.top_p,
         default_task_group="retail-actions-v1:maintenance",
     )
     results, maintenance_rounds = _run_requested_tasks(
-        task_ids=tuple(args.task_ids),
+        task_ids=task_ids,
         env_factory=lambda task_id: Tau2RetailEnv(
             task_id,
             config,
@@ -213,9 +228,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if fast_loop_config.memory_enabled:
         assert repository is not None
-        output_memory_snapshot_id = repository.snapshot().memory_snapshot_id
+        output_memory_snapshot = repository.snapshot()
+        output_memory_snapshot_id = output_memory_snapshot.memory_snapshot_id
+        output_memory_counts = output_memory_snapshot.counts
     else:
         output_memory_snapshot_id = None
+        output_memory_counts = {tier: 0 for tier in MEMORY_TIERS}
+    token_results = [
+        result
+        for result in results
+        if result.agent_prompt_tokens is not None
+        and result.agent_completion_tokens is not None
+    ]
+    selected_memory_ids = {
+        memory_id
+        for result in results
+        for memory_id in result.selected_memory_ids
+    }
+    memory_item_count = sum(output_memory_counts.values())
     summary = {
         "run_id": args.run_id,
         "episode_count": len(results),
@@ -227,6 +257,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         "memory_enabled": fast_loop_config.memory_enabled,
         "input_memory_snapshot_id": input_memory_snapshot_id,
         "output_memory_snapshot_id": output_memory_snapshot_id,
+        "input_memory_counts": input_memory_counts,
+        "output_memory_counts": output_memory_counts,
+        "memory_item_count": memory_item_count,
+        "memory_selection_count": sum(
+            len(result.selected_memory_ids) for result in results
+        ),
+        "unique_reused_memory_count": len(selected_memory_ids),
+        "memory_reuse_coverage": (
+            len(selected_memory_ids) / memory_item_count
+            if memory_item_count
+            else None
+        ),
+        "token_usage_episode_count": len(token_results),
+        "total_agent_prompt_tokens": sum(
+            result.agent_prompt_tokens or 0 for result in token_results
+        ),
+        "total_agent_completion_tokens": sum(
+            result.agent_completion_tokens or 0 for result in token_results
+        ),
+        "total_agent_tokens": sum(
+            (result.agent_prompt_tokens or 0)
+            + (result.agent_completion_tokens or 0)
+            for result in token_results
+        ),
+        "mean_agent_tokens": (
+            sum(
+                (result.agent_prompt_tokens or 0)
+                + (result.agent_completion_tokens or 0)
+                for result in token_results
+            )
+            / len(token_results)
+            if token_results
+            else None
+        ),
     }
     summary_bytes = _canonical_json_bytes(summary)
     write_bytes_atomic(run_path / "fast_loop_summary.json", summary_bytes)
@@ -300,6 +364,8 @@ def _validate_early_arguments(args: argparse.Namespace) -> None:
         raise ValueError("iteration must be non-negative")
     if args.completed_train_tasks_before < 0:
         raise ValueError("completed train tasks before must be non-negative")
+    if args.seed is not None and args.seed < 0:
+        raise ValueError("seed must be non-negative")
     if not args.model_revision.strip():
         raise ValueError("model revision must not be blank")
     if args.adapter_revision is not None and not args.adapter_revision.strip():
@@ -315,6 +381,24 @@ def _require_explicit_train_tasks(task_ids: Sequence[str], train_task_ids: Seque
         raise ValueError(
             "requested task IDs are not in the official train split: " + ", ".join(unknown)
         )
+
+
+def _resolve_train_tasks(
+    task_ids: Sequence[str] | None,
+    *,
+    all_train_tasks: bool,
+    official_train_task_ids: Sequence[str],
+    seed: int,
+) -> tuple[str, ...]:
+    official = tuple(official_train_task_ids)
+    if all_train_tasks:
+        ordered = list(official)
+        random.Random(f"{seed}:tau3-retail-stage8-fast-loop").shuffle(ordered)
+        return tuple(ordered)
+    if task_ids is None:
+        raise ValueError("explicit task IDs are required unless --all-train-tasks is set")
+    _require_explicit_train_tasks(task_ids, official)
+    return tuple(task_ids)
 
 
 def _validate_qwen_base_url(value: str | None) -> str | None:

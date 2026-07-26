@@ -431,6 +431,25 @@ def test_fast_loop_action_passes_exact_official_tools_and_converts_qwen_tool_cal
     assert response.latency_s == 0.0
 
 
+def test_fast_loop_policy_preserves_openai_token_usage() -> None:
+    completion = _completion('{"memory_ids":[]}')
+    completion["usage"] = {
+        "prompt_tokens": 120,
+        "completion_tokens": 8,
+        "total_tokens": 128,
+    }
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=FakeClient(completion),
+        temperature=0.7,
+        top_p=0.9,
+    )
+
+    response = policy.generate(_lifecycle_prompts()["selection"])
+
+    assert response.prompt_tokens == 120
+    assert response.completion_tokens == 8
+
+
 def test_fast_loop_action_converts_valid_assistant_text_to_canonical_action_json() -> None:
     policy = OpenAICompatibleFastLoopPolicy(
         client=FakeClient(_completion("I can help with that.")),

@@ -181,29 +181,30 @@ created -> rollout_complete -> attribution_complete
 
 ### 主实验矩阵
 
-| 实验 | LoRA | 训练 Memory | 评测 Memory | 用途 |
-| --- | --- | --- | --- | --- |
-| Base Qwen Baseline | 无 | 无 | 无 | 测量基础 Qwen 的 Retail 能力 |
-| Fast Loop / Memory Off | 当前策略 | 关闭 | 无 | 隔离 Memory 生命周期的贡献 |
-| Fast Loop / Memory On | 当前策略 | 开启 | 训练 Memory | 测量检索、选择、写入和维护收益 |
-| Trained LoRA / No Memory | 训练后 | 来自 train | 关闭 | 隔离 Slow Loop 参数更新的贡献 |
-| Trained LoRA / `test_static` | 训练后 | 来自 train | 冻结 train snapshot，只读 | 测量部署时使用已学习 Memory 的效果 |
-| Trained LoRA / `test_streaming` | 训练后 | 来自 train | 空白隔离 Memory，可在 test stream 内演化 | 对齐论文的流式自进化评测协议 |
+| Cell | 模型 | Test Memory | 用途 |
+| --- | --- | --- | --- |
+| A `base_no_memory` | 基础 Qwen3.5-9B | 关闭 | 裸模型 baseline |
+| B `base_with_memory` | 基础 Qwen3.5-9B | 冻结 S1，只读 | 隔离 Fast Loop Memory 收益 |
+| C `opd_with_memory` | 训练后 checkpoint C1 | 与 B 相同的冻结 S1，只读 | 完整系统 |
+| D `opd_no_memory` | 与 C 相同的 checkpoint C1 | 关闭 | 隔离 OPD Slow Loop 收益 |
 
-`test_static` 和 `test_streaming` 是评测协议设计。Streaming Memory 只能写入独立 quarantine，训练 loader 必须拒绝读取，防止 test 经验回流。
+S1 由未更新的基础模型在全部 74 个官方 train task 上连续运行三次得到，默认 seed 为 `42/43/44`，共收集 222 个 episode。跨 pass 重复 task ID 是预期行为，OPD 数据管线使用 `run_id:task_id` 作为 episode 唯一身份，同时继续要求每个单独 pass 内 task ID 唯一。初始 source policy revision 记录为 `zero-impact-init-v1`；全部 train episode 用于构建一次 OPD 数据集并训练出 C1。B/C 必须使用同一份 S1，C/D 必须使用 `training_manifest.json` 给出的同一个最终 checkpoint 和 adapter revision；`test_streaming` 只作为补充协议，不进入主实验。
 
-主流程稳定后再进行 selection、writing 和 maintenance 单模块消融。Memory 开关实验必须复用相同 Qwen、任务顺序、seed 和用户模拟器；不得用不同运行条件替代真正的组件消融。
+主流程稳定后再进行 selection、writing 和 maintenance 单模块消融。四组主实验必须复用相同任务顺序、seed、用户模拟器、NL evaluator、生成参数和最大 episode 步数。
 
 ### 指标与重复实验
 
 最终评测保留 Tau2 官方 evaluator，不重新实现 reward。报告至少包括：
 
-- task count、completed count、mean reward 和 success rate。
+- task count、completed count、mean reward 和任务成功率 `pass@1`。
+- 每个 episode 的平均 Agent prompt/completion/总 Token。
+- Memory 总量、三次 train pass 的增长量、被复用 Memory 覆盖率和平均选择数。
+- OPD 四类训练样本量、optimizer step、response token 数和 forward-KL 曲线。
 - 逐任务 reward、`reward_info` 和 failure category。
 - episode step count、tool/response parse-error rate。
 - checkpoint、模型 revision、Tau2 commit、split hash、精确 test task IDs、任务顺序、用户模拟器、seed 和 Memory 协议。
 
-单任务或五任务验证可以只运行一个 trial；最终报告默认每个 test task 运行四个带 seed 的 trials。只有控制变量完全一致的 runs 才能进入横向比较。
+单任务或五任务验证可以只运行一个 trial；最终报告默认每个 test task 运行四个带 seed 的 trials。只有控制变量完全一致的 runs 才能进入横向比较，主要差值同时给出按 task 聚类的 paired bootstrap 95% CI。
 
 ## 使用指南
 
@@ -448,32 +449,40 @@ python -m scripts.run_iteration `
 
 ### 10. 运行留出集评测
 
-Stage 8 使用统一入口运行基础 Qwen、训练后 LoRA、冻结 train Memory 和隔离 streaming Memory 四类实验。不传 `--task-id` 时按官方顺序运行全部 40 个 test task；不传 `--num-trials` 时每个任务运行四个 seed trial。
+Stage 8 先用基础 Qwen3.5-9B 在全部 74 个 train task 上连续运行三次 Fast Loop，得到冻结 Memory snapshot S1；再用三个 pass 的全部 episode 构建 OPD 数据集并训练一次 LoRA checkpoint C1。详细命令见 [Retail 留出集评测协议](docs/evaluation_protocol.md)。
+
+四组主实验为：A 基础模型无 Memory、B 基础模型加 S1、C checkpoint C1 加 S1、D checkpoint C1 无 Memory。不传 `--task-id` 时按官方顺序运行全部 40 个 test task；不传 `--num-trials` 时每个任务运行四个 seed trial。单组入口示例：
 
 ```powershell
 python -m scripts.evaluate_retail `
   --config configs/default.yaml `
   --protocol no_memory `
-  --run-id eval-base-qwen `
+  --run-id stage8-a-base-no-memory `
   --qwen-base-url $env:QWEN_BASE_URL `
   --model-revision $env:QWEN_MODEL_REVISION
 ```
 
-训练后 LoRA 实验增加 `--adapter-revision` 和 `--checkpoint`；`test_static` 还必须指定 `history/agents/retail/memory/snapshots/<snapshot-id>`，`test_streaming` 则为每个 trial 创建独立 quarantine。入口不会替服务端加载 LoRA，vLLM 必须已经运行对应 adapter。
+训练后 LoRA 实验增加 `--adapter-revision` 和 `--checkpoint`；B/C 使用 `test_static` 并指向同一个 `history/agents/retail/memory/snapshots/<S1>`。入口不会替服务端加载 LoRA，运行 C/D 时 vLLM 必须已经加载 C1。
 
-报告写入 `runs/<run_id>/evaluation_report.json`。四组报告通过以下入口进行受控比较：
+每组报告写入 `runs/<run_id>/evaluation_report.json`。四组 test 报告、三个 train run、OPD dataset、training 目录和 S1 通过统一入口进行合同校验、指标汇总和图表生成：
 
 ```powershell
-python -m scripts.compare_evaluations `
-  --report base_qwen=runs/eval-base-qwen/evaluation_report.json `
-  --report trained_no_memory=runs/eval-lora-no-memory/evaluation_report.json `
-  --report trained_static=runs/eval-lora-static/evaluation_report.json `
-  --report trained_streaming=runs/eval-lora-streaming/evaluation_report.json `
-  --baseline-label base_qwen `
-  --output runs/evaluation-comparison.json
+python -m scripts.build_stage8_report `
+  --experiment-id stage8-main `
+  --base-no-memory-report runs/stage8-a-base-no-memory/evaluation_report.json `
+  --base-with-memory-report runs/stage8-b-base-with-memory/evaluation_report.json `
+  --opd-with-memory-report runs/stage8-c-opd-with-memory/evaluation_report.json `
+  --opd-no-memory-report runs/stage8-d-opd-no-memory/evaluation_report.json `
+  --train-run runs/stage8-train-pass-1 `
+  --train-run runs/stage8-train-pass-2 `
+  --train-run runs/stage8-train-pass-3 `
+  --dataset-dir runs/opd_datasets/stage8-opd-dataset `
+  --training-dir runs/opd_training/stage8-opd `
+  --memory-snapshot "history/agents/retail/memory/snapshots/<S1>" `
+  --output-dir runs/stage8-main-report
 ```
 
-完整协议、smoke 命令、报告字段和隔离规则见 [Retail 留出集评测协议](docs/evaluation_protocol.md)。
+输出包括机器可读的 `stage8_experiment_report.json` 和自包含的 `stage8_dashboard.html`。仪表盘展示四组 pass@1、平均 Agent Token、Memory 复用率与增长、OPD 样本构成、forward-KL 曲线和成对差值置信区间。
 
 ### 11. 测试
 
