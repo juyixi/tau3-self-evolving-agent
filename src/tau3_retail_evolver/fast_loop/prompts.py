@@ -301,9 +301,17 @@ def _compact_cumulative_trajectory(
         next_observation = step.get("next_observation")
         if not isinstance(observation, str) or not isinstance(next_observation, str):
             return trajectory
-        if not next_observation.startswith(observation):
-            return trajectory
         if previous_observation is not None and observation != previous_observation:
+            return trajectory
+        terminal_without_observation = not next_observation.strip()
+        if terminal_without_observation:
+            if (
+                turn != len(trajectory) - 1
+                or step.get("done") is not True
+                or observation.strip() != final_observation
+            ):
+                return trajectory
+        elif not next_observation.startswith(observation):
             return trajectory
 
         compact.append(
@@ -316,7 +324,9 @@ def _compact_cumulative_trajectory(
                 },
             }
         )
-        previous_observation = next_observation
+        previous_observation = (
+            observation if terminal_without_observation else next_observation
+        )
 
     if previous_observation is None or previous_observation.strip() != final_observation:
         return trajectory

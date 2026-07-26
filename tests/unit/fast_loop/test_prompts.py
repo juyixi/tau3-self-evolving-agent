@@ -180,6 +180,13 @@ def test_write_prompt_compacts_cumulative_transcript_without_losing_step_metadat
                 "action": "exchange_order(order_id='123')",
                 "next_observation": final,
                 "reward": 1.0,
+                "done": False,
+            },
+            {
+                "observation": final,
+                "action": "done()",
+                "next_observation": "",
+                "reward": 1.0,
                 "done": True,
             },
         ],
@@ -198,6 +205,12 @@ def test_write_prompt_compacts_cumulative_transcript_without_losing_step_metadat
         {
             "turn": 1,
             "action": "exchange_order(order_id='123')",
+            "reward": 1.0,
+            "done": False,
+        },
+        {
+            "turn": 2,
+            "action": "done()",
             "reward": 1.0,
             "done": True,
         },

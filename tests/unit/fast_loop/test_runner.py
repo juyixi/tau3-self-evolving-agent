@@ -593,7 +593,16 @@ def test_write_prompt_uses_latest_nonblank_observation_after_terminal_empty_step
     write_prompt = policy.prompts[-1]
     assert write_prompt.kind == "write"
     assert write_prompt.payload["observation"] == "Customer asks for a refund"
-    assert write_prompt.payload["trajectory"][0]["next_observation"] == ""
+    assert (
+        write_prompt.payload["trajectory_format"]
+        == "final_observation_plus_actions_v1"
+    )
+    compact_step = write_prompt.payload["trajectory"][0]
+    assert compact_step["action"] == "finish"
+    assert compact_step["reward"] == 0.8
+    assert compact_step["done"] is True
+    assert "observation" not in compact_step
+    assert "next_observation" not in compact_step
     assert result.final_reward == 0.8
 
 
