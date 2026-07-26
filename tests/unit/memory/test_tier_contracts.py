@@ -55,6 +55,19 @@ def test_tip_is_one_atomic_rule_and_renders_deterministically() -> None:
         TipPayload(guidance="1. Look up the order.\n2. Submit the return.")
 
 
+def test_optional_payload_text_normalizes_blank_values_to_none() -> None:
+    tip = TipPayload(
+        condition="",
+        guidance="Confirm before changing an order.",
+        rationale=" ",
+    )
+    step = SkillStep(order=1, instruction="Look up the order.", success_signal="")
+
+    assert tip.condition is None
+    assert tip.rationale is None
+    assert step.success_signal is None
+
+
 def test_skill_requires_a_contiguous_multi_step_workflow() -> None:
     payload = SkillPayload(
         goal="Complete an eligible return",

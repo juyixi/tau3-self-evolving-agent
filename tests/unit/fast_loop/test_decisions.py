@@ -104,6 +104,34 @@ def test_action_and_write_decisions_validate_text_and_json_metadata() -> None:
     ).tier is MemoryTier.SKILL
 
 
+def test_write_decision_normalizes_blank_optional_text_from_model_output() -> None:
+    result = parse_decision(
+        json.dumps(
+            {
+                "memories": [
+                    {
+                        "tier": "tip",
+                        "payload": {
+                            "condition": "",
+                            "guidance": "Authenticate before reading account data.",
+                            "rationale": " ",
+                        },
+                        "retrieval_text": "",
+                    }
+                ]
+            }
+        ),
+        WriteDecision,
+    )
+
+    assert result.error is None
+    assert result.decision is not None
+    memory = result.decision.memories[0]
+    assert memory.payload.condition is None
+    assert memory.payload.rationale is None
+    assert memory.retrieval_text is None
+
+
 def test_write_decision_schema_discriminates_payloads_by_tier() -> None:
     schema = WriteDecision.model_json_schema()
     memory_schema = schema["properties"]["memories"]["items"]

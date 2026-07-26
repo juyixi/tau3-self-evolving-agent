@@ -73,12 +73,9 @@ class _MemoryWriteBase(_DecisionModel):
     @field_validator("retrieval_text")
     @classmethod
     def text_must_not_be_blank(cls, value: str | None) -> str | None:
-        if value is None:
+        if value is None or not value.strip():
             return None
-        value = value.strip()
-        if not value:
-            raise ValueError("memory text must not be blank")
-        return value
+        return value.strip()
 
     @field_validator("metadata")
     @classmethod

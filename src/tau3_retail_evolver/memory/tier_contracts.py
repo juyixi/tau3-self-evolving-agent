@@ -551,7 +551,9 @@ def _canonical_nonblank_values(
 
 
 def _optional_nonblank(value: str | None, label: str) -> str | None:
-    return None if value is None else _nonblank(value, label)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return _nonblank(value, label)
 
 
 def _nonblank(value: Any, label: str) -> str:
