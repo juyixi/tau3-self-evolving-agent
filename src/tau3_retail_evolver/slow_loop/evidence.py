@@ -210,11 +210,15 @@ def build_evidence(
                 local_episode_count += 1
                 local_task_ids.append(episode.task_id)
                 continue
+            if event_type == "TaskFailed":
+                local_task_ids.append(event["task_id"])
+                cursor += 1
+                continue
             if event_type == "MaintenanceStarted":
                 block, cursor = _take_maintenance_block(rows, cursor)
                 expected_task_index = (
                     source_run.summary["completed_train_tasks_before"]
-                    + local_episode_count
+                    + len(local_task_ids)
                 )
                 item = _build_maintenance(
                         source_run,
@@ -227,10 +231,13 @@ def build_evidence(
                 maintenance.append(item)
                 local_maintenance_rounds.append(item.maintenance_round)
                 continue
+            if event_type == "MaintenanceTaskFailed":
+                cursor += 1
+                continue
             raise ValueError(
                 f"unexpected source event {event_type!r} at {source_run.events_path}:{row_number}"
             )
-        if local_episode_count != len(source_run.manifest["task_ids"]):
+        if local_episode_count != source_run.summary["episode_count"]:
             raise ValueError(f"evidence episode count mismatch for run {source_run.run_id}")
         if tuple(local_task_ids) != tuple(source_run.manifest["task_ids"]):
             raise ValueError(f"evidence task order mismatch for run {source_run.run_id}")

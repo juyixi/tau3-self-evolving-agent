@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from tau3_retail_evolver.config import load_config
+from tau3_retail_evolver.credential_policy import is_credential_key
 from tau3_retail_evolver.envs.runtime import Tau2Runtime
 from tau3_retail_evolver.envs.split_guard import require_learning_split
 from tau3_retail_evolver.envs.task_catalog import RetailTaskCatalog
@@ -32,7 +34,7 @@ from tau3_retail_evolver.memory.factory import open_training_memory
 from tau3_retail_evolver.memory.json_store import write_bytes_atomic
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import Retriever
-from tau3_retail_evolver.memory.types import MEMORY_TIERS
+from tau3_retail_evolver.memory.types import MEMORY_TIERS, MemoryStatus
 from tau3_retail_evolver.models.openai_compatible import (
     OpenAICompatibleFastLoopPolicy,
     OpenAICompatibleHttpClient,
@@ -62,6 +64,18 @@ QWEN_GENERATION_SETTINGS = {
 
 TASK_INSTRUCTION = "Resolve the retail request shown in the current conversation."
 _SAFE_SLUG = re.compile(r"^[a-z0-9_-]+$")
+
+
+@dataclass(slots=True)
+class _EventBuffer:
+    events: list[dict[str, Any]] = field(default_factory=list)
+
+    def append(self, event: dict[str, Any]) -> None:
+        self.events.append(event)
+
+    def flush_to(self, writer: Any) -> None:
+        for event in self.events:
+            writer.append(event)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -211,7 +225,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         top_p=config.rollout.top_p,
         default_task_group="retail-actions-v1:maintenance",
     )
-    results, maintenance_rounds = _run_requested_tasks(
+    results, maintenance_rounds, failures = _run_requested_tasks(
         task_ids=task_ids,
         env_factory=lambda task_id: Tau2RetailEnv(
             task_id,
@@ -246,14 +260,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         for memory_id in result.selected_memory_ids
     }
     memory_item_count = sum(output_memory_counts.values())
+    task_failures = [
+        failure for failure in failures if failure["stage"] == "episode"
+    ]
+    maintenance_failures = [
+        failure for failure in failures if failure["stage"] == "maintenance"
+    ]
     summary = {
         "run_id": args.run_id,
+        "attempted_task_count": len(task_ids),
         "episode_count": len(results),
         "total_terminal_reward": sum(result.final_reward for result in results),
         "successful_task_ids": [result.task_id for result in results],
+        "failed_task_count": len(task_failures),
+        "failed_task_ids": [failure["task_id"] for failure in task_failures],
+        "failures": list(failures),
+        "failed_maintenance_rounds": [
+            failure["maintenance_round"] for failure in maintenance_failures
+        ],
         "maintenance_rounds_executed": list(maintenance_rounds),
         "completed_train_tasks_before": args.completed_train_tasks_before,
-        "completed_train_tasks_after": args.completed_train_tasks_before + len(results),
+        "completed_train_tasks_after": (
+            args.completed_train_tasks_before + len(task_ids)
+        ),
         "memory_enabled": fast_loop_config.memory_enabled,
         "input_memory_snapshot_id": input_memory_snapshot_id,
         "output_memory_snapshot_id": output_memory_snapshot_id,
@@ -309,7 +338,11 @@ def _run_requested_tasks(
     context: RunContext,
     completed_train_tasks_before: int,
     maintenance_period: int,
-) -> tuple[tuple[EpisodeResult, ...], tuple[int, ...]]:
+) -> tuple[
+    tuple[EpisodeResult, ...],
+    tuple[int, ...],
+    tuple[dict[str, Any], ...],
+]:
     validate_fast_loop_dependencies(
         config=fast_loop_config,
         repository=repository,
@@ -317,42 +350,162 @@ def _run_requested_tasks(
     )
     results: list[EpisodeResult] = []
     maintenance_rounds: list[int] = []
+    failures: list[dict[str, Any]] = []
+    canonical_writer = context.event_writer
     for index, task_id in enumerate(task_ids, start=1):
-        if fast_loop_config.memory_enabled:
-            assert repository is not None
-            episode_context = replace(
-                context,
-                memory_snapshot_id=repository.snapshot().memory_snapshot_id,
+        episode_buffer = _EventBuffer()
+        episode_context = replace(context, event_writer=episode_buffer)
+        memory_ids_before: set[str] | None = None
+        try:
+            if fast_loop_config.memory_enabled:
+                assert repository is not None
+                episode_context = replace(
+                    episode_context,
+                    memory_snapshot_id=repository.snapshot().memory_snapshot_id,
+                )
+                memory_ids_before = {
+                    item.id for item in repository.list(status=None)
+                }
+            else:
+                episode_context = replace(episode_context, memory_snapshot_id=None)
+            result = run_fast_loop_episode(
+                task_id=task_id,
+                task_instruction=TASK_INSTRUCTION,
+                environment=env_factory(task_id),
+                policy=policy,
+                repository=repository,
+                retriever=retriever,
+                config=fast_loop_config,
+                context=episode_context,
+            )
+        except Exception as error:
+            discarded_ids, rollback_error = _discard_new_memories(
+                repository,
+                memory_ids_before,
+                updated_round=context.iteration,
+            )
+            failure = _failure_record(error, task_id=task_id, stage="episode")
+            if rollback_error is not None:
+                failure["rollback_error"] = rollback_error
+            failures.append(failure)
+            canonical_writer.append(
+                episode_context.event(
+                    "TaskFailed",
+                    task_id,
+                    error=failure["error"],
+                    discarded_memory_ids=list(discarded_ids),
+                    rollback_error=failure.get("rollback_error"),
+                )
             )
         else:
-            episode_context = replace(context, memory_snapshot_id=None)
-        result = run_fast_loop_episode(
-            task_id=task_id,
-            task_instruction=TASK_INSTRUCTION,
-            environment=env_factory(task_id),
-            policy=policy,
-            repository=repository,
-            retriever=retriever,
-            config=fast_loop_config,
-            context=episode_context,
-        )
-        results.append(result)
+            episode_buffer.flush_to(canonical_writer)
+            results.append(result)
+
         if fast_loop_config.memory_enabled:
             assert repository is not None
-            maintenance_context = replace(
-                context,
-                memory_snapshot_id=repository.snapshot().memory_snapshot_id,
+            completed_tasks = completed_train_tasks_before + index
+            maintenance_buffer = _EventBuffer()
+            maintenance_context = replace(context, event_writer=maintenance_buffer)
+            try:
+                maintenance_context = replace(
+                    maintenance_context,
+                    memory_snapshot_id=repository.snapshot().memory_snapshot_id,
+                )
+                maintenance = run_due_maintenance(
+                    completed_train_tasks=completed_tasks,
+                    period=maintenance_period,
+                    repository=repository,
+                    policy=policy,
+                    context=maintenance_context,
+                )
+            except Exception as error:
+                maintenance_round = max(1, completed_tasks // maintenance_period)
+                failure = _failure_record(
+                    error,
+                    task_id=f"maintenance-round-{maintenance_round}",
+                    stage="maintenance",
+                )
+                failure["maintenance_round"] = maintenance_round
+                failures.append(failure)
+                canonical_writer.append(
+                    maintenance_context.event(
+                        "MaintenanceTaskFailed",
+                        failure["task_id"],
+                        error=failure["error"],
+                        maintenance_round=maintenance_round,
+                    )
+                )
+            else:
+                maintenance_buffer.flush_to(canonical_writer)
+                if maintenance.executed:
+                    maintenance_rounds.append(maintenance.maintenance_round)
+    return tuple(results), tuple(maintenance_rounds), tuple(failures)
+
+
+def _failure_record(
+    error: Exception,
+    *,
+    task_id: str,
+    stage: str,
+) -> dict[str, Any]:
+    error_types: list[str] = []
+    error_messages: list[str] = []
+    current: BaseException | None = error
+    while current is not None and len(error_types) < 8:
+        error_types.append(type(current).__name__)
+        error_messages.append(_redact_error_text(str(current)))
+        current = current.__cause__ or current.__context__
+    fingerprint_source = f"{stage}|{'|'.join(error_types)}|{error}"
+    return {
+        "task_id": task_id,
+        "stage": stage,
+        "error": {
+            "types": error_types,
+            "messages": error_messages,
+            "fingerprint": hashlib.sha256(
+                fingerprint_source.encode("utf-8", errors="replace")
+            ).hexdigest()[:16],
+        },
+    }
+
+
+def _redact_error_text(value: str) -> str:
+    redacted = value
+    for key, secret in os.environ.items():
+        if is_credential_key(key) and secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted[:4000]
+
+
+def _discard_new_memories(
+    repository: MemoryRepository | None,
+    memory_ids_before: set[str] | None,
+    *,
+    updated_round: int,
+) -> tuple[tuple[str, ...], dict[str, Any] | None]:
+    if repository is None or memory_ids_before is None:
+        return (), None
+    try:
+        new_ids = tuple(
+            sorted(
+                item.id
+                for item in repository.list(status=None)
+                if item.id not in memory_ids_before
             )
-            maintenance = run_due_maintenance(
-                completed_train_tasks=completed_train_tasks_before + index,
-                period=maintenance_period,
-                repository=repository,
-                policy=policy,
-                context=maintenance_context,
+        )
+        for memory_id in new_ids:
+            repository.update_status(
+                memory_id,
+                MemoryStatus.RETIRED,
+                updated_round=updated_round,
             )
-            if maintenance.executed:
-                maintenance_rounds.append(maintenance.maintenance_round)
-    return tuple(results), tuple(maintenance_rounds)
+        return new_ids, None
+    except Exception as error:
+        return (), _failure_record(
+            error,
+            task_id="memory-rollback",
+            stage="rollback",
+        )["error"]
 
 
 def _validate_early_arguments(args: argparse.Namespace) -> None:

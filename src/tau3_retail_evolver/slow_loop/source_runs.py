@@ -177,17 +177,31 @@ def _validate_summary(summary: dict[str, Any], *, manifest: dict[str, Any]) -> N
     count = summary.get("episode_count")
     before = summary.get("completed_train_tasks_before")
     after = summary.get("completed_train_tasks_after")
-    if not _is_nonnegative_int(count) or count != len(task_ids):
+    failed_task_ids = summary.get("failed_task_ids", [])
+    if (
+        not isinstance(failed_task_ids, list)
+        or len(failed_task_ids) != len(set(failed_task_ids))
+        or not set(failed_task_ids) <= set(task_ids)
+    ):
+        raise ValueError(f"source summary failed task IDs are invalid: {run_id}")
+    expected_successful = [
+        task_id for task_id in task_ids if task_id not in set(failed_task_ids)
+    ]
+    if not _is_nonnegative_int(count) or count != len(expected_successful):
         raise ValueError(f"source summary episode count mismatch: {run_id}")
     if not _is_nonnegative_int(before) or not _is_nonnegative_int(after):
         raise ValueError(f"source summary completed-task range is invalid: {run_id}")
-    if after - before != count:
+    if after - before != len(task_ids):
         raise ValueError(f"source summary completed-task range mismatch: {run_id}")
     if summary.get("input_memory_snapshot_id") != manifest["memory_snapshot_id"]:
         raise ValueError(f"source summary input snapshot mismatch: {run_id}")
     _nonblank(summary, "output_memory_snapshot_id", "source summary")
-    if summary.get("successful_task_ids") != task_ids:
+    if summary.get("successful_task_ids") != expected_successful:
         raise ValueError(f"source summary successful task IDs mismatch: {run_id}")
+    attempted_count = summary.get("attempted_task_count", len(task_ids))
+    failed_count = summary.get("failed_task_count", len(failed_task_ids))
+    if attempted_count != len(task_ids) or failed_count != len(failed_task_ids):
+        raise ValueError(f"source summary task outcome counts mismatch: {run_id}")
     reward = summary.get("total_terminal_reward")
     if (
         not isinstance(reward, (int, float))
@@ -215,6 +229,7 @@ def _validate_events(
     task_ids = manifest["task_ids"]
     events_by_task: dict[str, list[dict[str, Any]]] = {task_id: [] for task_id in task_ids}
     first_episode_order: list[str] = []
+    failed_task_ids: list[str] = []
     rewards: list[float] = []
     referenced_snapshots = {
         manifest["memory_snapshot_id"],
@@ -245,7 +260,7 @@ def _validate_events(
         referenced_snapshots.add(snapshot_id)
         task_id = event.get("task_id")
         if isinstance(task_id, str) and task_id.startswith("maintenance-round-"):
-            if event_type not in _MAINTENANCE_EVENTS:
+            if event_type not in _MAINTENANCE_EVENTS | {"MaintenanceTaskFailed"}:
                 raise ValueError(f"source maintenance event type is invalid: {run_id}")
             continue
         if task_id not in events_by_task:
@@ -253,8 +268,10 @@ def _validate_events(
         task_group = event.get("task_group")
         if not isinstance(task_group, str) or not _TASK_GROUP.fullmatch(task_group):
             raise ValueError(f"source event task group is invalid: {run_id}")
-        if event_type == "EpisodeStarted":
+        if event_type in {"EpisodeStarted", "TaskFailed"}:
             first_episode_order.append(task_id)
+        if event_type == "TaskFailed":
+            failed_task_ids.append(task_id)
         if event_type == "EpisodeFinished":
             reward = event.get("final_reward")
             if not isinstance(reward, (int, float)) or isinstance(reward, bool):
@@ -264,13 +281,15 @@ def _validate_events(
 
     if first_episode_order != task_ids:
         raise ValueError(f"source episode order does not match manifest: {run_id}")
+    if failed_task_ids != summary.get("failed_task_ids", []):
+        raise ValueError(f"source failed task IDs do not match summary: {run_id}")
     if events_by_task[task_ids[0]][0]["memory_snapshot_id"] != manifest[
         "memory_snapshot_id"
     ]:
         raise ValueError(f"source first episode snapshot mismatch: {run_id}")
     for task_id, task_events in events_by_task.items():
         _validate_episode_lifecycle(task_events, run_id=run_id, task_id=task_id)
-    if len(rewards) != len(task_ids) or not math.isclose(
+    if len(rewards) != summary["episode_count"] or not math.isclose(
         sum(rewards), float(summary["total_terminal_reward"]), rel_tol=1e-12, abs_tol=1e-12
     ):
         raise ValueError(f"source summary reward does not match events: {run_id}")
@@ -285,6 +304,8 @@ def _validate_episode_lifecycle(
     task_id: str,
 ) -> None:
     event_types = tuple(event.get("event_type") for event in events)
+    if event_types == ("TaskFailed",):
+        return
     if event_types[:3] != _EPISODE_PREFIX or event_types[-3:] != _EPISODE_SUFFIX:
         raise ValueError(f"source episode lifecycle is incomplete: {run_id}/{task_id}")
     turns = event_types[3:-3]

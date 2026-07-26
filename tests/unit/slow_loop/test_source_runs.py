@@ -142,6 +142,47 @@ def test_source_runs_require_same_policy_and_continuous_snapshots(
         loaded.runs[0].manifest["iteration"] = 4  # type: ignore[index]
 
 
+def test_source_run_accepts_recorded_task_failure_without_episode_evidence(
+    tmp_path: Path,
+) -> None:
+    run_path = _write_source_run(
+        tmp_path,
+        "run-a",
+        task_id="1",
+        before=0,
+        input_snapshot="s0",
+        output_snapshot="s0",
+    )
+    summary_path = run_path / "fast_loop_summary.json"
+    events_path = run_path / "rollouts" / "events.jsonl"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary.update(
+        attempted_task_count=1,
+        episode_count=0,
+        successful_task_ids=[],
+        failed_task_count=1,
+        failed_task_ids=["1"],
+        completed_train_tasks_after=1,
+        total_terminal_reward=0.0,
+    )
+    event = json.loads(events_path.read_text(encoding="utf-8").splitlines()[0])
+    event.update(
+        event_type="TaskFailed",
+        error={"types": ["RuntimeError"], "fingerprint": "a" * 16},
+    )
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    events_path.write_text(f"{json.dumps(event)}\n", encoding="utf-8")
+
+    loaded = load_source_runs(
+        [run_path],
+        catalog=_catalog("1"),
+        memory_root=_memory_root(tmp_path, "s0"),
+    )
+
+    assert loaded.runs[0].summary["episode_count"] == 0
+    assert loaded.runs[0].summary["failed_task_ids"] == ("1",)
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [

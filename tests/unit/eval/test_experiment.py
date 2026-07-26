@@ -518,6 +518,71 @@ def test_rejects_incomplete_test_snapshot_telemetry(tmp_path: Path) -> None:
         )
 
 
+def test_train_pass_records_failed_task_and_keeps_attempt_denominator(
+    tmp_path: Path,
+) -> None:
+    artifacts = _artifacts(tmp_path)
+    run_path = artifacts["runs"][0]
+    summary_path = run_path / "fast_loop_summary.json"
+    events_path = run_path / "rollouts" / "events.jsonl"
+    manifest = json.loads(
+        (run_path / "manifest.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    rows = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    failed_task_id = manifest["task_ids"][0]
+    rewritten = []
+    for row in rows:
+        if row.get("task_id") != failed_task_id:
+            rewritten.append(row)
+        elif row.get("event_type") == "EpisodeStarted":
+            rewritten.append(
+                {
+                    **row,
+                    "event_type": "TaskFailed",
+                    "error": {
+                        "types": ["RuntimeError"],
+                        "fingerprint": "a" * 16,
+                    },
+                }
+            )
+    summary.update(
+        attempted_task_count=74,
+        episode_count=73,
+        failed_task_count=1,
+        failed_task_ids=[failed_task_id],
+        successful_task_ids=manifest["task_ids"][1:],
+        token_usage_episode_count=73,
+    )
+    _write_json(summary_path, summary)
+    _write_jsonl(events_path, rewritten)
+
+    report = build_stage8_experiment_report(
+        experiment_id="stage8-test",
+        evaluation_reports=artifacts["reports"],
+        train_run_dirs=artifacts["runs"],
+        dataset_dir=artifacts["dataset"],
+        training_dir=artifacts["training"],
+        memory_snapshot_path=artifacts["snapshot"].path,
+        expected_test_tasks=2,
+        expected_test_trials=2,
+        bootstrap_samples=100,
+    )
+
+    assert report["fast_loop"]["attempted_episode_count"] == 222
+    assert report["fast_loop"]["episode_count"] == 221
+    assert report["fast_loop"]["failed_task_count"] == 1
+    assert report["fast_loop"]["passes"][0]["failed_task_ids"] == [
+        failed_task_id
+    ]
+    assert report["fast_loop"]["passes"][0]["pass_at_1"] == pytest.approx(
+        36 / 74
+    )
+
+
 def test_rejects_incomplete_train_episode_stream(tmp_path: Path) -> None:
     artifacts = _artifacts(tmp_path)
     events_path = artifacts["runs"][0] / "rollouts" / "events.jsonl"
@@ -534,7 +599,7 @@ def test_rejects_incomplete_train_episode_stream(tmp_path: Path) -> None:
         filtered.append(row)
     _write_jsonl(events_path, list(reversed(filtered)))
 
-    with pytest.raises(ValueError, match="finished episode"):
+    with pytest.raises(ValueError, match="one outcome"):
         build_stage8_experiment_report(
             experiment_id="stage8-test",
             evaluation_reports=artifacts["reports"],

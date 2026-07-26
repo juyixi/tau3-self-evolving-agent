@@ -471,12 +471,39 @@ def _summarize_train_passes(
                 f"train pass {index} must contain all {TRAIN_TASK_COUNT} train tasks"
             )
         task_sets.append(set(task_ids))
+        failed_task_ids = summary.get("failed_task_ids", [])
+        if (
+            not isinstance(failed_task_ids, list)
+            or len(failed_task_ids) != len(set(failed_task_ids))
+            or not set(failed_task_ids) <= set(task_ids)
+        ):
+            raise ValueError(f"train pass {index} failed task IDs are invalid")
+        failed_task_set = set(failed_task_ids)
+        successful_task_ids = [
+            task_id for task_id in task_ids if task_id not in failed_task_set
+        ]
+        attempted_count = summary.get(
+            "attempted_task_count",
+            TRAIN_TASK_COUNT,
+        )
+        failed_count = summary.get(
+            "failed_task_count",
+            len(failed_task_ids),
+        )
         if (
             summary.get("run_id") != manifest.get("run_id")
-            or summary.get("episode_count") != TRAIN_TASK_COUNT
+            or attempted_count != TRAIN_TASK_COUNT
+            or summary.get("episode_count") != len(successful_task_ids)
+            or failed_count != len(failed_task_ids)
             or summary.get("memory_enabled") is not True
         ):
-            raise ValueError(f"train pass {index} episode count is invalid")
+            raise ValueError(f"train pass {index} task outcome counts are invalid")
+        recorded_successes = summary.get("successful_task_ids")
+        if (
+            recorded_successes is not None
+            and recorded_successes != successful_task_ids
+        ):
+            raise ValueError(f"train pass {index} successful task IDs are invalid")
         completed_before = summary.get("completed_train_tasks_before")
         completed_after = summary.get("completed_train_tasks_after")
         if (
@@ -504,17 +531,36 @@ def _summarize_train_passes(
             event for event in events
             if event.get("event_type") == "EpisodeFinished"
         ]
-        if [event.get("task_id") for event in finished] != task_ids:
+        failed = [
+            event for event in events
+            if event.get("event_type") == "TaskFailed"
+        ]
+        outcomes = [
+            event for event in events
+            if event.get("event_type") in {"EpisodeFinished", "TaskFailed"}
+        ]
+        if (
+            [event.get("task_id") for event in outcomes] != task_ids
+            or [event.get("task_id") for event in finished]
+            != successful_task_ids
+            or [event.get("task_id") for event in failed] != failed_task_ids
+        ):
             raise ValueError(
-                f"train pass {index} does not contain one finished episode per task"
+                f"train pass {index} does not contain one outcome per task"
             )
         token_count = summary.get("token_usage_episode_count")
         mean_tokens = summary.get("mean_agent_tokens")
         if (
-            token_count != TRAIN_TASK_COUNT
-            or not isinstance(mean_tokens, (int, float))
-            or isinstance(mean_tokens, bool)
-            or not math.isfinite(float(mean_tokens))
+            token_count != len(finished)
+            or (
+                finished
+                and (
+                    not isinstance(mean_tokens, (int, float))
+                    or isinstance(mean_tokens, bool)
+                    or not math.isfinite(float(mean_tokens))
+                )
+            )
+            or (not finished and mean_tokens is not None)
         ):
             raise ValueError(f"train pass {index} Agent token usage is incomplete")
         input_counts = _snapshot_counts(
@@ -535,16 +581,21 @@ def _summarize_train_passes(
                 "run_id": manifest["run_id"],
                 "seed": manifest.get("seed"),
                 "task_order": list(task_ids),
+                "attempted_task_count": TRAIN_TASK_COUNT,
                 "episode_count": len(finished),
+                "failed_task_count": len(failed),
+                "failed_task_ids": list(failed_task_ids),
                 "pass_at_1": (
-                    _mean(
-                        1.0 if event.get("final_reward") == 1.0 else 0.0
+                    sum(
+                        1.0
                         for event in finished
+                        if event.get("final_reward") == 1.0
                     )
-                    if finished
-                    else 0.0
+                    / TRAIN_TASK_COUNT
                 ),
-                "mean_agent_tokens": float(mean_tokens),
+                "mean_agent_tokens": (
+                    float(mean_tokens) if mean_tokens is not None else None
+                ),
                 "input_memory_snapshot_id": manifest.get(
                     "memory_snapshot_id"
                 ),
@@ -598,7 +649,11 @@ def _summarize_train_passes(
     return {
         "pass_count": len(paths),
         "tasks_per_pass": TRAIN_TASK_COUNT,
-        "episode_count": TRAIN_TASK_COUNT * len(paths),
+        "attempted_episode_count": TRAIN_TASK_COUNT * len(paths),
+        "episode_count": sum(row["episode_count"] for row in pass_rows),
+        "failed_task_count": sum(
+            row["failed_task_count"] for row in pass_rows
+        ),
         "passes": pass_rows,
         "snapshot_chain": [
             manifests[0]["memory_snapshot_id"],

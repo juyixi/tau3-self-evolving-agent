@@ -313,6 +313,49 @@ def test_build_evidence_reconstructs_episode_from_frozen_snapshot(
     assert episode.source_event_end == 8
 
 
+def test_build_evidence_skips_recorded_failed_task(
+    tmp_path: Path,
+) -> None:
+    source, memory_root, _ = _schema2_source_with_committed_write(tmp_path)
+    run_path = source.runs[0].path
+    manifest_path = run_path / "manifest.json"
+    summary_path = run_path / "fast_loop_summary.json"
+    events_path = run_path / "rollouts" / "events.jsonl"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    failed_event = {
+        **_common("run-a", "0", manifest["memory_snapshot_id"]),
+        "event_type": "TaskFailed",
+        "error": {"types": ["RuntimeError"], "fingerprint": "a" * 16},
+    }
+    manifest["task_ids"] = ["0", "1"]
+    summary.update(
+        attempted_task_count=2,
+        failed_task_count=1,
+        failed_task_ids=["0"],
+        completed_train_tasks_after=2,
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    events_path.write_text(
+        "".join(f"{json.dumps(event)}\n" for event in [failed_event, *events]),
+        encoding="utf-8",
+    )
+    loaded = load_source_runs(
+        [run_path],
+        catalog=_catalog("0", "1"),
+        memory_root=memory_root,
+    )
+
+    ledger = build_evidence(loaded, memory_root=memory_root)
+
+    assert [episode.task_id for episode in ledger.episodes] == ["1"]
+
+
 def test_build_evidence_accepts_selected_details_in_retrieval_order(
     tmp_path: Path,
 ) -> None:

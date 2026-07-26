@@ -19,6 +19,7 @@ from tau3_retail_evolver.io.jsonl import JsonlWriter
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import Retriever
+from tau3_retail_evolver.memory.types import MemoryStatus
 
 
 def _config(tmp_path: Path, *, memory_enabled: bool = True) -> SimpleNamespace:
@@ -265,7 +266,7 @@ def test_run_requested_tasks_disabled_uses_real_episode_without_memory_access(
         "run_due_maintenance",
         lambda **kwargs: (_ for _ in ()).throw(AssertionError("maintenance must not run")),
     )
-    results, maintenance_rounds = run_fast_loop._run_requested_tasks(
+    results, maintenance_rounds, failures = run_fast_loop._run_requested_tasks(
         task_ids=("task-1",),
         env_factory=lambda task_id: environments.append(FakeEnvironment()) or environments[-1],
         policy=policy,
@@ -286,6 +287,7 @@ def test_run_requested_tasks_disabled_uses_real_episode_without_memory_access(
     }
     assert environments
     assert maintenance_rounds == ()
+    assert failures == ()
     assert results[0].selected_memory_ids == ()
     assert results[0].written_memory_ids == ()
     assert [prompt.kind for prompt in policy.prompts] == ["action"]
@@ -747,9 +749,14 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
     assert manifest["rollout_options"]["memory_enabled"] is True
     assert manifest["rollout_options"]["memory_agent_id"] == "retail"
     assert summary == {
+        "attempted_task_count": 2,
         "completed_train_tasks_after": 27,
         "completed_train_tasks_before": 25,
         "episode_count": 2,
+        "failed_maintenance_rounds": [],
+        "failed_task_count": 0,
+        "failed_task_ids": [],
+        "failures": [],
         "input_memory_snapshot_id": manifest["memory_snapshot_id"],
         "maintenance_rounds_executed": [],
         "memory_enabled": True,
@@ -971,10 +978,15 @@ def test_disables_memory_dependencies_and_records_no_memory_provenance(
     assert json.loads(capsys.readouterr().out) == summary
 
 
-def test_episode_failure_preserves_events_without_success_summary(
+def test_episode_failure_is_recorded_and_next_task_continues(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    calls: list[str] = []
+
     def failing_episode(**kwargs: Any) -> EpisodeResult:
+        calls.append(kwargs["task_id"])
+        if kwargs["task_id"] == "task-2":
+            return _episode("task-2")
         context = kwargs["context"]
         context.event_writer.append(
             context.event("EpisodeFailed", kwargs["task_id"], error={"type": "RuntimeError"})
@@ -983,32 +995,142 @@ def test_episode_failure_preserves_events_without_success_summary(
 
     _install_main_dependencies(monkeypatch, tmp_path, episode_runner=failing_episode)
 
-    with pytest.raises(RuntimeError, match="episode failed"):
-        run_fast_loop.main(
-            [
-                "--split",
-                "train",
-                "--task-id",
-                "task-1",
-                "--run-id",
-                "learn-failed",
-                "--output-root",
-                str(tmp_path / "runs"),
-                "--project-root",
-                str(tmp_path / "isolated-project"),
-                "--qwen-base-url",
-                "http://qwen.invalid/v1",
-                "--model-revision",
-                "revision-a",
-                "--completed-train-tasks-before",
-                "0",
-            ]
-        )
+    returncode = run_fast_loop.main(
+        [
+            "--split",
+            "train",
+            "--task-id",
+            "task-1",
+            "--task-id",
+            "task-2",
+            "--run-id",
+            "learn-failed",
+            "--output-root",
+            str(tmp_path / "runs"),
+            "--project-root",
+            str(tmp_path / "isolated-project"),
+            "--qwen-base-url",
+            "http://qwen.invalid/v1",
+            "--model-revision",
+            "revision-a",
+            "--completed-train-tasks-before",
+            "0",
+        ]
+    )
 
     run_path = tmp_path / "runs" / "learn-failed"
+    summary = json.loads(
+        (run_path / "fast_loop_summary.json").read_text(encoding="utf-8")
+    )
+    events = [
+        json.loads(line)
+        for line in (run_path / "rollouts" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert returncode == 0
+    assert calls == ["task-1", "task-2"]
     assert (run_path / "manifest.json").is_file()
     assert (run_path / "rollouts" / "events.jsonl").is_file()
-    assert not (run_path / "fast_loop_summary.json").exists()
+    assert summary["attempted_task_count"] == 2
+    assert summary["episode_count"] == 1
+    assert summary["successful_task_ids"] == ["task-2"]
+    assert summary["failed_task_ids"] == ["task-1"]
+    assert summary["completed_train_tasks_after"] == 2
+    assert [event["event_type"] for event in events] == ["TaskFailed"]
+    assert events[0]["task_id"] == "task-1"
+    assert events[0]["error"]["types"] == ["RuntimeError"]
+    assert events[0]["error"]["messages"] == ["episode failed"]
+
+
+def test_episode_failure_deactivates_new_memory_before_continuing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    events: list[dict[str, Any]] = []
+
+    def episode(**kwargs: Any) -> EpisodeResult:
+        if kwargs["task_id"] == "task-1":
+            repository.add(
+                tier="tip",
+                content="Must not survive a failed task",
+                source_task_ids=("task-1",),
+                created_round=0,
+            )
+            raise RuntimeError("write failed after commit")
+        return _episode(kwargs["task_id"])
+
+    monkeypatch.setattr(run_fast_loop, "run_fast_loop_episode", episode)
+    monkeypatch.setattr(
+        run_fast_loop,
+        "run_due_maintenance",
+        lambda **kwargs: SimpleNamespace(executed=False),
+    )
+
+    results, _, failures = run_fast_loop._run_requested_tasks(
+        task_ids=("task-1", "task-2"),
+        env_factory=lambda task_id: object(),
+        policy=object(),
+        repository=repository,
+        retriever=Retriever(_UnusedEmbeddingProvider()),
+        fast_loop_config=FastLoopConfig(memory_enabled=True),
+        context=_run_context(tmp_path, events=events),
+        completed_train_tasks_before=0,
+        maintenance_period=30,
+    )
+
+    assert [result.task_id for result in results] == ["task-2"]
+    assert [failure["task_id"] for failure in failures] == ["task-1"]
+    assert repository.list() == []
+    discarded = repository.list(status=None)
+    assert len(discarded) == 1
+    assert discarded[0].status is MemoryStatus.RETIRED
+    assert events[0]["event_type"] == "TaskFailed"
+    assert events[0]["discarded_memory_ids"] == [discarded[0].id]
+
+
+def test_maintenance_failure_is_recorded_and_next_task_continues(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    events: list[dict[str, Any]] = []
+    maintenance_calls = 0
+
+    def maintenance(**kwargs: Any) -> SimpleNamespace:
+        nonlocal maintenance_calls
+        maintenance_calls += 1
+        if maintenance_calls == 1:
+            raise RuntimeError("maintenance failed")
+        return SimpleNamespace(executed=False)
+
+    monkeypatch.setattr(
+        run_fast_loop,
+        "run_fast_loop_episode",
+        lambda **kwargs: _episode(kwargs["task_id"]),
+    )
+    monkeypatch.setattr(run_fast_loop, "run_due_maintenance", maintenance)
+
+    results, rounds, failures = run_fast_loop._run_requested_tasks(
+        task_ids=("task-1", "task-2"),
+        env_factory=lambda task_id: object(),
+        policy=object(),
+        repository=repository,
+        retriever=Retriever(_UnusedEmbeddingProvider()),
+        fast_loop_config=FastLoopConfig(memory_enabled=True),
+        context=_run_context(tmp_path, events=events),
+        completed_train_tasks_before=0,
+        maintenance_period=1,
+    )
+
+    assert [result.task_id for result in results] == ["task-1", "task-2"]
+    assert rounds == ()
+    assert len(failures) == 1
+    assert failures[0]["stage"] == "maintenance"
+    assert len(events) == 1
+    assert events[0]["event_type"] == "MaintenanceTaskFailed"
+    assert events[0]["task_id"] == "maintenance-round-1"
 
 
 def test_thirty_successful_tasks_execute_exactly_maintenance_round_one(
@@ -1048,7 +1170,7 @@ def test_thirty_successful_tasks_execute_exactly_maintenance_round_one(
         return _episode(kwargs["task_id"], reward=0.0)
 
     monkeypatch.setattr(run_fast_loop, "run_fast_loop_episode", successful_episode)
-    results, executed_rounds = run_fast_loop._run_requested_tasks(
+    results, executed_rounds, failures = run_fast_loop._run_requested_tasks(
         task_ids=tuple(f"task-{index}" for index in range(1, 31)),
         env_factory=lambda task_id: object(),
         policy=policy,
@@ -1065,6 +1187,7 @@ def test_thirty_successful_tasks_execute_exactly_maintenance_round_one(
     starts = [event for event in events if event["event_type"] == "MaintenanceStarted"]
     assert len(results) == 30
     assert executed_rounds == (1,)
+    assert failures == ()
     assert policy.calls == 1
     assert state["completed_rounds"] == [1]
     assert len(starts) == 1
