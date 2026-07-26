@@ -27,7 +27,7 @@ def _episode(task_id: str) -> EpisodeResult:
     )
 
 
-def test_parser_defaults_to_full_four_trial_test_evaluation() -> None:
+def test_parser_defaults_to_full_single_trial_test_evaluation() -> None:
     args = evaluate_retail.parse_args(
         [
             "--protocol",
@@ -41,7 +41,7 @@ def test_parser_defaults_to_full_four_trial_test_evaluation() -> None:
 
     assert args.split == "test"
     assert args.task_ids is None
-    assert args.num_trials == 4
+    assert args.num_trials == 1
     assert args.seeds is None
     assert args.official_base_reproduction is False
 

@@ -117,9 +117,14 @@ class SlowLoopConfig(_ConfigModel):
 
 
 class NLAssertionsConfig(_ConfigModel):
-    model: str = "openrouter/openai/gpt-4.1"
-    model_args: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0})
-    api_key_env: str = "OPENROUTER_API_KEY"
+    model: str = "deepseek/deepseek-v4-pro"
+    model_args: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "temperature": 0.0,
+            "thinking": {"type": "disabled"},
+        }
+    )
+    api_key_env: str = "DEEPSEEK_API_KEY"
 
     @field_validator("model")
     @classmethod

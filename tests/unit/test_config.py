@@ -84,16 +84,19 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.training.target_modules == "all-linear"
     assert config.pipeline.iteration_task_count == 74
     assert config.pipeline.shuffle_train_tasks is True
-    assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
-    assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}
-    assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
+    assert config.evaluation.nl_assertions.model == "deepseek/deepseek-v4-pro"
+    assert config.evaluation.nl_assertions.model_args == {
+        "temperature": 0.0,
+        "thinking": {"type": "disabled"},
+    }
+    assert config.evaluation.nl_assertions.api_key_env == "DEEPSEEK_API_KEY"
 
 
-def test_autodl_config_only_replaces_the_region_blocked_nl_evaluator() -> None:
+def test_autodl_config_matches_the_default_deepseek_evaluator() -> None:
     default = load_config(PROJECT_ROOT / "configs" / "default.yaml")
     autodl = load_config(PROJECT_ROOT / "configs" / "autodl-deepseek-eval.yaml")
 
-    assert autodl.model_copy(update={"evaluation": default.evaluation}) == default
+    assert autodl == default
     assert autodl.evaluation.nl_assertions.model == "deepseek/deepseek-v4-pro"
     assert autodl.evaluation.nl_assertions.model_args == {
         "temperature": 0.0,
@@ -171,9 +174,12 @@ def test_project_config_defaults_the_nl_assertion_evaluator() -> None:
         }
     )
 
-    assert config.evaluation.nl_assertions.model == "openrouter/openai/gpt-4.1"
-    assert config.evaluation.nl_assertions.model_args == {"temperature": 0.0}
-    assert config.evaluation.nl_assertions.api_key_env == "OPENROUTER_API_KEY"
+    assert config.evaluation.nl_assertions.model == "deepseek/deepseek-v4-pro"
+    assert config.evaluation.nl_assertions.model_args == {
+        "temperature": 0.0,
+        "thinking": {"type": "disabled"},
+    }
+    assert config.evaluation.nl_assertions.api_key_env == "DEEPSEEK_API_KEY"
 
 
 def test_load_config_applies_typed_overrides() -> None:
@@ -191,7 +197,10 @@ def test_load_config_applies_typed_overrides() -> None:
     assert config.rollout.max_episode_steps == 24
     assert config.training.seed == 7
     assert config.evaluation.nl_assertions.model == "openrouter/anthropic/claude-sonnet-4"
-    assert config.evaluation.nl_assertions.model_args == {"temperature": 0.25}
+    assert config.evaluation.nl_assertions.model_args == {
+        "temperature": 0.25,
+        "thinking": {"type": "disabled"},
+    }
     assert config.evaluation.nl_assertions.api_key_env == "TEST_OPENROUTER_API_KEY"
 
 

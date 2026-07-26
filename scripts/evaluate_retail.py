@@ -75,7 +75,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--split", choices=("test",), default="test")
     parser.add_argument("--official-base-reproduction", action="store_true")
     parser.add_argument("--task-id", dest="task_ids", action="append")
-    parser.add_argument("--num-trials", type=int, default=4)
+    parser.add_argument("--num-trials", type=int, default=1)
     parser.add_argument("--seed", dest="seeds", type=int, action="append")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output-root", type=Path, default=Path("runs"))

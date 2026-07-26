@@ -61,7 +61,9 @@ pipeline:
   shuffle_train_tasks: true
 evaluation:
   nl_assertions:
-    model: openrouter/openai/gpt-4.1
+    model: deepseek/deepseek-v4-pro
     model_args:
       temperature: 0.0
-    api_key_env: OPENROUTER_API_KEY
+      thinking:
+        type: disabled
+    api_key_env: DEEPSEEK_API_KEY

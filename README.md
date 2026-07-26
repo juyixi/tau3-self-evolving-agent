@@ -73,7 +73,7 @@ Fast Loop 和 Slow Loop 使用同一个模型谱系。一次 OPD 数据构建只
 - `base`：只用于显式的官方全集复现，不能进入训练。
 - 项目不从 `train` 额外切分 dev。开发期依靠单元测试、合成数据审计和小规模 train smoke 验证管线。
 
-环境适配器规范化 `AgentGymEnv` 的 reset/step/close 生命周期，并保留官方 terminal reward 和 `reward_info`。默认非 solo 用户模拟器为 `deepseek/deepseek-v4-pro`；默认 NL assertion evaluator 为 `openrouter/openai/gpt-4.1`。
+环境适配器规范化 `AgentGymEnv` 的 reset/step/close 生命周期，并保留官方 terminal reward 和 `reward_info`。默认非 solo 用户模拟器与 NL assertion evaluator 均为 `deepseek/deepseek-v4-pro`。
 
 ### 四层 Memory
 
@@ -206,7 +206,7 @@ S1 由未更新的基础模型在全部 74 个官方 train task 上连续运行�
 - episode step count、tool/response parse-error rate。
 - checkpoint、模型 revision、Tau2 commit、split hash、精确 test task IDs、任务顺序、用户模拟器、seed 和 Memory 协议。
 
-单任务或五任务验证可以只运行一个 trial；最终报告默认每个 test task 运行四个带 seed 的 trials。只有控制变量完全一致的 runs 才能进入横向比较，主要差值同时给出按 task 聚类的 paired bootstrap 95% CI。
+主实验默认每个 test task 运行一个 seed 为 `42` 的 trial，即每个 cell 共 40 个 episode。只有控制变量完全一致的 runs 才能进入横向比较，主要差值同时给出按 task 聚类的 paired bootstrap 95% CI。
 
 ## 使用指南
 
@@ -242,12 +242,11 @@ python -m pip install -e ".[training]"
 
 ### 2. 配置模型服务与凭证
 
-Rollout 使用 Qwen 的 OpenAI-compatible endpoint。默认用户模拟器和 NL evaluator 分别读取 DeepSeek 与 OpenRouter 凭证。PowerShell 示例：
+Rollout 使用 Qwen 的 OpenAI-compatible endpoint。默认用户模拟器和 NL evaluator 均读取 DeepSeek 凭证。PowerShell 示例：
 
 ```powershell
 $env:QWEN_BASE_URL = "http://127.0.0.1:8000/v1"
 $env:QWEN_API_KEY = "EMPTY"
-$env:OPENROUTER_API_KEY = Read-Host "OpenRouter API Key"
 $env:DEEPSEEK_API_KEY = Read-Host "DeepSeek API Key"
 $env:QWEN_MODEL_REVISION = "<immutable-qwen-revision>"
 ```
@@ -453,7 +452,7 @@ python -m scripts.run_iteration `
 
 Stage 8 先用基础 Qwen3.5-9B 在全部 74 个 train task 上连续运行三次 Fast Loop，得到冻结 Memory snapshot S1；再用三个 pass 的全部 episode 构建 OPD 数据集并训练一次 LoRA checkpoint C1。详细命令见 [Retail 留出集评测协议](docs/evaluation_protocol.md)。
 
-四组主实验为：A 基础模型无 Memory、B 基础模型加 S1、C checkpoint C1 加 S1、D checkpoint C1 无 Memory。不传 `--task-id` 时按官方顺序运行全部 40 个 test task；不传 `--num-trials` 时每个任务运行四个 seed trial。单组入口示例：
+四组主实验为：A 基础模型无 Memory、B 基础模型加 S1、C checkpoint C1 加 S1、D checkpoint C1 无 Memory。不传 `--task-id` 时按官方顺序运行全部 40 个 test task；不传 `--num-trials` 时每个任务运行一个 seed 为 `42` 的 trial。单组入口示例：
 
 ```powershell
 python -m scripts.evaluate_retail `

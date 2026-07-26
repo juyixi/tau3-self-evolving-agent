@@ -123,7 +123,7 @@ python -m scripts.train_opd_lora `
 
 ## 4. 四组 Test 评测
 
-每个 cell 默认运行 40 个 test task 和四个 trial，即每组 160 个 episode。四组必须共享完全相同的 task order、seed `42/43/44/45`、Tau2 commit、split hash、用户模拟器、NL evaluator、生成参数和最大步数。
+每个 cell 默认运行 40 个 test task 和一个 trial，即每组 40 个 episode。四组必须共享完全相同的 task order、seed `42`、Tau2 commit、split hash、用户模拟器、NL evaluator、生成参数和最大步数。用户模拟器与 NL evaluator 均固定为 `deepseek/deepseek-v4-pro`。
 
 Cell A：
 
@@ -236,7 +236,7 @@ python -m scripts.build_stage8_report `
   --output-dir runs/stage8-main-report
 ```
 
-入口先校验完整 2×2 合同、四组各 `40×4` episode 与完整 Token
+入口先校验完整 2×2 合同、四组各 `40×1` episode 与完整 Token
 telemetry、三次 74-task pass、snapshot chain、dataset audit/source policy、
 training manifest 以及 C/D 的 checkpoint 和 adapter revision，再生成：
 
@@ -264,6 +264,6 @@ Stage 8 最终 gate 只有在以下条件全部满足后才通过：
 
 - 三个真实 74-task train pass 完成并产生 S1。
 - OPD 数据审计和一次真实 Slow Loop 训练完成。
-- A/B/C/D 四组各 40 task × 4 trial 完成。
+- A/B/C/D 四组各 40 task × 1 trial 完成。
 - 统一报告通过 lineage/control 校验并生成 JSON 与 HTML 图表。
 - 不存在任何 test artifact 返回训练流程的路径。

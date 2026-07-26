@@ -551,7 +551,7 @@
 
 - [x] 保留每个 episode 的 tau2 reward 和解析后的 `reward_info`，不得重新实现官方 evaluator。
 - [x] 报告 task count、completed count、mean reward/success、逐任务结果、failure category、step count、parse-error rate 和配置的重复 trial。
-- [x] 最终报告默认每个任务运行四个带 seed 的 trial；允许显式执行单 trial smoke。
+- [x] 最终报告默认每个任务运行一个 seed 为 `42` 的 trial。
 - [x] 记录 checkpoint、base model、tau2 commit、split hash、精确的 40 个 test ID、task order、用户模拟器、seed、protocol 和 memory snapshot。
 - [x] 只添加 `--split test`。单独的 `--official-base-reproduction` flag 可以运行 `base`，但必须写入独立标记的报告。
 - [x] 重新运行测试并确认 PASS。
@@ -579,11 +579,11 @@
 - [x] 只在主流程稳定后添加 selection、writing 和 maintenance ablation。
 - [x] 将 protocol、adapter、checkpoint 和 Memory snapshot 作为处理变量；只比较 tau2 commit、split hash、基础模型 revision、用户模拟器、NL evaluator、task order、seed set、trial 数和最大步数完全相同的 run。
 - [x] 记录：在不使用 dev 的设计中，test 结果绝不用于超参数调整或 checkpoint 选择。
-- [ ] 真实运行三个 74-task train pass、一次 OPD Slow Loop 和 A/B/C/D 各 `40 task × 4 trial`。
+- [ ] 真实运行三个 74-task train pass、一次 OPD Slow Loop 和 A/B/C/D 各 `40 task × 1 trial`。
 - [ ] 运行 `pytest -v`、所有已启用 integration test、dataset audit 和 manifest lineage audit。
 - [x] 提交为 `docs: finalize tau3 retail opd evaluation protocol`。
 
-**阶段 8 gate：** 三个真实 74-task train pass、一次真实 OPD 训练和 A/B/C/D 各 `40 task × 4 trial` 全部完成；统一报告通过 lineage/control 校验、生成 JSON 与 HTML 图表，并且不存在从 test artifact 返回训练流程的路径。
+**阶段 8 gate：** 三个真实 74-task train pass、一次真实 OPD 训练和 A/B/C/D 各 `40 task × 1 trial` 全部完成；统一报告通过 lineage/control 校验、生成 JSON 与 HTML 图表，并且不存在从 test artifact 返回训练流程的路径。
 
 ---
 
