@@ -25,7 +25,7 @@ MODEL_REVISION = "model-a"
 ADAPTER_REVISION = "adapter-a"
 
 
-def test_two_continuous_schema2_runs_build_and_audit_four_opd_views(
+def test_repeated_task_passes_build_and_audit_four_opd_views(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -210,7 +210,10 @@ def _write_two_continuous_runs(
         episode_specs.append(spec)
 
     run_a_specs = episode_specs[:15]
-    run_b_specs = episode_specs[15:]
+    run_b_specs = [
+        {**spec, "task_id": task_ids[index]}
+        for index, spec in enumerate(episode_specs[15:])
+    ]
     run_a = _write_run(
         project,
         run_id="run-a",

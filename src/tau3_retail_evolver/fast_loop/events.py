@@ -32,6 +32,7 @@ class RunContext:
     memory_snapshot_id: str | None
     seed: int
     event_writer: EventWriter
+    trial_index: int | None = None
     mode: RunMode = RunMode.BASELINE
     task_groups: Mapping[str, str] = field(default_factory=dict)
     temperature: float = 1.0
@@ -42,7 +43,7 @@ class RunContext:
         return self.task_groups.get(task_id, self.default_task_group)
 
     def event(self, event_type: str, task_id: str, **payload: Any) -> dict[str, Any]:
-        return {
+        event = {
             "schema_version": SCHEMA_VERSION,
             "event_type": event_type,
             "run_id": self.run_id,
@@ -57,3 +58,6 @@ class RunContext:
             "seed": self.seed,
             **payload,
         }
+        if self.trial_index is not None:
+            event["trial_index"] = self.trial_index
+        return event

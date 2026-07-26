@@ -157,7 +157,7 @@ def _materialize(request: DatasetBuildRequest) -> _MaterializedDataset:
     )
     task_groups = RetailTaskGroups.from_file(
         runtime.retail_tasks_path,
-        task_ids=task_ids,
+        task_ids=tuple(dict.fromkeys(task_ids)),
     )
     for episode in ledger.episodes:
         if episode.task_group != task_groups.signature_for(episode.task_id):

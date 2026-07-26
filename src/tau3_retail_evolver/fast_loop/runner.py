@@ -24,6 +24,7 @@ from tau3_retail_evolver.fast_loop.prompts import (
     build_write_prompt,
     project_public_context,
 )
+from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate, Retriever
 from tau3_retail_evolver.memory.tier_contracts import (
@@ -56,6 +57,16 @@ class LifecycleResponse:
     raw_output: str
     sampling_params: Mapping[str, float]
     latency_s: float
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("prompt_tokens", self.prompt_tokens),
+            ("completion_tokens", self.completion_tokens),
+        ):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"{name} must be a non-negative integer or None")
 
 
 class FastLoopPolicy(Protocol):
@@ -87,6 +98,13 @@ class EpisodeResult:
     selected_memory_ids: tuple[str, ...]
     written_memory_ids: tuple[str, ...]
     truncated: bool
+    parse_error_count: int = 0
+    response_parse_error_count: int = 0
+    response_count: int = 0
+    completed: bool = True
+    project_truncated: bool = False
+    agent_prompt_tokens: int | None = None
+    agent_completion_tokens: int | None = None
 
 
 DecisionT = TypeVar("DecisionT", bound=Decision)
@@ -119,6 +137,41 @@ def run_fast_loop_episode(
         retriever=retriever,
     )
     _require_learning_context(context)
+    return _run_lifecycle_episode(
+        task_id=task_id,
+        task_instruction=task_instruction,
+        environment=environment,
+        policy=policy,
+        repository=repository,
+        retriever=retriever,
+        config=config,
+        context=context,
+        write_memory=config.memory_enabled,
+        memory_disabled_reason="config",
+    )
+
+
+def _run_lifecycle_episode(
+    *,
+    task_id: str,
+    task_instruction: str,
+    environment: FastLoopEnvironment,
+    policy: FastLoopPolicy,
+    repository: MemoryRepository | ReadOnlyMemoryRepository | None,
+    retriever: Retriever | None,
+    config: FastLoopConfig,
+    context: RunContext,
+    write_memory: bool,
+    memory_disabled_reason: str,
+) -> EpisodeResult:
+    if type(write_memory) is not bool:
+        raise ValueError("write_memory must be a bool")
+    if write_memory and (
+        not config.memory_enabled
+        or not isinstance(repository, MemoryRepository)
+        or repository.is_read_only
+    ):
+        raise ValueError("Memory writes require an enabled mutable repository")
     write_failure_emitted = False
     try:
         reset = environment.reset(seed=context.seed)
@@ -143,6 +196,11 @@ def run_fast_loop_episode(
             tools=public_tools,
         )
 
+        response_parse_error_count = 0
+        response_count = 0
+        agent_prompt_tokens = 0
+        agent_completion_tokens = 0
+        token_usage_complete = True
         if config.memory_enabled:
             assert repository is not None
             assert retriever is not None
@@ -187,6 +245,19 @@ def run_fast_loop_episode(
                 candidate_ids=[candidate.memory_id for candidate in candidates],
                 label="selection",
             )
+            response_count += 1
+            if selection_audit["error"] is not None:
+                response_parse_error_count += 1
+            (
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+            ) = _accumulate_token_usage(
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+                selection_audit,
+            )
             selected_ids = selection.memory_ids
             candidates_by_id = {
                 candidate.memory_id: candidate for candidate in candidates
@@ -208,11 +279,18 @@ def run_fast_loop_episode(
                 repair_used=selection_audit["repaired_output"] is not None,
                 sampling_params=selection_audit["sampling_params"],
                 latency_s=selection_audit["latency_s"],
+                prompt_tokens=selection_audit["prompt_tokens"],
+                completion_tokens=selection_audit["completion_tokens"],
             )
         else:
             selected: list[MemoryCandidate] = []
             selected_ids = ()
-            _emit(context, task_id, "MemoryDisabled", reason="config")
+            _emit(
+                context,
+                task_id,
+                "MemoryDisabled",
+                reason=memory_disabled_reason,
+            )
 
         observation = public_observation
         last_nonblank_observation = public_observation
@@ -222,6 +300,8 @@ def run_fast_loop_episode(
         final_reward = 0.0
         truncated = False
         project_truncated = False
+        completed = False
+        parse_error_count = 0
         steps = 0
         while steps < config.max_episode_steps:
             action_prompt = build_action_prompt(
@@ -238,6 +318,19 @@ def run_fast_loop_episode(
                 ActionDecision,
                 label="action",
             )
+            response_count += 1
+            if action_audit["error"] is not None:
+                response_parse_error_count += 1
+            (
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+            ) = _accumulate_token_usage(
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+                action_audit,
+            )
             _emit(
                 context,
                 task_id,
@@ -248,9 +341,13 @@ def run_fast_loop_episode(
                 sampling_params=action_audit["sampling_params"],
                 latency_s=action_audit["latency_s"],
                 repair_used=action_audit["repaired_output"] is not None,
+                prompt_tokens=action_audit["prompt_tokens"],
+                completion_tokens=action_audit["completion_tokens"],
             )
             step = environment.step(action.action)
             public_info = _public_step_info(step.info)
+            if public_info.get("parse_error") not in (None, "", False):
+                parse_error_count += 1
             _emit(
                 context,
                 task_id,
@@ -283,6 +380,7 @@ def run_fast_loop_episode(
                 last_nonblank_observation = observation
             final_reward = step.reward
             if step.done:
+                completed = True
                 terminal_evaluation = _terminal_json_mapping(
                     step.info, "reward_info", task_id
                 )
@@ -308,7 +406,7 @@ def run_fast_loop_episode(
         )
 
         written_ids: tuple[str, ...] = ()
-        if config.memory_enabled:
+        if write_memory:
             assert repository is not None
             write_prompt = build_write_prompt(
                 task_instruction=public_task_instruction,
@@ -332,6 +430,19 @@ def run_fast_loop_episode(
                 ),
                 label="write",
             )
+            response_count += 1
+            if write_audit["error"] is not None:
+                response_parse_error_count += 1
+            (
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+            ) = _accumulate_token_usage(
+                agent_prompt_tokens,
+                agent_completion_tokens,
+                token_usage_complete,
+                write_audit,
+            )
             proposals = [
                 _write_proposal(
                     memory,
@@ -352,6 +463,8 @@ def run_fast_loop_episode(
                 repair_used=write_audit["repaired_output"] is not None,
                 sampling_params=write_audit["sampling_params"],
                 latency_s=write_audit["latency_s"],
+                prompt_tokens=write_audit["prompt_tokens"],
+                completion_tokens=write_audit["completion_tokens"],
             )
             try:
                 written_ids, replayed_ids = _persist_proposals(repository, proposals)
@@ -389,6 +502,17 @@ def run_fast_loop_episode(
             selected_memory_ids=selected_ids,
             written_memory_ids=written_ids,
             truncated=truncated,
+            parse_error_count=parse_error_count,
+            response_parse_error_count=response_parse_error_count,
+            response_count=response_count,
+            completed=completed,
+            project_truncated=project_truncated,
+            agent_prompt_tokens=(
+                agent_prompt_tokens if token_usage_complete else None
+            ),
+            agent_completion_tokens=(
+                agent_completion_tokens if token_usage_complete else None
+            ),
         )
     except BaseException as error:
         if not write_failure_emitted:
@@ -499,6 +623,7 @@ def _generate_decision(
     label: str,
 ) -> tuple[DecisionT, dict[str, Any]]:
     response = policy.generate(prompt)
+    responses = [response]
     result = parse_decision(
         response.raw_output,
         decision_type,
@@ -509,6 +634,7 @@ def _generate_decision(
     initial_error = result.error
     if result.decision is None:
         repair = policy.repair(prompt, response.raw_output, result.error or "invalid output")
+        responses.append(repair)
         repaired_output = repair.raw_output
         result = parse_decision(
             repair.raw_output,
@@ -518,13 +644,47 @@ def _generate_decision(
         )
     if result.decision is None:
         raise ValueError(f"invalid {label} decision after repair: {result.error}")
+    prompt_tokens, completion_tokens = _combined_token_usage(responses)
     return result.decision, {
         "raw_output": response.raw_output,
         "repaired_output": repaired_output,
         "error": initial_error,
         "sampling_params": dict(response.sampling_params),
-        "latency_s": response.latency_s,
+        "latency_s": sum(item.latency_s for item in responses),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
     }
+
+
+def _combined_token_usage(
+    responses: Sequence[LifecycleResponse],
+) -> tuple[int | None, int | None]:
+    if any(
+        response.prompt_tokens is None or response.completion_tokens is None
+        for response in responses
+    ):
+        return None, None
+    return (
+        sum(response.prompt_tokens or 0 for response in responses),
+        sum(response.completion_tokens or 0 for response in responses),
+    )
+
+
+def _accumulate_token_usage(
+    prompt_total: int,
+    completion_total: int,
+    complete: bool,
+    audit: Mapping[str, Any],
+) -> tuple[int, int, bool]:
+    prompt_tokens = audit["prompt_tokens"]
+    completion_tokens = audit["completion_tokens"]
+    if prompt_tokens is None or completion_tokens is None:
+        return prompt_total, completion_total, False
+    return (
+        prompt_total + prompt_tokens,
+        completion_total + completion_tokens,
+        complete,
+    )
 
 
 def _validate_step_boundary(step: StepResult) -> None:

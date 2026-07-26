@@ -188,9 +188,15 @@ def _source_task_ids(
         ):
             _error(errors, "manifest_invalid", "source run task IDs are invalid")
             continue
+        if len(raw_task_ids) != len(set(raw_task_ids)):
+            _error(
+                errors,
+                "duplicate_source_identity",
+                f"source run {run_id!r} contains a duplicate task identity",
+            )
         task_ids.extend(raw_task_ids)
-    if len(run_ids) != len(set(run_ids)) or len(task_ids) != len(set(task_ids)):
-        _error(errors, "duplicate_source_identity", "source run or task identity is duplicated")
+    if len(run_ids) != len(set(run_ids)):
+        _error(errors, "duplicate_source_identity", "source run identity is duplicated")
     if train_ids and not set(task_ids) <= train_ids:
         _error(errors, "non_train_source", "source run contains a non-train task")
     return set(task_ids)
@@ -315,9 +321,11 @@ def _audit_source_evidence(
         groups = RetailTaskGroups.from_file(
             tasks_path,
             task_ids=tuple(
-                task_id
-                for source in source_set.runs
-                for task_id in source.manifest["task_ids"]
+                dict.fromkeys(
+                    task_id
+                    for source in source_set.runs
+                    for task_id in source.manifest["task_ids"]
+                )
             ),
         )
         if any(

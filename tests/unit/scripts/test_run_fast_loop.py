@@ -499,6 +499,7 @@ def test_requires_explicit_completed_train_tasks_before() -> None:
         (("--run-id", "../escape"), "run ID"),
         (("--iteration", "-1"), "iteration"),
         (("--completed-train-tasks-before", "-1"), "completed"),
+        (("--seed", "-1"), "seed"),
         (("--model-revision", "  "), "model revision"),
         (("--adapter-revision", "\t"), "adapter revision"),
     ),
@@ -543,6 +544,34 @@ def test_requires_unique_official_train_task_ids() -> None:
         run_fast_loop._require_explicit_train_tasks(("task-1", "task-1"), ("task-1",))
     with pytest.raises(ValueError, match="official train split"):
         run_fast_loop._require_explicit_train_tasks(("test-task",), ("task-1",))
+
+
+def test_all_train_tasks_uses_seeded_reproducible_shuffle() -> None:
+    official = tuple(str(index) for index in range(74))
+
+    first = run_fast_loop._resolve_train_tasks(
+        None,
+        all_train_tasks=True,
+        official_train_task_ids=official,
+        seed=42,
+    )
+    repeated = run_fast_loop._resolve_train_tasks(
+        None,
+        all_train_tasks=True,
+        official_train_task_ids=official,
+        seed=42,
+    )
+    changed = run_fast_loop._resolve_train_tasks(
+        None,
+        all_train_tasks=True,
+        official_train_task_ids=official,
+        seed=43,
+    )
+
+    assert first == repeated
+    assert first != changed
+    assert set(first) == set(official)
+    assert len(first) == 74
 
 
 def test_requires_qwen_base_url_after_catalog_verification(
@@ -725,6 +754,27 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         "maintenance_rounds_executed": [],
         "memory_enabled": True,
         "output_memory_snapshot_id": summary["output_memory_snapshot_id"],
+        "input_memory_counts": {
+            "trajectory": 0,
+            "tip": 0,
+            "skill": 0,
+            "tool": 0,
+        },
+        "output_memory_counts": {
+            "trajectory": 0,
+            "tip": 2,
+            "skill": 0,
+            "tool": 0,
+        },
+        "memory_item_count": 2,
+        "memory_selection_count": 0,
+        "unique_reused_memory_count": 0,
+        "memory_reuse_coverage": 0.0,
+        "token_usage_episode_count": 0,
+        "total_agent_prompt_tokens": 0,
+        "total_agent_completion_tokens": 0,
+        "total_agent_tokens": 0,
+        "mean_agent_tokens": None,
         "run_id": "learn-001",
         "successful_task_ids": ["task-1", "task-2"],
         "total_terminal_reward": 2.0,

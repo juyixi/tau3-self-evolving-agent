@@ -204,7 +204,6 @@ def test_source_run_fails_closed_on_invalid_artifacts(
         ("adapter_mismatch", "policy lineage"),
         ("snapshot_gap", "snapshot continuity"),
         ("task_range_gap", "task range continuity"),
-        ("duplicate_task", "duplicate task ID"),
     ],
 )
 def test_source_run_set_fails_closed_on_invalid_lineage(
@@ -215,14 +214,13 @@ def test_source_run_set_fails_closed_on_invalid_lineage(
     first = _write_source_run(
         tmp_path, "run-a", task_id="1", before=0, input_snapshot="s0", output_snapshot="s1"
     )
-    second_task = "1" if mutation == "duplicate_task" else "2"
     second_before = 2 if mutation == "task_range_gap" else 1
     second_input = "sx" if mutation == "snapshot_gap" else "s1"
     second_adapter = "adapter-b" if mutation == "adapter_mismatch" else "adapter-a"
     second = _write_source_run(
         tmp_path,
         "run-b",
-        task_id=second_task,
+        task_id="2",
         before=second_before,
         input_snapshot=second_input,
         output_snapshot="s2",
@@ -235,6 +233,36 @@ def test_source_run_set_fails_closed_on_invalid_lineage(
             catalog=_catalog("1", "2"),
             memory_root=_memory_root(tmp_path, "s0", "s1", "s2", "sx"),
         )
+
+
+def test_source_runs_allow_the_same_task_in_distinct_on_policy_passes(
+    tmp_path: Path,
+) -> None:
+    first = _write_source_run(
+        tmp_path,
+        "run-pass-1",
+        task_id="1",
+        before=0,
+        input_snapshot="s0",
+        output_snapshot="s1",
+    )
+    second = _write_source_run(
+        tmp_path,
+        "run-pass-2",
+        task_id="1",
+        before=1,
+        input_snapshot="s1",
+        output_snapshot="s2",
+    )
+
+    loaded = load_source_runs(
+        [first, second],
+        catalog=_catalog("1"),
+        memory_root=_memory_root(tmp_path, "s0", "s1", "s2"),
+    )
+
+    assert [run.run_id for run in loaded.runs] == ["run-pass-1", "run-pass-2"]
+    assert [run.manifest["task_ids"] for run in loaded.runs] == [("1",), ("1",)]
 
 
 def test_source_runs_reject_evaluation_quarantine_paths(tmp_path: Path) -> None:

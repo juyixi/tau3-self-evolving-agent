@@ -206,11 +206,14 @@ class OpenAICompatibleQwenPolicy(Policy):
             raise ValueError("Qwen tool-call parser must return text or None")
         raw_output = _raw_output(completion)
         parsed_action = Tau2ActionCodec.decode(tool_call or raw_output, _tool_names(prompt.tools))
+        prompt_tokens, completion_tokens = _completion_token_usage(completion)
         return DecisionResponse(
             raw_output=raw_output,
             parsed_action=parsed_action,
             sampling_params={"temperature": request.temperature, "top_p": request.top_p},
             latency_s=latency_s,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
 
 
@@ -301,6 +304,7 @@ class OpenAICompatibleFastLoopPolicy:
             raw_output = self._action_output(completion, tools)
         else:
             raw_output = _fast_loop_non_action_output(completion)
+        prompt_tokens, completion_tokens = _completion_token_usage(completion)
         return LifecycleResponse(
             raw_output=raw_output,
             sampling_params={
@@ -308,6 +312,8 @@ class OpenAICompatibleFastLoopPolicy:
                 "top_p": self._top_p,
             },
             latency_s=latency_s,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
 
     def _action_output(
@@ -404,6 +410,29 @@ def _raw_output(completion: object) -> str:
     if not isinstance(content, str):
         raise ValueError("Qwen completion has no text content")
     return content
+
+
+def _completion_token_usage(
+    completion: object,
+) -> tuple[int | None, int | None]:
+    usage = (
+        completion.get("usage")
+        if isinstance(completion, Mapping)
+        else getattr(completion, "usage", None)
+    )
+    if usage is None:
+        return None, None
+    values = []
+    for field in ("prompt_tokens", "completion_tokens"):
+        value = (
+            usage.get(field)
+            if isinstance(usage, Mapping)
+            else getattr(usage, field, None)
+        )
+        if type(value) is not int or value < 0:
+            raise ValueError(f"completion usage {field} must be a non-negative integer")
+        values.append(value)
+    return values[0], values[1]
 
 
 def _fast_loop_action_raw_output(completion: object) -> str:

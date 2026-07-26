@@ -45,12 +45,13 @@ Fast Loop 和 Slow Loop 使用同一个模型谱系。一次 OPD 数据构建只
 | `configs/default.yaml` | Tau2、模型、LoRA、rollout、Memory、归因、训练和评估器默认配置 |
 | `src/tau3_retail_evolver/envs/` | Tau2 Retail 运行时探测、任务目录、split guard 和 Gym 适配器 |
 | `src/tau3_retail_evolver/evaluation/` | Tau2 NL assertion evaluator 接入与 provider 配置 |
+| `src/tau3_retail_evolver/eval/` | 留出集隔离、static/streaming runner、官方指标聚合和受控报告比较 |
 | `src/tau3_retail_evolver/memory/` | 四层 JSON Memory、Embedding、检索、原子写入、快照和维护操作 |
 | `src/tau3_retail_evolver/fast_loop/` | Baseline/Fast Loop prompt、决策、动作编解码、生命周期事件和维护编排 |
 | `src/tau3_retail_evolver/slow_loop/` | Evidence、任务分组、归因、泄漏检查、OPD 数据、token 对齐、KL 和 Trainer |
 | `src/tau3_retail_evolver/pipeline/` | train-only task sampling、六态 iteration、artifact 哈希恢复和 checkpoint/Memory promotion |
 | `src/tau3_retail_evolver/models/` | OpenAI-compatible Qwen policy、Qwen3.5 Transformers loader 和 PEFT LoRA 生命周期 |
-| `scripts/` | Baseline、Fast Loop、OPD 数据构建/审计、LoRA 训练和完整 iteration 入口 |
+| `scripts/` | Baseline、Fast Loop、OPD 数据构建/审计、LoRA 训练、iteration 和正式评测入口 |
 | `tools/preflight/` | Tau2 Retail 环境与固定 revision 预检工具 |
 | `tests/` | 单元测试、合成端到端测试以及显式开启的真实 Tau2/Qwen GPU 集成测试 |
 | `docs/` | 分阶段设计、实施计划、验证说明和长期交付归档 |
@@ -182,29 +183,30 @@ created -> rollout_complete -> attribution_complete
 
 ### 主实验矩阵
 
-| 实验 | LoRA | 训练 Memory | 评测 Memory | 用途 |
-| --- | --- | --- | --- | --- |
-| Base Qwen Baseline | 无 | 无 | 无 | 测量基础 Qwen 的 Retail 能力 |
-| Fast Loop / Memory Off | 当前策略 | 关闭 | 无 | 隔离 Memory 生命周期的贡献 |
-| Fast Loop / Memory On | 当前策略 | 开启 | 训练 Memory | 测量检索、选择、写入和维护收益 |
-| Trained LoRA / No Memory | 训练后 | 来自 train | 关闭 | 隔离 Slow Loop 参数更新的贡献 |
-| Trained LoRA / `test_static` | 训练后 | 来自 train | 冻结 train snapshot，只读 | 测量部署时使用已学习 Memory 的效果 |
-| Trained LoRA / `test_streaming` | 训练后 | 来自 train | 空白隔离 Memory，可在 test stream 内演化 | 对齐论文的流式自进化评测协议 |
+| Cell | 模型 | Test Memory | 用途 |
+| --- | --- | --- | --- |
+| A `base_no_memory` | 基础 Qwen3.5-9B | 关闭 | 裸模型 baseline |
+| B `base_with_memory` | 基础 Qwen3.5-9B | 冻结 S1，只读 | 隔离 Fast Loop Memory 收益 |
+| C `opd_with_memory` | 训练后 checkpoint C1 | 与 B 相同的冻结 S1，只读 | 完整系统 |
+| D `opd_no_memory` | 与 C 相同的 checkpoint C1 | 关闭 | 隔离 OPD Slow Loop 收益 |
 
-`test_static` 和 `test_streaming` 是评测协议设计。Streaming Memory 只能写入独立 quarantine，训练 loader 必须拒绝读取，防止 test 经验回流。
+S1 由未更新的基础模型在全部 74 个官方 train task 上连续运行三次得到，默认 seed 为 `42/43/44`，共收集 222 个 episode。跨 pass 重复 task ID 是预期行为，OPD 数据管线使用 `run_id:task_id` 作为 episode 唯一身份，同时继续要求每个单独 pass 内 task ID 唯一。初始 source policy revision 记录为 `zero-impact-init-v1`；全部 train episode 用于构建一次 OPD 数据集并训练出 C1。B/C 必须使用同一份 S1，C/D 必须使用 `training_manifest.json` 给出的同一个最终 checkpoint 和 adapter revision；`test_streaming` 只作为补充协议，不进入主实验。
 
-主流程稳定后再进行 selection、writing 和 maintenance 单模块消融。Memory 开关实验必须复用相同 Qwen、任务顺序、seed 和用户模拟器；不得用不同运行条件替代真正的组件消融。
+主流程稳定后再进行 selection、writing 和 maintenance 单模块消融。四组主实验必须复用相同任务顺序、seed、用户模拟器、NL evaluator、生成参数和最大 episode 步数。
 
 ### 指标与重复实验
 
 最终评测保留 Tau2 官方 evaluator，不重新实现 reward。报告至少包括：
 
-- task count、completed count、mean reward 和 success rate。
+- task count、completed count、mean reward 和任务成功率 `pass@1`。
+- 每个 episode 的平均 Agent prompt/completion/总 Token。
+- Memory 总量、三次 train pass 的增长量、被复用 Memory 覆盖率和平均选择数。
+- OPD 四类训练样本量、optimizer step、response token 数和 forward-KL 曲线。
 - 逐任务 reward、`reward_info` 和 failure category。
 - episode step count、tool/response parse-error rate。
 - checkpoint、模型 revision、Tau2 commit、split hash、精确 test task IDs、任务顺序、用户模拟器、seed 和 Memory 协议。
 
-单任务或五任务验证可以只运行一个 trial；最终报告默认每个 test task 运行四个带 seed 的 trials。只有控制变量完全一致的 runs 才能进入横向比较。
+单任务或五任务验证可以只运行一个 trial；最终报告默认每个 test task 运行四个带 seed 的 trials。只有控制变量完全一致的 runs 才能进入横向比较，主要差值同时给出按 task 聚类的 paired bootstrap 95% CI。
 
 ## 使用指南
 
@@ -447,7 +449,44 @@ python -m scripts.run_iteration `
 
 不传 `--task-count` 时使用配置中的生产默认值 74。2026-07-24 已完成真实五任务 iteration 到 `dataset_complete`，验证失败后的 Memory 回滚、同 ID 恢复、train-only guard、artifact 哈希和独立 audit；Qwen3.5-9B 单步 GPU update gate 也已通过。本轮随机五任务没有生成满足条件的 OPD 样本，因此没有发布空 checkpoint；真实 30 任务四类样本覆盖、非空 promotion 与完整真实多 iteration 仍在 Stage 8 验收实验中执行。
 
-### 10. 测试
+### 10. 运行留出集评测
+
+Stage 8 先用基础 Qwen3.5-9B 在全部 74 个 train task 上连续运行三次 Fast Loop，得到冻结 Memory snapshot S1；再用三个 pass 的全部 episode 构建 OPD 数据集并训练一次 LoRA checkpoint C1。详细命令见 [Retail 留出集评测协议](docs/evaluation_protocol.md)。
+
+四组主实验为：A 基础模型无 Memory、B 基础模型加 S1、C checkpoint C1 加 S1、D checkpoint C1 无 Memory。不传 `--task-id` 时按官方顺序运行全部 40 个 test task；不传 `--num-trials` 时每个任务运行四个 seed trial。单组入口示例：
+
+```powershell
+python -m scripts.evaluate_retail `
+  --config configs/default.yaml `
+  --protocol no_memory `
+  --run-id stage8-a-base-no-memory `
+  --qwen-base-url $env:QWEN_BASE_URL `
+  --model-revision $env:QWEN_MODEL_REVISION
+```
+
+训练后 LoRA 实验增加 `--adapter-revision` 和 `--checkpoint`；B/C 使用 `test_static` 并指向同一个 `history/agents/retail/memory/snapshots/<S1>`。入口不会替服务端加载 LoRA，运行 C/D 时 vLLM 必须已经加载 C1。
+
+每组报告写入 `runs/<run_id>/evaluation_report.json`。四组 test 报告、三个 train run、OPD dataset、training 目录和 S1 通过统一入口进行合同校验、指标汇总和图表生成：
+
+```powershell
+python -m scripts.build_stage8_report `
+  --experiment-id stage8-main `
+  --base-no-memory-report runs/stage8-a-base-no-memory/evaluation_report.json `
+  --base-with-memory-report runs/stage8-b-base-with-memory/evaluation_report.json `
+  --opd-with-memory-report runs/stage8-c-opd-with-memory/evaluation_report.json `
+  --opd-no-memory-report runs/stage8-d-opd-no-memory/evaluation_report.json `
+  --train-run runs/stage8-train-pass-1 `
+  --train-run runs/stage8-train-pass-2 `
+  --train-run runs/stage8-train-pass-3 `
+  --dataset-dir runs/opd_datasets/stage8-opd-dataset `
+  --training-dir runs/opd_training/stage8-opd `
+  --memory-snapshot "history/agents/retail/memory/snapshots/<S1>" `
+  --output-dir runs/stage8-main-report
+```
+
+输出包括机器可读的 `stage8_experiment_report.json` 和自包含的 `stage8_dashboard.html`。仪表盘展示四组 pass@1、平均 Agent Token、Memory 复用率与增长、OPD 样本构成、forward-KL 曲线和成对差值置信区间。
+
+### 11. 测试
 
 不下载大模型即可运行完整本地测试：
 
