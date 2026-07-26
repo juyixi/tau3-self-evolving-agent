@@ -12,12 +12,14 @@
 ```powershell
 $env:QWEN_BASE_URL = "http://127.0.0.1:8000/v1"
 $env:QWEN_API_KEY = "EMPTY"
-$env:OPENROUTER_API_KEY = Read-Host "OpenRouter API Key"
 $env:DEEPSEEK_API_KEY = Read-Host "DeepSeek API Key"
 $env:QWEN_MODEL_REVISION = "Qwen/Qwen3.5-9B@<immutable-revision>"
 ```
 
-`OPENROUTER_API_KEY` 供默认的 OpenRouter NL assertion evaluator 使用。默认用户模拟器 `deepseek/deepseek-v4-pro` 读取 `DEEPSEEK_API_KEY`。凭证不得写入 YAML、命令参数、manifest、事件或 summary。
+默认用户模拟器与 NL assertion evaluator 均为
+`deepseek/deepseek-v4-pro`，并统一读取 `DEEPSEEK_API_KEY`。标准运行直接使用
+`configs/default.yaml`，不需要机器专用 evaluator 配置。凭证不得写入 YAML、命令参数、
+manifest、事件或 summary。
 
 ## Fast Loop 运行
 

@@ -1,5 +1,10 @@
 # OpenRouter NL Evaluator Implementation Plan
 
+> **Status: superseded.** This plan records the historical provider adapter
+> implementation. The canonical runtime default is now
+> `deepseek/deepseek-v4-pro`; see
+> `docs/superpowers/specs/2026-07-26-deepseek-nl-evaluator-default-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Tau2 retail NL assertions use configurable OpenRouter GPT-4.1 by default without modifying the pinned Tau2 checkout or leaking credentials.

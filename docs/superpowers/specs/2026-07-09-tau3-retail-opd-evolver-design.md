@@ -50,6 +50,22 @@ retail 环境由当前官方 tau benchmark 仓库提供：
 
 每次真实运行都必须在 run manifest 中记录 tau2-bench Git commit、任务 split 名称、精确任务 ID、split 文件哈希、用户模拟器配置、seed 和环境选项。单元测试使用 mock 或 fake Gym 对象，不依赖外部仓库。
 
+### 用户模拟器与 NL 评估器
+
+标准训练和评测统一使用 `deepseek/deepseek-v4-pro`：
+
+- 非 solo 用户模拟器：`deepseek/deepseek-v4-pro`。
+- Tau2 NL assertion evaluator：`deepseek/deepseek-v4-pro`。
+- 统一凭证变量：`DEEPSEEK_API_KEY`。
+- evaluator 参数：`temperature: 0.0`、`thinking.type: disabled`。
+- 唯一标准配置入口：`configs/default.yaml`。
+
+代码配置模型的 fallback 必须与默认 YAML 保持一致，真实集成测试不得要求
+`OPENROUTER_API_KEY`。provider 绑定能力仍可用于历史实验复现，但 OpenRouter
+不再是标准运行路径，也不得通过机器专用配置覆盖成为隐式默认值。每次 run manifest
+必须记录实际 evaluator 模型与公开参数，但不得记录凭证值。完整决策见
+[DeepSeek NL 评估器固定设计](2026-07-26-deepseek-nl-evaluator-default-design.md)。
+
 项目适配器封装 `tau2.gym.gym_agent.AgentGymEnv`，并暴露：
 
 - `reset(task_id | task_spec) -> observation`

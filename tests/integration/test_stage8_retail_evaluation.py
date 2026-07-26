@@ -150,7 +150,7 @@ def _provenance(
         task_ids=("75",),
         seeds=(42,),
         user_simulator_config={"model": "deepseek/deepseek-v4-pro"},
-        nl_evaluator={"model": "openrouter/openai/gpt-4.1"},
+        nl_evaluator={"model": "deepseek/deepseek-v4-pro"},
         memory_snapshot_id=memory_snapshot_id,
         max_episode_steps=40,
         model_serving_contract={"max_tokens": 8192},

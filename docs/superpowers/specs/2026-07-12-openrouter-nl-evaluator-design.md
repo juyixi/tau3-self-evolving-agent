@@ -1,5 +1,11 @@
 # OpenRouter NL 评估器可配置设计
 
+> **状态：已被取代。** 这是历史实现设计，仅用于理解 provider 可配置能力。
+> 自 2026-07-26 起，标准用户模拟器与 NL assertion evaluator 均固定为
+> `deepseek/deepseek-v4-pro`，详见
+> [DeepSeek NL 评估器固定设计](2026-07-26-deepseek-nl-evaluator-default-design.md)。
+> 下文中的“默认 OpenRouter”不再代表当前项目默认行为。
+
 ## 背景
 
 Tau2 retail 任务的最终奖励可能同时包含数据库断言和自然语言断言。自然语言断言由 Tau2 的 `NLAssertionsEvaluator` 调用大语言模型判断。目前固定版本 Tau2 在 `tau2.config` 中将该模型硬编码为 `gpt-4.1-2025-04-14`，因此 LiteLLM 会按 OpenAI 官方 provider 路由并读取 `OPENAI_API_KEY`。

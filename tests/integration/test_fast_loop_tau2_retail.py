@@ -19,7 +19,6 @@ WORKTREE_ROOT = Path(__file__).resolve().parents[2]
 REQUIRED_ENV = (
     "QWEN_BASE_URL",
     "QWEN_MODEL_REVISION",
-    "OPENROUTER_API_KEY",
     "DEEPSEEK_API_KEY",
 )
 MISSING_ENV = tuple(name for name in REQUIRED_ENV if not os.environ.get(name))
@@ -29,9 +28,8 @@ real_tau2_integration = pytest.mark.skipif(
     os.environ.get("RUN_FAST_LOOP_TAU2_INTEGRATION") != "1" or bool(MISSING_ENV),
     reason=(
         "set RUN_FAST_LOOP_TAU2_INTEGRATION=1 and provide the Qwen endpoint "
-        "(QWEN_BASE_URL, QWEN_MODEL_REVISION), OpenRouter evaluator credential "
-        "(OPENROUTER_API_KEY), and default DeepSeek simulator credential "
-        "(DEEPSEEK_API_KEY)"
+        "(QWEN_BASE_URL, QWEN_MODEL_REVISION) and the default DeepSeek "
+        "simulator/evaluator credential (DEEPSEEK_API_KEY)"
     ),
 )
 

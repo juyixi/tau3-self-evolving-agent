@@ -92,19 +92,6 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.evaluation.nl_assertions.api_key_env == "DEEPSEEK_API_KEY"
 
 
-def test_autodl_config_matches_the_default_deepseek_evaluator() -> None:
-    default = load_config(PROJECT_ROOT / "configs" / "default.yaml")
-    autodl = load_config(PROJECT_ROOT / "configs" / "autodl-deepseek-eval.yaml")
-
-    assert autodl == default
-    assert autodl.evaluation.nl_assertions.model == "deepseek/deepseek-v4-pro"
-    assert autodl.evaluation.nl_assertions.model_args == {
-        "temperature": 0.0,
-        "thinking": {"type": "disabled"},
-    }
-    assert autodl.evaluation.nl_assertions.api_key_env == "DEEPSEEK_API_KEY"
-
-
 @pytest.mark.parametrize(
     "tier_priors",
     [
