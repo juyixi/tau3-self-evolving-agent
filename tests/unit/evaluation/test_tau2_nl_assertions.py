@@ -1,4 +1,5 @@
-from types import ModuleType
+import json
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -76,6 +77,78 @@ def test_model_args_are_deep_copy_isolated_from_the_config() -> None:
     provenance["model_args"]["nested"]["retries"] = 7
 
     assert config.model_args == {"temperature": 0.0, "nested": {"retries": 2}}
+
+
+def test_repairs_invalid_json_escape_without_another_provider_call() -> None:
+    config = _config()
+    module = _evaluator_module()
+    calls = 0
+    raw_output = (
+        r'{"results":[{"expectedOutcome":"refund","reasoning":"path \q value",'
+        r'"metExpectation":true}]}'
+    )
+
+    def generate(*args: object, **kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(content=raw_output)
+
+    module.generate = generate
+    bind_tau2_nl_assertions(
+        config,
+        environ={config.api_key_env: "literal-test-secret"},
+        module_loader=lambda _: module,
+    )
+
+    response = module.generate()
+
+    assert calls == 1
+    assert json.loads(response.content)["results"][0]["reasoning"] == r"path \q value"
+
+
+def test_retries_unrepairable_json_twice_then_raises() -> None:
+    config = _config()
+    module = _evaluator_module()
+    calls = 0
+
+    def generate(*args: object, **kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(content="not-json")
+
+    module.generate = generate
+    bind_tau2_nl_assertions(
+        config,
+        environ={config.api_key_env: "literal-test-secret"},
+        module_loader=lambda _: module,
+    )
+
+    with pytest.raises(json.JSONDecodeError):
+        module.generate()
+
+    assert calls == 3
+
+
+def test_json_response_guard_is_idempotent() -> None:
+    config = _config()
+    module = _evaluator_module()
+    calls = 0
+
+    def generate(*args: object, **kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(content='{"results":[]}')
+
+    module.generate = generate
+    for _ in range(2):
+        bind_tau2_nl_assertions(
+            config,
+            environ={config.api_key_env: "literal-test-secret"},
+            module_loader=lambda _: module,
+        )
+
+    assert json.loads(module.generate().content) == {"results": []}
+    assert calls == 1
 
 
 @pytest.mark.parametrize("credential", [None, "", "   "])
