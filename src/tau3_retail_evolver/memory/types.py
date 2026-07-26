@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class MemoryTier(StrEnum):
@@ -30,6 +30,8 @@ class MemoryItem(BaseModel):
 
     id: str
     tier: MemoryTier
+    tier_schema_version: int = Field(default=1, ge=1)
+    payload: dict[str, Any] | None = None
     content: str
     retrieval_text: str
     embedding: tuple[float, ...] | None = None
@@ -77,6 +79,28 @@ class MemoryItem(BaseModel):
         except (TypeError, ValueError) as error:
             raise ValueError("memory metadata must be JSON serializable") from error
         return value
+
+    @model_validator(mode="after")
+    def tier_contract_must_be_consistent(self) -> MemoryItem:
+        if self.tier_schema_version == 1:
+            if self.payload is not None:
+                raise ValueError("legacy Memory must not define a tier payload")
+            return self
+        if self.tier_schema_version != 2:
+            raise ValueError("unsupported Memory tier schema version")
+        if self.payload is None:
+            raise ValueError("V2 Memory requires a tier payload")
+        from tau3_retail_evolver.memory.tier_contracts import (
+            render_tier_payload,
+            validate_stored_tier_payload,
+        )
+
+        validated = validate_stored_tier_payload(self.tier, self.payload)
+        if canonical_content(render_tier_payload(self.tier, validated)) != canonical_content(
+            self.content
+        ):
+            raise ValueError("Memory content does not match its tier payload")
+        return self
 
 
 class MemorySnapshot(BaseModel):

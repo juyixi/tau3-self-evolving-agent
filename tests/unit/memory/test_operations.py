@@ -15,6 +15,7 @@ from tau3_retail_evolver.memory.operations import (
 )
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
+from tau3_retail_evolver.memory.tier_contracts import TipPayload, render_tier_payload
 from tau3_retail_evolver.memory.types import MemoryStatus, MemoryTier, stable_memory_id
 
 
@@ -124,6 +125,39 @@ def test_rejects_cross_tier_merge_without_changing_any_file(tmp_path: Path) -> N
     assert {
         path.name: path.read_bytes() for path in (tmp_path / "memory").glob("*_memory.json")
     } == before
+
+
+def test_rejects_free_text_merge_for_v2_memories(tmp_path: Path) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    memories = []
+    for task_id, guidance in (
+        ("task-1", "Verify the order ID."),
+        ("task-2", "Confirm the requested operation."),
+    ):
+        payload = TipPayload(guidance=guidance)
+        memories.append(
+            repository.add(
+                tier=MemoryTier.TIP,
+                tier_schema_version=2,
+                payload=payload.model_dump(mode="json"),
+                content=render_tier_payload(MemoryTier.TIP, payload),
+                source_task_ids=(task_id,),
+                created_round=0,
+            )
+        )
+
+    with pytest.raises(ValueError, match="typed tier payload"):
+        MemoryOperations(repository).apply_batch(
+            [
+                MergeCommand(
+                    source_ids=tuple(memory.id for memory in memories),
+                    content="Verify the order and confirm the operation.",
+                    updated_round=1,
+                )
+            ]
+        )
+
+    assert all(repository.get(memory.id).status == MemoryStatus.ACTIVE for memory in memories)
 
 
 def test_delete_is_a_versioned_soft_delete_with_reason(tmp_path: Path) -> None:

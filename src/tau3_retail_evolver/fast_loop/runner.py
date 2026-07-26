@@ -26,6 +26,10 @@ from tau3_retail_evolver.fast_loop.prompts import (
 )
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate, Retriever
+from tau3_retail_evolver.memory.tier_contracts import (
+    TIER_SCHEMA_VERSION,
+    materialize_tier_memory,
+)
 from tau3_retail_evolver.memory.types import (
     MemoryItem,
     canonical_content,
@@ -92,6 +96,7 @@ _RESERVED_METADATA_KEYS = frozenset(
         "source_iteration",
         "source_final_reward",
         "selected_memory_ids",
+        "classification_rule",
     }
 )
 
@@ -317,11 +322,26 @@ def run_fast_loop_episode(
                 policy,
                 write_prompt,
                 WriteDecision,
-                validator=_validate_write_decision,
+                validator=lambda decision: _validate_write_decision(
+                    decision,
+                    tools=public_tools,
+                    task_id=task_id,
+                    context=context,
+                    final_reward=final_reward,
+                    trajectory=trajectory,
+                ),
                 label="write",
             )
             proposals = [
-                _write_proposal(memory, task_id, context, final_reward, selected_ids)
+                _write_proposal(
+                    memory,
+                    task_id,
+                    context,
+                    final_reward,
+                    selected_ids,
+                    tools=public_tools,
+                    trajectory=trajectory,
+                )
                 for memory in write_decision.memories
             ]
             _emit(
@@ -548,8 +568,22 @@ def _write_proposal(
     context: RunContext,
     final_reward: float,
     selected_ids: tuple[str, ...],
+    *,
+    tools: Sequence[Mapping[str, Any]],
+    trajectory: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     _validate_write_metadata(memory.metadata)
+    materialized = materialize_tier_memory(
+        tier=memory.tier,
+        payload=memory.payload,
+        retrieval_text=memory.retrieval_text,
+        tools=tools,
+        run_id=context.run_id,
+        task_id=task_id,
+        task_group=context.task_group_for(task_id),
+        final_reward=final_reward,
+        trajectory=trajectory,
+    )
     metadata = _without_forbidden_metadata(dict(memory.metadata))
     _validate_write_metadata(metadata)
     for key in _RESERVED_METADATA_KEYS:
@@ -559,24 +593,29 @@ def _write_proposal(
         source_iteration=context.iteration,
         source_final_reward=final_reward,
         selected_memory_ids=list(selected_ids),
+        classification_rule=materialized.classification_rule,
     )
-    memory_id = stable_memory_id(memory.tier, memory.content)
+    memory_id = stable_memory_id(materialized.tier, materialized.content)
     add_kwargs = {
-        "tier": memory.tier,
-        "content": memory.content,
+        "tier": materialized.tier,
+        "tier_schema_version": TIER_SCHEMA_VERSION,
+        "payload": materialized.payload,
+        "content": materialized.content,
         "source_task_ids": (task_id,),
         "created_round": context.iteration,
         "metadata": metadata,
-        "retrieval_text": memory.retrieval_text,
+        "retrieval_text": materialized.retrieval_text,
     }
     return {
         "memory_id": memory_id,
         "add_kwargs": add_kwargs,
         "evidence": {
             "memory_id": memory_id,
-            "tier": memory.tier.value,
-            "content": memory.content,
-            "retrieval_text": memory.retrieval_text or memory.content,
+            "tier": materialized.tier.value,
+            "tier_schema_version": TIER_SCHEMA_VERSION,
+            "payload": materialized.payload,
+            "content": materialized.content,
+            "retrieval_text": materialized.retrieval_text,
             "metadata": metadata,
             "source_task_ids": [task_id],
             "created_round": context.iteration,
@@ -584,9 +623,28 @@ def _write_proposal(
     }
 
 
-def _validate_write_decision(decision: WriteDecision) -> WriteDecision:
+def _validate_write_decision(
+    decision: WriteDecision,
+    *,
+    tools: Sequence[Mapping[str, Any]],
+    task_id: str,
+    context: RunContext,
+    final_reward: float,
+    trajectory: Sequence[Mapping[str, Any]],
+) -> WriteDecision:
     for memory in decision.memories:
         _validate_write_metadata(memory.metadata)
+        materialize_tier_memory(
+            tier=memory.tier,
+            payload=memory.payload,
+            retrieval_text=memory.retrieval_text,
+            tools=tools,
+            run_id=context.run_id,
+            task_id=task_id,
+            task_group=context.task_group_for(task_id),
+            final_reward=final_reward,
+            trajectory=trajectory,
+        )
     return decision
 
 
@@ -669,6 +727,8 @@ def _is_safe_replay(existing: MemoryItem | None, proposal: Mapping[str, Any]) ->
     return (
         existing.id == proposal["memory_id"]
         and existing.tier == kwargs["tier"]
+        and existing.tier_schema_version == kwargs["tier_schema_version"]
+        and existing.payload == kwargs["payload"]
         and canonical_content(existing.content) == canonical_content(kwargs["content"])
         and existing.source_task_ids == tuple(kwargs["source_task_ids"])
     )

@@ -8,16 +8,25 @@ from pathlib import Path
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tau3_retail_evolver.fast_loop.decisions import MaintenanceDecision
 from tau3_retail_evolver.fast_loop.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
 from tau3_retail_evolver.io.jsonl import iter_jsonl_objects
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.operations import DeleteCommand, LookupCommand, MergeCommand
+from tau3_retail_evolver.memory.tier_contracts import (
+    TIER_SCHEMA_VERSION,
+    ToolPayload,
+    TrajectoryPayload,
+    render_tier_payload,
+    validate_stored_tier_payload,
+    validate_tool_payload_against_tools,
+)
 from tau3_retail_evolver.memory.types import (
     MemoryStatus,
     MemoryTier,
+    canonical_content,
     stable_memory_id,
 )
 from tau3_retail_evolver.slow_loop.source_runs import SourceRun, SourceRunSet
@@ -55,11 +64,22 @@ class TrajectoryStepEvidence(_EvidenceModel):
 class WriteProposalEvidence(_EvidenceModel):
     memory_id: str
     tier: MemoryTier
+    tier_schema_version: Literal[2] = 2
+    payload: dict[str, Any]
     content: str
     retrieval_text: str
     metadata: dict[str, Any]
     source_task_ids: tuple[str, ...]
     created_round: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def tier_payload_must_match_content(self) -> WriteProposalEvidence:
+        stored = validate_stored_tier_payload(self.tier, self.payload)
+        if canonical_content(render_tier_payload(self.tier, stored)) != canonical_content(
+            self.content
+        ):
+            raise ValueError("write proposal content does not match its tier payload")
+        return self
 
 
 class PublicMemoryEvidence(_EvidenceModel):
@@ -369,8 +389,22 @@ def _build_episode(
     if not math.isclose(final_reward, trajectory[-1].reward, rel_tol=1e-12, abs_tol=1e-12):
         raise ValueError(f"final reward does not match trajectory for task {task_id}")
 
+    tools = started.get("tools")
+    if not isinstance(tools, list) or not all(isinstance(tool, dict) for tool in tools):
+        raise ValueError(f"EpisodeStarted tools are invalid for task {task_id}")
     raw_proposals = _list_of_mappings(proposed.get("proposals"), "write proposals")
-    write_proposals = tuple(_write_proposal(raw, task_id=task_id) for raw in raw_proposals)
+    write_proposals = tuple(
+        _write_proposal(
+            raw,
+            task_id=task_id,
+            run_id=source_run.run_id,
+            task_group=started["task_group"],
+            final_reward=final_reward,
+            trajectory=trajectory,
+            tools=tools,
+        )
+        for raw in raw_proposals
+    )
     proposal_ids = tuple(item.memory_id for item in write_proposals)
     if len(proposal_ids) != len(set(proposal_ids)):
         raise ValueError(f"duplicate write proposal for task {task_id}")
@@ -398,12 +432,14 @@ def _build_episode(
         proposal = proposal_by_id[memory_id]
         if item is None:
             raise ValueError(f"committed memory missing from output snapshot: {memory_id}")
-        if item.tier != proposal.tier or item.content != proposal.content:
+        if (
+            item.tier != proposal.tier
+            or item.tier_schema_version != proposal.tier_schema_version
+            or item.payload != proposal.payload
+            or item.content != proposal.content
+        ):
             raise ValueError(f"committed memory content mismatch: {memory_id}")
 
-    tools = started.get("tools")
-    if not isinstance(tools, list) or not all(isinstance(tool, dict) for tool in tools):
-        raise ValueError(f"EpisodeStarted tools are invalid for task {task_id}")
     _json_mapping(finished.get("terminal_evaluation"), "terminal_evaluation")
     _json_mapping(finished.get("simulation_result"), "simulation_result")
     truncated = _strict_bool(finished.get("truncated"), "truncated")
@@ -521,13 +557,53 @@ def _write_proposal(
     raw: Mapping[str, Any],
     *,
     task_id: str,
+    run_id: str,
+    task_group: str,
+    final_reward: float,
+    trajectory: Sequence[TrajectoryStepEvidence],
+    tools: Sequence[Mapping[str, Any]],
 ) -> WriteProposalEvidence:
     memory_id = _nonblank(raw, "memory_id", "write proposal")
     try:
         tier = MemoryTier(raw.get("tier"))
     except ValueError as error:
         raise ValueError(f"write proposal tier is invalid: {memory_id}") from error
+    if raw.get("tier_schema_version") != TIER_SCHEMA_VERSION:
+        raise ValueError(f"write proposal tier schema is invalid: {memory_id}")
+    raw_payload = raw.get("payload")
+    if not isinstance(raw_payload, Mapping):
+        raise ValueError(f"write proposal payload is invalid: {memory_id}")
+    stored_payload = validate_stored_tier_payload(tier, raw_payload)
+    if isinstance(stored_payload, ToolPayload):
+        validate_tool_payload_against_tools(stored_payload, tools)
+    if isinstance(stored_payload, TrajectoryPayload):
+        expected_episode_id = f"{run_id}:{task_id}"
+        if stored_payload.source_episode_id != expected_episode_id:
+            raise ValueError(f"trajectory proposal episode mismatch: {memory_id}")
+        if stored_payload.task_group != task_group:
+            raise ValueError(f"trajectory proposal task group mismatch: {memory_id}")
+        if not math.isclose(
+            stored_payload.final_reward,
+            final_reward,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(f"trajectory proposal reward mismatch: {memory_id}")
+        expected_steps = tuple(
+            (index, step.action, step.reward, step.done)
+            for index, step in enumerate(trajectory, start=1)
+        )
+        actual_steps = tuple(
+            (step.order, step.action, step.reward, step.done)
+            for step in stored_payload.steps
+        )
+        if actual_steps != expected_steps:
+            raise ValueError(f"trajectory proposal steps mismatch: {memory_id}")
     content = _nonblank(raw, "content", "write proposal")
+    if canonical_content(content) != canonical_content(
+        render_tier_payload(tier, stored_payload)
+    ):
+        raise ValueError(f"write proposal content/payload mismatch: {memory_id}")
     if memory_id != stable_memory_id(tier, content):
         raise ValueError(f"write proposal stable ID mismatch: {memory_id}")
     source_task_ids = _string_tuple(raw.get("source_task_ids"), "source_task_ids")
@@ -539,6 +615,7 @@ def _write_proposal(
     return WriteProposalEvidence(
         memory_id=memory_id,
         tier=tier,
+        payload=stored_payload.model_dump(mode="json"),
         content=content,
         retrieval_text=_nonblank(raw, "retrieval_text", "write proposal"),
         metadata=_json_mapping(raw.get("metadata"), "write metadata"),

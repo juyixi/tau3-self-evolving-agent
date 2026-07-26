@@ -20,6 +20,12 @@ from tau3_retail_evolver.memory.operations import (
     MemoryCommand,
     MergeCommand,
 )
+from tau3_retail_evolver.memory.tier_contracts import (
+    SkillPayload,
+    TipPayload,
+    ToolPayload,
+    TrajectoryDraftPayload,
+)
 from tau3_retail_evolver.memory.types import MemoryTier
 
 
@@ -60,13 +66,11 @@ class ActionDecision(_DecisionModel):
         return value
 
 
-class MemoryWrite(_DecisionModel):
-    tier: MemoryTier
-    content: str
+class _MemoryWriteBase(_DecisionModel):
     retrieval_text: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("content", "retrieval_text")
+    @field_validator("retrieval_text")
     @classmethod
     def text_must_not_be_blank(cls, value: str | None) -> str | None:
         if value is None:
@@ -81,6 +85,32 @@ class MemoryWrite(_DecisionModel):
     def metadata_must_be_json_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
         _require_json_safe(value, "memory metadata")
         return value
+
+
+class TipMemoryWrite(_MemoryWriteBase):
+    tier: Literal[MemoryTier.TIP]
+    payload: TipPayload
+
+
+class SkillMemoryWrite(_MemoryWriteBase):
+    tier: Literal[MemoryTier.SKILL]
+    payload: SkillPayload
+
+
+class ToolMemoryWrite(_MemoryWriteBase):
+    tier: Literal[MemoryTier.TOOL]
+    payload: ToolPayload
+
+
+class TrajectoryMemoryWrite(_MemoryWriteBase):
+    tier: Literal[MemoryTier.TRAJECTORY]
+    payload: TrajectoryDraftPayload
+
+
+MemoryWrite = Annotated[
+    TipMemoryWrite | SkillMemoryWrite | ToolMemoryWrite | TrajectoryMemoryWrite,
+    Field(discriminator="tier"),
+]
 
 
 class WriteDecision(_DecisionModel):

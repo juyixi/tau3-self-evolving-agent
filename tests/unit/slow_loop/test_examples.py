@@ -23,6 +23,13 @@ from tau3_retail_evolver.slow_loop.examples import (
     build_selection_examples,
     build_writing_examples,
 )
+from tau3_retail_evolver.memory.tier_contracts import (
+    SkillPayload,
+    SkillStep,
+    TipPayload,
+    render_tier_payload,
+)
+from tau3_retail_evolver.memory.types import MemoryTier
 
 
 def _candidate(memory_id: str, tier: str, rank: int) -> MemoryCandidateEvidence:
@@ -226,11 +233,21 @@ def test_action_example_removes_memory_and_uses_same_group_success() -> None:
 
 
 def test_writing_example_uses_only_future_scored_committed_memories() -> None:
+    proposal_payload = SkillPayload(
+        goal="A new public workflow",
+        steps=(
+            SkillStep(order=1, instruction="Inspect the current state."),
+            SkillStep(order=2, instruction="Apply the verified next action."),
+        ),
+        success_condition="The requested operation is complete.",
+    )
+    replay_payload = TipPayload(guidance="Existing guidance.")
     proposal = WriteProposalEvidence(
         memory_id="mem-new",
         tier="skill",
-        content="A new public workflow.",
-        retrieval_text="A new public workflow.",
+        payload=proposal_payload.model_dump(mode="json"),
+        content=render_tier_payload(MemoryTier.SKILL, proposal_payload),
+        retrieval_text="A new public workflow",
         metadata={},
         source_task_ids=("task-creator",),
         created_round=3,
@@ -238,7 +255,8 @@ def test_writing_example_uses_only_future_scored_committed_memories() -> None:
     replay = WriteProposalEvidence(
         memory_id="mem-replay",
         tier="tip",
-        content="Existing guidance.",
+        payload=replay_payload.model_dump(mode="json"),
+        content=render_tier_payload(MemoryTier.TIP, replay_payload),
         retrieval_text="Existing guidance.",
         metadata={},
         source_task_ids=("task-creator",),
@@ -270,6 +288,8 @@ def test_writing_example_uses_only_future_scored_committed_memories() -> None:
     rows = example.privileged_hindsight["written_memory_scores"]
     assert [row["memory_id"] for row in rows] == ["mem-new"]
     assert rows[0]["creator_episode_id"] == "creator"
+    assert rows[0]["tier_schema_version"] == 2
+    assert rows[0]["payload"] == proposal_payload.model_dump(mode="json")
     assert "creator" not in rows[0]["source_episode_ids"]
     assert "mem-replay" not in json.dumps(example.privileged_hindsight)
     audit_example_boundaries(example)

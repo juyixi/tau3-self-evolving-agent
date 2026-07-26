@@ -10,6 +10,11 @@ from typing import Any, Callable
 import pytest
 
 from tau3_retail_evolver.memory.repository import MemoryRepository
+from tau3_retail_evolver.memory.tier_contracts import (
+    SkillPayload,
+    SkillStep,
+    render_tier_payload,
+)
 from tau3_retail_evolver.memory.types import stable_memory_id, MemoryTier
 from tau3_retail_evolver.fast_loop.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
 from tau3_retail_evolver.slow_loop.evidence import build_evidence
@@ -208,7 +213,15 @@ def _schema2_source_with_committed_write(
         created_round=0,
     )
     input_snapshot = repository.snapshot()
-    skill_content = "Verify the retrieved order before the final action."
+    skill_payload = SkillPayload(
+        goal="Verify the retrieved order before the final action",
+        steps=(
+            SkillStep(order=1, instruction="Look up the order."),
+            SkillStep(order=2, instruction="Verify the returned order state."),
+        ),
+        success_condition="The verified order is ready for the final action.",
+    )
+    skill_content = render_tier_payload(MemoryTier.SKILL, skill_payload)
     skill_id = stable_memory_id(MemoryTier.SKILL, skill_content)
     candidates = [
         {
@@ -229,8 +242,10 @@ def _schema2_source_with_committed_write(
     proposal = {
         "memory_id": skill_id,
         "tier": "skill",
+        "tier_schema_version": 2,
+        "payload": skill_payload.model_dump(mode="json"),
         "content": skill_content,
-        "retrieval_text": skill_content,
+        "retrieval_text": "Verify the retrieved order before the final action.",
         "metadata": {"source_run_id": "run-a"},
         "source_task_ids": ["1"],
         "created_round": 3,
@@ -247,6 +262,8 @@ def _schema2_source_with_committed_write(
     )
     repository.add(
         tier="skill",
+        tier_schema_version=2,
+        payload=skill_payload.model_dump(mode="json"),
         content=skill_content,
         source_task_ids=("1",),
         created_round=3,

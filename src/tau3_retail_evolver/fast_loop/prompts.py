@@ -231,7 +231,7 @@ def project_public_context(
 def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(candidate, MemoryCandidate):
         item = candidate.item
-        return {
+        public = {
             "id": item.id,
             "tier": item.tier.value,
             "content": item.content,
@@ -239,13 +239,25 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
             "rank": candidate.rank,
             "similarity": candidate.similarity,
         }
+        if item.tier_schema_version == 2:
+            public.update(
+                tier_schema_version=2,
+                payload=_json_copy(item.payload, "memory tier payload"),
+            )
+        return public
     if isinstance(candidate, MemoryItem):
-        return {
+        public = {
             "id": candidate.id,
             "tier": candidate.tier.value,
             "content": candidate.content,
             "version": candidate.version,
         }
+        if candidate.tier_schema_version == 2:
+            public.update(
+                tier_schema_version=2,
+                payload=_json_copy(candidate.payload, "memory tier payload"),
+            )
+        return public
     if not isinstance(candidate, Mapping):
         raise ValueError("memory candidates must be MemoryCandidate, MemoryItem, or mappings")
     required = ("id", "tier", "content", "version")

@@ -8,7 +8,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from tau3_retail_evolver.fast_loop.decisions import maintenance_command_schemas
+from tau3_retail_evolver.fast_loop.decisions import (
+    WriteDecision,
+    maintenance_command_schemas,
+)
 from tau3_retail_evolver.slow_loop.attribution import MemoryScore
 from tau3_retail_evolver.slow_loop.evidence import (
     EpisodeEvidence,
@@ -237,6 +240,8 @@ def build_writing_examples(
                 {
                     "memory_id": memory_id,
                     "tier": proposal.tier.value,
+                    "tier_schema_version": proposal.tier_schema_version,
+                    "payload": _json_copy(proposal.payload),
                     "content": proposal.content,
                     "retrieval_text": proposal.retrieval_text,
                     "creator_episode_id": score.creator_episode_id,
@@ -271,30 +276,7 @@ def build_writing_examples(
                 "write",
                 public_input,
                 {"written_memory_scores": rows},
-                {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "memories": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "properties": {
-                                    "tier": {
-                                        "type": "string",
-                                        "enum": ["trajectory", "tip", "skill", "tool"],
-                                    },
-                                    "content": {"type": "string", "minLength": 1},
-                                    "retrieval_text": {"type": "string", "minLength": 1},
-                                    "metadata": {"type": "object"},
-                                },
-                                "required": ["tier", "content"],
-                            },
-                        }
-                    },
-                    "required": ["memories"],
-                },
+                WriteDecision.model_json_schema(),
                 _episode_provenance(episode),
             )
         )

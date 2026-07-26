@@ -80,14 +80,16 @@ Memory 遵循 OPD-Evolver 的文件式状态管理，不使用 SQLite：
 
 | 层级 | 含义 |
 | --- | --- |
-| `trajectory` | 完整或压缩后的 Retail 交互轨迹 |
-| `tip` | 局部警告、约束和启发式规则 |
-| `skill` | 可复用的任务流程和策略 |
-| `tool` | 可执行或结构化的动作模板 |
+| `trajectory` | 绑定真实 episode、步骤和结果的具体案例 |
+| `tip` | 一个可独立应用的原子判断点、约束或启发式规则 |
+| `skill` | 具有目标、至少两个有序步骤和成功条件的可复用工作流 |
+| `tool` | 对当前环境中某一个真实 API/tool 的调用知识，不保存可执行函数 |
 
 四层权威状态分别存储为普通 JSON；rollout 事件、候选/选择证据、Memory 操作、归因和 OPD 样本使用只追加 JSONL。默认 Agent namespace 为 `retail`，不同运行轮次持续读写同一个 Memory，不按 `run_id` 隔离经验；扩展到其他领域时使用新的 `agent_id`。
 
-写操作先在内存副本完成 schema、版本、层级和 provenance 校验，再通过同目录临时文件、`flush/fsync` 和 `os.replace` 原子替换。模型只能输出类型化的 `create`、`update`、`merge`、`retire` 和 `lookup` 命令，不能直接编辑 JSON。
+新的 Fast Loop 写入使用 V2 typed payload。模型负责提出结构化经验，运行时负责校验 tier/payload 一致性、Tau2 tool 名称与参数、trajectory 的真实 episode provenance，并确定性生成 `content`；模型不能直接编辑 JSON 或同时自由生成另一份 `content`。V1 Memory 保持可读但不做迁移，旧自由文本 merge 不能作用于 V2 Memory。
+
+写操作通过同目录临时文件、`flush/fsync` 和 `os.replace` 原子替换；event、evidence 和 OPSD `write` 样本同时保存 `tier_schema_version` 与 payload，数据构建阶段重新校验 payload/content/tool/provenance 一致性。
 
 默认检索模型为 `Qwen/Qwen3-Embedding-0.6B`，候选数为 50，特权教师最多注入 20 条 Memory。每累计完成 `Q=30` 个 train tasks，Fast Loop 执行一次 repository maintenance。
 

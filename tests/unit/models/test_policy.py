@@ -80,14 +80,17 @@ ACTION_SYSTEM = (
     "Do not include hidden data."
 )
 WRITE_SYSTEM = (
-    "Return exactly one strict JSON object matching WriteDecision. Use this shape: "
-    '{"memories":[{"tier":"tip","content":"durable reusable lesson",'
+    "Return exactly one strict JSON object matching WriteDecision. Each memory must use "
+    'one tier-specific payload: "tip" is one atomic condition or rule; "skill" is one '
+    'reusable goal with at least two ordered steps; "tool" is usage knowledge for exactly '
+    'one tool present in the supplied tool schemas; "trajectory" is one concrete observed '
+    "episode case. Split mixed lessons into separate memories. Use this shape: "
+    '{"memories":[{"tier":"tip","payload":{"condition":"optional condition",'
+    '"guidance":"one atomic rule","rationale":"optional rationale","scope":[]},'
     '"retrieval_text":"optional retrieval query","metadata":{}}]}. '
-    'Every memory must contain "tier" and "content". The only allowed tier values are '
-    '"trajectory", "tip", "skill", and "tool"; retrieval_text and metadata are optional. '
-    'Use {"memories":[]} when there is no durable reusable lesson. Never use a "summary" '
-    "field. Attribution fields are not allowed. Do not use tools, Markdown fences, or "
-    "include any other text."
+    'Use {"memories":[]} when no durable lesson passes a tier definition. Content is '
+    "rendered by the runtime and must not be returned. Attribution fields are not allowed. "
+    "Do not use tools, Markdown fences, or include any other text."
 )
 MAINTENANCE_SYSTEM = (
     "Return exactly one strict JSON object matching MaintenanceDecision: "

@@ -61,6 +61,8 @@ class MemoryRepository:
         content: str,
         source_task_ids: Iterable[str],
         created_round: int,
+        tier_schema_version: int = 1,
+        payload: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         retrieval_text: str | None = None,
         embedding: Iterable[float] | None = None,
@@ -75,6 +77,8 @@ class MemoryRepository:
             item = MemoryItem(
                 id=memory_id,
                 tier=memory_tier,
+                tier_schema_version=tier_schema_version,
+                payload=payload,
                 content=content,
                 retrieval_text=retrieval_text or content,
                 embedding=tuple(embedding) if embedding is not None else None,

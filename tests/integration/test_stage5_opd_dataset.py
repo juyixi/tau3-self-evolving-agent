@@ -8,6 +8,12 @@ from typing import Any
 from tau3_retail_evolver.envs.runtime import RuntimeFingerprint
 from tau3_retail_evolver.envs.task_catalog import RetailTaskCatalog
 from tau3_retail_evolver.memory.repository import MemoryRepository
+from tau3_retail_evolver.memory.tier_contracts import (
+    SkillPayload,
+    SkillStep,
+    render_tier_payload,
+)
+from tau3_retail_evolver.memory.types import MemoryTier
 from tau3_retail_evolver.slow_loop import dataset as dataset_module
 from tau3_retail_evolver.slow_loop.audit import audit_dataset
 from tau3_retail_evolver.slow_loop.dataset import DatasetBuildRequest, build_opd_dataset
@@ -136,9 +142,20 @@ def _write_two_continuous_runs(
         embedding_model_revision="embedding-a",
     )
     snapshot_a = repository.snapshot().memory_snapshot_id
+    new_payload = SkillPayload(
+        goal="Verify eligibility before completing a return",
+        steps=(
+            SkillStep(order=1, instruction="Look up the order."),
+            SkillStep(order=2, instruction="Verify item return eligibility."),
+        ),
+        success_condition="The eligible return is ready to complete.",
+    )
+    new_content = render_tier_payload(MemoryTier.SKILL, new_payload)
     new = repository.add(
         tier="skill",
-        content="Verify eligibility before completing a return.",
+        tier_schema_version=2,
+        payload=new_payload.model_dump(mode="json"),
+        content=new_content,
         retrieval_text="Verify eligibility before completing a return.",
         source_task_ids=(task_ids[0],),
         created_round=0,
@@ -154,6 +171,8 @@ def _write_two_continuous_runs(
     proposal = {
         "memory_id": new.id,
         "tier": "skill",
+        "tier_schema_version": 2,
+        "payload": new_payload.model_dump(mode="json"),
         "content": new.content,
         "retrieval_text": new.retrieval_text,
         "metadata": {"source_run_id": "run-a"},

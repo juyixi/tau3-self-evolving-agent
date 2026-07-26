@@ -6,6 +6,12 @@ import math
 import pytest
 
 from tau3_retail_evolver.memory.types import MemoryTier
+from tau3_retail_evolver.memory.tier_contracts import (
+    SkillPayload,
+    SkillStep,
+    TipPayload,
+    render_tier_payload,
+)
 from tau3_retail_evolver.slow_loop.attribution import compute_memory_scores
 from tau3_retail_evolver.slow_loop.evidence import (
     EpisodeEvidence,
@@ -48,10 +54,24 @@ def _episode(
     proposed_ids = ()
     if committed_new:
         assert memory_id is not None
+        if tier == "skill":
+            payload = SkillPayload(
+                goal=f"Public workflow for {memory_id}",
+                steps=(
+                    SkillStep(order=1, instruction="Inspect the current state."),
+                    SkillStep(order=2, instruction="Apply the verified next action."),
+                ),
+                success_condition="The requested operation is complete.",
+            )
+            content = render_tier_payload(MemoryTier.SKILL, payload)
+        else:
+            payload = TipPayload(guidance=f"Public content for {memory_id}")
+            content = render_tier_payload(MemoryTier.TIP, payload)
         proposal = WriteProposalEvidence(
             memory_id=memory_id,
             tier=tier,
-            content=f"Public content for {memory_id}",
+            payload=payload.model_dump(mode="json"),
+            content=content,
             retrieval_text=f"Public content for {memory_id}",
             metadata={},
             source_task_ids=(episode_id,),

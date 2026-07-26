@@ -10,12 +10,14 @@ from tau3_retail_evolver.fast_loop.decisions import (
     ActionDecision,
     DecisionParseResult,
     MaintenanceDecision,
-    MemoryWrite,
     SelectionDecision,
+    SkillMemoryWrite,
+    TipMemoryWrite,
     WriteDecision,
     parse_decision,
 )
 from tau3_retail_evolver.memory.operations import DeleteCommand, LookupCommand, MergeCommand
+from tau3_retail_evolver.memory.tier_contracts import SkillPayload, SkillStep, TipPayload
 from tau3_retail_evolver.memory.types import MemoryTier
 
 
@@ -63,20 +65,57 @@ def test_action_and_write_decisions_validate_text_and_json_metadata() -> None:
     with pytest.raises(ValidationError, match="blank"):
         ActionDecision(action=" ")
 
-    write = MemoryWrite(
+    write = TipMemoryWrite(
         tier=MemoryTier.TIP,
-        content="  Confirm the order before changing it. ",
+        payload=TipPayload(guidance="Confirm the order before changing it."),
         retrieval_text=None,
         metadata={"source": ["public"]},
     )
     assert WriteDecision(memories=(write,)).memories == (write,)
     with pytest.raises(ValidationError, match="JSON"):
-        MemoryWrite(
+        TipMemoryWrite(
             tier=MemoryTier.TIP,
-            content="Valid content",
+            payload=TipPayload(guidance="Valid content"),
             retrieval_text="Valid retrieval text",
             metadata={"score": math.nan},
         )
+    skill_payload = SkillPayload(
+        goal="Complete a return",
+        steps=(
+            SkillStep(order=1, instruction="Look up the order."),
+            SkillStep(order=2, instruction="Verify return eligibility."),
+        ),
+        success_condition="The return is eligible.",
+    )
+    with pytest.raises(ValidationError):
+        WriteDecision.model_validate(
+            {
+                "memories": [
+                    {
+                        "tier": "tip",
+                        "payload": skill_payload.model_dump(mode="python"),
+                    }
+                ]
+            }
+        )
+    assert SkillMemoryWrite(
+        tier=MemoryTier.SKILL,
+        payload=skill_payload,
+    ).tier is MemoryTier.SKILL
+
+
+def test_write_decision_schema_discriminates_payloads_by_tier() -> None:
+    schema = WriteDecision.model_json_schema()
+    memory_schema = schema["properties"]["memories"]["items"]
+
+    assert memory_schema["discriminator"]["propertyName"] == "tier"
+    assert set(memory_schema["discriminator"]["mapping"]) == {
+        "trajectory",
+        "tip",
+        "skill",
+        "tool",
+    }
+    assert len(memory_schema["oneOf"]) == 4
 
 
 def test_maintenance_decision_parses_only_known_typed_commands() -> None:

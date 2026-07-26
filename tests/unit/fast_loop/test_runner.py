@@ -18,6 +18,13 @@ from tau3_retail_evolver.fast_loop.runner import (
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import Retriever
+from tau3_retail_evolver.memory.tier_contracts import (
+    SkillPayload,
+    SkillStep,
+    TipPayload,
+    ToolPayload,
+    render_tier_payload,
+)
 from tau3_retail_evolver.memory.types import MemoryTier, stable_memory_id
 
 
@@ -150,7 +157,19 @@ def _reset() -> ResetResult:
         observation="Customer asks for a refund",
         info={
             "policy": {"text": "Verify identity before refunds"},
-            "tools": [{"type": "function", "function": {"name": "lookup_order"}}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_order",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"order_id": {"type": "string"}},
+                            "required": ["order_id"],
+                        },
+                    },
+                }
+            ],
             "Task": {"id": "hidden-task"},
             "evaluation_criteria": {"secret": True},
         },
@@ -303,20 +322,15 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
         [
             json.dumps({"memory_ids": [candidate.id]}),
             json.dumps({"action": "lookup_order(order_id='123')"}),
-            json.dumps(
-                {
-                    "memories": [
-                        {
-                            "tier": "tip",
-                            "content": "Verify the order before issuing a refund",
-                            "retrieval_text": "refund verification",
-                            "metadata": {
-                                "note": "learned",
-                                "source_run_id": "model-override",
-                            },
-                        }
-                    ]
-                }
+            _write_output(
+                _tip_write(
+                    "Verify the order before issuing a refund",
+                    retrieval_text="refund verification",
+                    metadata={
+                        "note": "learned",
+                        "source_run_id": "model-override",
+                    },
+                )
             ),
         ]
     )
@@ -383,8 +397,17 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
     assert written is not None
     assert written.source_task_ids == ("provenance-task-923",)
     assert written.created_round == 3
+    assert written.tier_schema_version == 2
+    assert written.payload == {
+        "condition": None,
+        "guidance": "Verify the order before issuing a refund",
+        "rationale": None,
+        "scope": [],
+    }
+    assert written.content == "Guidance: Verify the order before issuing a refund"
     assert written.retrieval_text == "refund verification"
     assert written.metadata == {
+        "classification_rule": "tip-contract-v2",
         "note": "learned",
         "source_run_id": "learn-001",
         "source_iteration": 3,
@@ -411,6 +434,97 @@ def test_selected_candidate_details_follow_teacher_preference_order(
         created_round=0,
         embedding=(1.0, 0.0),
         embedding_model_revision="fake-embedding@1",
+    )
+
+
+def _tip_write(
+    guidance: str,
+    *,
+    retrieval_text: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "tier": "tip",
+        "payload": {"guidance": guidance},
+    }
+    if retrieval_text is not None:
+        result["retrieval_text"] = retrieval_text
+    if metadata is not None:
+        result["metadata"] = metadata
+    return result
+
+
+def _skill_write(goal: str) -> dict[str, Any]:
+    return {
+        "tier": "skill",
+        "payload": {
+            "goal": goal,
+            "steps": [
+                {"order": 1, "instruction": "Inspect the current task state."},
+                {"order": 2, "instruction": "Apply the verified next action."},
+            ],
+            "success_condition": "The requested operation is completed.",
+        },
+    }
+
+
+def _tool_write(purpose: str) -> dict[str, Any]:
+    return {
+        "tier": "tool",
+        "payload": {
+            "tool_name": "lookup_order",
+            "purpose": purpose,
+            "preconditions": ["An order ID is available."],
+            "argument_rules": {"order_id": "Use the exact customer order ID."},
+            "expected_effect": "The current order state is returned.",
+        },
+    }
+
+
+def _write_output(*memories: dict[str, Any]) -> str:
+    return json.dumps({"memories": list(memories)})
+
+
+def _add_v2_tip(
+    repository: MemoryRepository,
+    guidance: str,
+    *,
+    source_task_ids: tuple[str, ...] = ("provenance-task-923",),
+    created_round: int = 0,
+    **kwargs: Any,
+):
+    return _add_v2_memory(
+        repository,
+        _tip_write(guidance),
+        source_task_ids=source_task_ids,
+        created_round=created_round,
+        **kwargs,
+    )
+
+
+def _add_v2_memory(
+    repository: MemoryRepository,
+    draft: dict[str, Any],
+    *,
+    source_task_ids: tuple[str, ...] = ("provenance-task-923",),
+    created_round: int = 0,
+    **kwargs: Any,
+):
+    tier = MemoryTier(draft["tier"])
+    payload_type = {
+        MemoryTier.TIP: TipPayload,
+        MemoryTier.SKILL: SkillPayload,
+        MemoryTier.TOOL: ToolPayload,
+    }[tier]
+    payload = payload_type.model_validate_json(json.dumps(draft["payload"]))
+    return repository.add(
+        tier=tier,
+        tier_schema_version=2,
+        payload=payload.model_dump(mode="json"),
+        content=render_tier_payload(tier, payload),
+        source_task_ids=source_task_ids,
+        created_round=created_round,
+        **kwargs,
     )
     second = repository.add(
         tier="skill",
@@ -728,27 +842,14 @@ def test_forbidden_write_metadata_receives_one_clean_repair_without_leakage(
     repository = MemoryRepository(tmp_path / "memory")
     events = EventCollector()
     environment = FakeEnvironment(_reset(), [_terminal_step()])
-    invalid_write = json.dumps(
-        {
-            "memories": [
-                {
-                    "tier": "tip",
-                    "content": "Clean public memory",
-                    "metadata": {"nested": {forbidden_key: sentinel}},
-                }
-            ]
-        }
+    invalid_write = _write_output(
+        _tip_write(
+            "Clean public memory",
+            metadata={"nested": {forbidden_key: sentinel}},
+        )
     )
-    repaired_write = json.dumps(
-        {
-            "memories": [
-                {
-                    "tier": "tip",
-                    "content": "Clean public memory",
-                    "metadata": {"note": "public"},
-                }
-            ]
-        }
+    repaired_write = _write_output(
+        _tip_write("Clean public memory", metadata={"note": "public"})
     )
     policy = ScriptedLifecyclePolicy(
         ['{"memory_ids":[]}', '{"action":"finish"}', invalid_write],
@@ -776,16 +877,11 @@ def test_credential_write_metadata_in_repair_stops_before_proposal_or_persistenc
     forbidden_key: str,
 ) -> None:
     sentinel = "repaired-write-credential-sentinel"
-    invalid_write = json.dumps(
-        {
-            "memories": [
-                {
-                    "tier": "tip",
-                    "content": "Must not persist",
-                    "metadata": {"nested": {forbidden_key: sentinel}},
-                }
-            ]
-        }
+    invalid_write = _write_output(
+        _tip_write(
+            "Must not persist",
+            metadata={"nested": {forbidden_key: sentinel}},
+        )
     )
     repository = MemoryRepository(tmp_path / "memory")
     events = EventCollector()
@@ -813,16 +909,8 @@ def test_full_width_attribution_failed_repair_stops_before_proposal_or_persisten
 ) -> None:
     forbidden_key = "ａｔｔｒｉｂｕｔｉｏｎ＿ｓｃｏｒｅ"
     sentinel = "failed-repair-attribution-sentinel"
-    invalid_write = json.dumps(
-        {
-            "memories": [
-                {
-                    "tier": "tip",
-                    "content": "Must not persist",
-                    "metadata": {forbidden_key: sentinel},
-                }
-            ]
-        }
+    invalid_write = _write_output(
+        _tip_write("Must not persist", metadata={forbidden_key: sentinel})
     )
     repository = MemoryRepository(tmp_path / "memory")
     events = EventCollector()
@@ -1052,13 +1140,9 @@ def test_repository_partial_write_failure_reports_committed_ids_and_raises(
         [
             '{"memory_ids":[]}',
             '{"action":"finish"}',
-            json.dumps(
-                {
-                    "memories": [
-                        {"tier": "tip", "content": "First committed"},
-                        {"tier": "skill", "content": "Second fails"},
-                    ]
-                }
+            _write_output(
+                _tip_write("First committed"),
+                _skill_write("Second fails"),
             ),
         ]
     )
@@ -1079,12 +1163,7 @@ def test_partial_write_failure_separates_replays_from_new_commits(
 ) -> None:
     repository = FailOnNthAddRepository(tmp_path / "memory")
     repository.fail_on_add = 99
-    existing = repository.add(
-        tier="tip",
-        content="Existing replay",
-        source_task_ids=("provenance-task-923",),
-        created_round=0,
-    )
+    existing = _add_v2_tip(repository, "Existing replay")
     repository.runner_add_calls = 0
     repository.fail_on_add = 3
     events = EventCollector()
@@ -1093,14 +1172,10 @@ def test_partial_write_failure_separates_replays_from_new_commits(
         [
             '{"memory_ids":[]}',
             '{"action":"finish"}',
-            json.dumps(
-                {
-                    "memories": [
-                        {"tier": "tip", "content": "Existing replay"},
-                        {"tier": "skill", "content": "New committed"},
-                        {"tier": "tool", "content": "Third fails"},
-                    ]
-                }
+            _write_output(
+                _tip_write("Existing replay"),
+                _skill_write("New committed"),
+                _tool_write("Third fails"),
             ),
         ]
     )
@@ -1109,7 +1184,9 @@ def test_partial_write_failure_separates_replays_from_new_commits(
         _run(repository=repository, environment=environment, policy=policy, events=events)
 
     failed = events.events[-1]
-    new_item = next(item for item in repository.list() if item.content == "New committed")
+    new_item = next(
+        item for item in repository.list() if item.tier is MemoryTier.SKILL
+    )
     assert failed["event_type"] == "MemoryWriteFailed"
     assert failed["committed_memory_ids"] == [new_item.id]
     assert failed["replayed_memory_ids"] == [existing.id]
@@ -1119,19 +1196,15 @@ def test_replay_lookup_failure_preserves_prior_write_progress(
     tmp_path: Path,
 ) -> None:
     repository = FailOnceOnGetRepository(tmp_path / "memory")
-    replay = repository.add(
-        tier="tip",
-        content="Existing replay",
-        source_task_ids=("provenance-task-923",),
-        created_round=0,
+    replay = _add_v2_tip(
+        repository,
+        "Existing replay",
         embedding=(1.0, 0.0),
         embedding_model_revision="fake-embedding@1",
     )
-    lookup_failure = repository.add(
-        tier="tool",
-        content="Lookup fails for this replay",
-        source_task_ids=("provenance-task-923",),
-        created_round=0,
+    lookup_failure = _add_v2_memory(
+        repository,
+        _tool_write("Lookup fails for this replay"),
         embedding=(1.0, 0.0),
         embedding_model_revision="fake-embedding@1",
     )
@@ -1141,14 +1214,10 @@ def test_replay_lookup_failure_preserves_prior_write_progress(
         [
             '{"memory_ids":[]}',
             '{"action":"finish"}',
-            json.dumps(
-                {
-                    "memories": [
-                        {"tier": "tip", "content": "Existing replay"},
-                        {"tier": "skill", "content": "New committed"},
-                        {"tier": "tool", "content": "Lookup fails for this replay"},
-                    ]
-                }
+            _write_output(
+                _tip_write("Existing replay"),
+                _skill_write("New committed"),
+                _tool_write("Lookup fails for this replay"),
             ),
         ]
     )
@@ -1162,7 +1231,13 @@ def test_replay_lookup_failure_preserves_prior_write_progress(
         )
 
     failed = events.events[-1]
-    new_memory_id = stable_memory_id(MemoryTier.SKILL, "New committed")
+    new_skill = SkillPayload.model_validate_json(
+        json.dumps(_skill_write("New committed")["payload"])
+    )
+    new_memory_id = stable_memory_id(
+        MemoryTier.SKILL,
+        render_tier_payload(MemoryTier.SKILL, new_skill),
+    )
     assert failed["event_type"] == "MemoryWriteFailed"
     assert failed["committed_memory_ids"] == [new_memory_id]
     assert failed["replayed_memory_ids"] == [replay.id]
@@ -1172,9 +1247,12 @@ def test_replay_lookup_failure_preserves_prior_write_progress(
 
 def test_duplicate_write_is_accepted_only_as_safe_stable_id_replay(tmp_path: Path) -> None:
     repository = MemoryRepository(tmp_path / "memory")
+    payload = TipPayload(guidance="Verify identity before refund")
     existing = repository.add(
         tier="tip",
-        content="  Verify   identity before refund  ",
+        tier_schema_version=2,
+        payload=payload.model_dump(mode="json"),
+        content="  Guidance:   Verify identity before refund  ",
         source_task_ids=("provenance-task-923",),
         created_round=1,
     )
@@ -1184,7 +1262,7 @@ def test_duplicate_write_is_accepted_only_as_safe_stable_id_replay(tmp_path: Pat
         [
             '{"memory_ids":[]}',
             '{"action":"finish"}',
-            '{"memories":[{"tier":"tip","content":"Verify identity before refund"}]}',
+            _write_output(_tip_write("Verify identity before refund")),
         ]
     )
 

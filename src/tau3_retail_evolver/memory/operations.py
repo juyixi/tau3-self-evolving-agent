@@ -140,6 +140,10 @@ class MemoryOperations:
                 tiers = {source.tier for source in sources}
                 if len(tiers) != 1:
                     raise ValueError("merge sources must belong to the same tier")
+                if any(source.tier_schema_version == 2 for source in sources):
+                    raise ValueError(
+                        "V2 memory merge requires a typed tier payload"
+                    )
                 tier = sources[0].tier
                 target_id = stable_memory_id(tier, command.content)
                 if target_id in state:
