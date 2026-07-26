@@ -228,12 +228,14 @@ def test_streaming_episode_writes_only_to_its_trial_quarantine(
             json.dumps(
                 {
                     "memories": [
-                        {
-                            "tier": "tip",
-                            "content": "Check the order before changing it.",
-                            "retrieval_text": "order change check",
-                            "metadata": {},
-                        }
+                            {
+                                "tier": "tip",
+                                "payload": {
+                                    "guidance": "Check the order before changing it."
+                                },
+                                "retrieval_text": "order change check",
+                                "metadata": {},
+                            }
                     ]
                 }
             ),
@@ -370,10 +372,12 @@ def test_streaming_trials_each_start_from_empty_memory(
         [
             '{"memory_ids":[]}',
             '{"action":"finish"}',
-            '{"memories":[{"tier":"tip","content":"Trial zero","metadata":{}}]}',
+                '{"memories":[{"tier":"tip","payload":{"guidance":"Trial zero"},'
+                '"metadata":{}}]}',
             '{"memory_ids":[]}',
             '{"action":"finish"}',
-            '{"memories":[{"tier":"tip","content":"Trial one","metadata":{}}]}',
+                '{"memories":[{"tier":"tip","payload":{"guidance":"Trial one"},'
+                '"metadata":{}}]}',
         ]
     )
 
@@ -417,11 +421,15 @@ def test_streaming_executes_maintenance_at_task_thirty(
                 json.dumps(
                     {
                         "memories": [
-                            {
-                                "tier": "tip",
-                                "content": f"Experience from task {task_id}",
-                                "metadata": {},
-                            }
+                                {
+                                    "tier": "tip",
+                                    "payload": {
+                                        "guidance": (
+                                            f"Experience from task {task_id}"
+                                        )
+                                    },
+                                    "metadata": {},
+                                }
                         ]
                     }
                 ),

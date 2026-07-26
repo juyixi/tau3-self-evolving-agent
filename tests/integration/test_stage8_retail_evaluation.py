@@ -246,7 +246,9 @@ def test_static_and_streaming_reports_preserve_train_memory_isolation(
                         "memories": [
                             {
                                 "tier": "tip",
-                                "content": "Check the order first.",
+                                "payload": {
+                                    "guidance": "Check the order first."
+                                },
                                 "metadata": {},
                             }
                         ]
