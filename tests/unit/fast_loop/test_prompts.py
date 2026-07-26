@@ -140,6 +140,7 @@ def test_write_prompt_allows_terminal_public_evaluation_but_rejects_hidden_crite
     )
 
     assert prompt.payload["trajectory"] == [{"role": "assistant", "content": "Address updated."}]
+    assert "trajectory_format" not in prompt.payload
     assert prompt.payload["terminal_evaluation"] == {"official_result": "success", "reward": 1.0}
     with pytest.raises(ValueError, match="hidden"):
         build_write_prompt(
@@ -147,6 +148,81 @@ def test_write_prompt_allows_terminal_public_evaluation_but_rejects_hidden_crite
             trajectory=[],
             terminal_evaluation={"evaluation_criteria": "private rubric"},
         )
+
+
+def test_write_prompt_compacts_cumulative_transcript_without_losing_step_metadata() -> None:
+    initial = "user: Please exchange order 123."
+    after_lookup = (
+        f"{initial}\n"
+        "assistant: lookup_order(order_id='123')\n"
+        "tool: delivered"
+    )
+    final = (
+        f"{after_lookup}\n"
+        "assistant: exchange_order(order_id='123')\n"
+        "tool: exchange requested"
+    )
+    context = _public_context()
+    context["observation"] = final
+
+    prompt = build_write_prompt(
+        **context,
+        trajectory=[
+            {
+                "observation": initial,
+                "action": "lookup_order(order_id='123')",
+                "next_observation": after_lookup,
+                "reward": 0.0,
+                "done": False,
+            },
+            {
+                "observation": after_lookup,
+                "action": "exchange_order(order_id='123')",
+                "next_observation": final,
+                "reward": 1.0,
+                "done": True,
+            },
+        ],
+        terminal_evaluation={"reward": 1.0},
+    )
+
+    assert prompt.payload["observation"] == final
+    assert prompt.payload["trajectory_format"] == "final_observation_plus_actions_v1"
+    assert prompt.payload["trajectory"] == [
+        {
+            "turn": 0,
+            "action": "lookup_order(order_id='123')",
+            "reward": 0.0,
+            "done": False,
+        },
+        {
+            "turn": 1,
+            "action": "exchange_order(order_id='123')",
+            "reward": 1.0,
+            "done": True,
+        },
+    ]
+
+
+def test_write_prompt_keeps_non_cumulative_trajectory_unchanged() -> None:
+    context = _public_context()
+    trajectory = [
+        {
+            "observation": "state one",
+            "action": "lookup_order(order_id='123')",
+            "next_observation": "independent state two",
+            "reward": 0.0,
+        }
+    ]
+
+    prompt = build_write_prompt(
+        **context,
+        trajectory=trajectory,
+        terminal_evaluation={"reward": 0.0},
+    )
+
+    assert prompt.payload["trajectory"] == trajectory
+    assert "trajectory_format" not in prompt.payload
 
 
 def test_maintenance_prompt_keeps_only_caller_diagnostics_and_command_schemas() -> None:

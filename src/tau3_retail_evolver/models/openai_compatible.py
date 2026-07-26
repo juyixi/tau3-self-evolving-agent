@@ -59,6 +59,9 @@ _WRITE_SYSTEM = (
     '"retrieval_text":"optional retrieval query","metadata":{}}]}. '
     'Use {"memories":[]} when no durable lesson passes a tier definition. Content is '
     "rendered by the runtime and must not be returned. Attribution fields are not allowed. "
+    'When trajectory_format is "final_observation_plus_actions_v1", observation contains '
+    "the complete cumulative transcript and trajectory contains its ordered action and "
+    "outcome metadata without repeated observations. "
     "Do not use tools, Markdown fences, or include any other text."
 )
 _MAINTENANCE_SYSTEM = (

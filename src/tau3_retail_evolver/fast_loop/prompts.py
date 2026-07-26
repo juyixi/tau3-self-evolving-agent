@@ -17,6 +17,7 @@ from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
 PromptKind = Literal["selection", "action", "write", "maintenance"]
 MAX_DIAGNOSTIC_ITEMS_PER_TIER = 100
 MAX_DIAGNOSTIC_CONTENT_CHARS = 8_000
+CUMULATIVE_TRAJECTORY_FORMAT = "final_observation_plus_actions_v1"
 _FORBIDDEN_PUBLIC_KEY_NAMES = frozenset(
     {
         "attribution_score",
@@ -169,11 +170,18 @@ def build_write_prompt(
     normalized_evaluation = _json_copy(terminal_evaluation, "terminal evaluation")
     _reject_forbidden_fields(normalized_trajectory, "trajectory")
     _reject_forbidden_fields(normalized_evaluation, "terminal evaluation")
+    prompt_trajectory = _compact_cumulative_trajectory(
+        normalized_trajectory,
+        final_observation=context["observation"],
+    )
+    trajectory_payload: dict[str, Any] = {"trajectory": prompt_trajectory}
+    if prompt_trajectory is not normalized_trajectory:
+        trajectory_payload["trajectory_format"] = CUMULATIVE_TRAJECTORY_FORMAT
     return LifecyclePrompt(
         kind="write",
         payload={
             **context,
-            "trajectory": normalized_trajectory,
+            **trajectory_payload,
             "terminal_evaluation": normalized_evaluation,
         },
         command_schemas=(),
@@ -274,6 +282,45 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
 def _json_copy(value: Any, label: str) -> Any:
     _require_json_safe(value, label)
     return json.loads(json.dumps(value, allow_nan=False, sort_keys=True))
+
+
+def _compact_cumulative_trajectory(
+    trajectory: list[Any],
+    *,
+    final_observation: str,
+) -> list[Any]:
+    if not trajectory:
+        return trajectory
+
+    compact: list[dict[str, Any]] = []
+    previous_observation: str | None = None
+    for turn, step in enumerate(trajectory):
+        if not isinstance(step, Mapping):
+            return trajectory
+        observation = step.get("observation")
+        next_observation = step.get("next_observation")
+        if not isinstance(observation, str) or not isinstance(next_observation, str):
+            return trajectory
+        if not next_observation.startswith(observation):
+            return trajectory
+        if previous_observation is not None and observation != previous_observation:
+            return trajectory
+
+        compact.append(
+            {
+                "turn": turn,
+                **{
+                    key: value
+                    for key, value in step.items()
+                    if key not in {"turn", "observation", "next_observation"}
+                },
+            }
+        )
+        previous_observation = next_observation
+
+    if previous_observation is None or previous_observation.strip() != final_observation:
+        return trajectory
+    return compact
 
 
 def _require_json_safe(value: Any, label: str) -> None:
