@@ -367,6 +367,7 @@ def _execute_round(
             reviewed_tip_ids={item["id"] for item in public_diagnostics["tip"]["items"]},
             requires_tip_reduction=requires_tip_reduction,
         )
+        decision = _bind_command_round(decision, maintenance_round)
         canonical_commands = [
             command.model_dump(mode="json") for command in decision.commands
         ]
@@ -452,6 +453,19 @@ def _generate_decision(
             f"{repaired_result.error}"
         )
     return repaired_result.decision, True
+
+
+def _bind_command_round(
+    decision: MaintenanceDecision, maintenance_round: int
+) -> MaintenanceDecision:
+    """Keep the runtime-owned maintenance round out of the model's control."""
+    commands = tuple(
+        command.model_copy(update={"updated_round": maintenance_round})
+        if isinstance(command, (MergeCommand, DeleteCommand))
+        else command
+        for command in decision.commands
+    )
+    return decision.model_copy(update={"commands": commands})
 
 
 def _validate_commands(

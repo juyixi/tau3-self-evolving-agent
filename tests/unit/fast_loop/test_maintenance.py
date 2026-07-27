@@ -10,7 +10,9 @@ from typing import Any
 import pytest
 
 from tau3_retail_evolver.fast_loop.events import RunContext, RunMode
+from tau3_retail_evolver.fast_loop.decisions import MaintenanceDecision
 from tau3_retail_evolver.fast_loop.maintenance import (
+    _bind_command_round,
     MaintenanceState,
     bounded_diagnostics,
     run_due_maintenance,
@@ -18,6 +20,7 @@ from tau3_retail_evolver.fast_loop.maintenance import (
 from tau3_retail_evolver.fast_loop.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
 from tau3_retail_evolver.fast_loop.runner import LifecycleResponse
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
+from tau3_retail_evolver.memory.operations import DeleteCommand
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.types import MemoryStatus, MemoryTier
 
@@ -28,6 +31,23 @@ class EventCollector:
 
     def append(self, event: dict[str, Any]) -> None:
         self.events.append(event)
+
+
+def test_bind_command_round_overrides_model_supplied_round() -> None:
+    decision = MaintenanceDecision(
+        commands=(
+            DeleteCommand(
+                memory_ids=("memory-1",),
+                updated_round=0,
+                reason="stale",
+            ),
+        )
+    )
+
+    bound = _bind_command_round(decision, maintenance_round=5)
+
+    assert isinstance(bound.commands[0], DeleteCommand)
+    assert bound.commands[0].updated_round == 5
 
 
 class ScriptedPolicy:
