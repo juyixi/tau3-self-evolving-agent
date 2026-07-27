@@ -178,11 +178,15 @@ def _load_official_train_tasks(
     project_root: Path,
 ) -> tuple[str, ...]:
     tau2_path = _resolve(project_root, config.tau2.repo_path)
-    runtime = Tau2Runtime.inspect_metadata(tau2_path)
+    runtime = Tau2Runtime.inspect_metadata(
+        tau2_path,
+        domain=config.tau2.domain,
+    )
     Tau2Runtime.require_pinned_commit(runtime)
     catalog = RetailTaskCatalog.from_files(
         runtime.retail_tasks_path,
         runtime.retail_split_path,
+        domain=config.tau2.domain,
     )
     catalog.require_official_compatibility()
     return catalog.task_ids("train")

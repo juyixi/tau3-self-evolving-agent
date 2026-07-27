@@ -174,7 +174,7 @@ def _resolve_resume_adapter(
         raise ValueError("resume checkpoint trainer_start mismatch")
     if manifest.get("training_config") != config.training.model_dump(mode="json"):
         raise ValueError("resume checkpoint training_config mismatch")
-    if manifest.get("rollout_config") != config.rollout.model_dump(mode="json"):
+    if manifest.get("rollout_config") != _opd_rollout_config(config):
         raise ValueError("resume checkpoint rollout_config mismatch")
     schedule_fingerprint = manifest.get("schedule_fingerprint")
     if not isinstance(schedule_fingerprint, str) or not schedule_fingerprint.strip():
@@ -303,6 +303,11 @@ def _load_training_runtime() -> Any:
     )
 
 
+def _opd_rollout_config(config: ProjectConfig) -> dict[str, Any]:
+    """Keep execution-only concurrency out of the OPD checkpoint contract."""
+    return config.rollout.model_dump(mode="json", exclude={"max_concurrency"})
+
+
 def _preflight_summary(preflight: _Preflight) -> dict[str, Any]:
     return {
         "adapter_revision": preflight.adapter_revision,
@@ -320,7 +325,7 @@ def _preflight_summary(preflight: _Preflight) -> dict[str, Any]:
         "resume_from": (
             str(preflight.resume_from) if preflight.resume_from is not None else None
         ),
-        "rollout_config": preflight.config.rollout.model_dump(mode="json"),
+        "rollout_config": _opd_rollout_config(preflight.config),
         "training_config": preflight.config.training.model_dump(mode="json"),
     }
 

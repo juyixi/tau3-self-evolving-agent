@@ -8,7 +8,9 @@ import pytest
 from tau3_retail_evolver.slow_loop.task_grouping import (
     RETAIL_TASK_GROUP,
     RetailTaskGroups,
+    canonicalize_domain_task_group,
     canonicalize_retail_task_group,
+    maintenance_task_group,
 )
 
 
@@ -82,6 +84,23 @@ def test_requested_task_must_exist(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="missing requested task ID"):
         RetailTaskGroups.from_file(path, task_ids=("8",))
+
+
+def test_airline_uses_one_group_for_the_entire_domain(tmp_path: Path) -> None:
+    path = _write_tasks(tmp_path, [_task("1", []), _task("49", [])])
+
+    groups = RetailTaskGroups.from_file(
+        path,
+        task_ids=("1", "49"),
+        domain="airline",
+    )
+
+    assert groups.signature_for("1") == "airline-v2"
+    assert groups.signature_for("49") == "airline-v2"
+    assert maintenance_task_group("airline") == "airline-v2:maintenance"
+    assert canonicalize_domain_task_group("airline-v2", domain="airline") == "airline-v2"
+    with pytest.raises(ValueError, match="unsupported airline"):
+        canonicalize_domain_task_group("retail-v2", domain="airline")
 
 
 def test_duplicate_catalog_task_id_fails_closed(tmp_path: Path) -> None:

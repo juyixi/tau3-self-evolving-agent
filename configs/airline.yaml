@@ -1,14 +1,14 @@
 tau2:
   repo_path: external/tau2-bench
-  domain: retail
+  domain: airline
   train_split: train
   eval_split: test
   user_llm: deepseek/deepseek-v4-pro
   user_llm_args:
-      thinking:
-        type: disabled
-      temperature: 0.0
-      max_tokens: 8192
+    thinking:
+      type: disabled
+    temperature: 0.0
+    max_tokens: 8192
   solo_mode: false
 model:
   base_model: Qwen/Qwen3.5-9B
@@ -24,7 +24,7 @@ rollout:
   max_concurrency: 8
 memory:
   enabled: true
-  agent_id: retail
+  agent_id: airline
   tiers: [trajectory, tip, skill, tool]
   retrieve_top_k: 50
   teacher_memory_cap: 20
@@ -65,7 +65,7 @@ training:
   generation_max_new_tokens: 512
   loss_type: forward_kl
 pipeline:
-  iteration_task_count: 74
+  iteration_task_count: 30
   shuffle_train_tasks: true
 evaluation:
   nl_assertions:

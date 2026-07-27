@@ -271,7 +271,9 @@ class OPDTrainer:
             raise ValueError("resume trainer lineage mismatch")
         if manifest.get("training_config") != self.training_config.model_dump(mode="json"):
             raise ValueError("resume training config mismatch")
-        if manifest.get("rollout_config") != self.rollout_config.model_dump(mode="json"):
+        if manifest.get("rollout_config") != _opd_rollout_config(
+            self.rollout_config
+        ):
             raise ValueError("resume rollout config mismatch")
         if manifest.get("total_examples") != total_examples:
             raise ValueError("resume sampling schedule mismatch")
@@ -326,7 +328,7 @@ class OPDTrainer:
                 "completed_examples": completed_examples,
                 "dataset_build_id": dataset_manifest.get("dataset_build_id"),
                 "optimizer_steps": optimizer_steps,
-                "rollout_config": self.rollout_config.model_dump(mode="json"),
+                "rollout_config": _opd_rollout_config(self.rollout_config),
                 "schedule_fingerprint": schedule_fingerprint,
                 "schedule_sha256": schedule_fingerprint,
                 "schema_version": _MANIFEST_SCHEMA_VERSION,
@@ -693,6 +695,11 @@ def _scalar(value: Tensor) -> float:
     if not isinstance(value, Tensor) or value.numel() != 1:
         raise TypeError("OPD metrics must be scalar tensors")
     return float(value.detach().cpu().item())
+
+
+def _opd_rollout_config(config: RolloutConfig) -> dict[str, Any]:
+    """Serialize only rollout values that affect OPD sampling and resumption."""
+    return config.model_dump(mode="json", exclude={"max_concurrency"})
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

@@ -8,6 +8,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from tau3_retail_evolver.envs.task_catalog import (
+    OFFICIAL_AIRLINE_SPLIT_COUNTS,
+    OFFICIAL_AIRLINE_SPLIT_SHA256,
+    OFFICIAL_AIRLINE_TRAIN_TASK_IDS,
     OFFICIAL_SPLIT_COUNTS,
     OFFICIAL_SPLIT_SHA256,
     OFFICIAL_TRAIN_TASK_IDS,
@@ -43,6 +46,18 @@ _EXPECTED_ARTIFACTS = (
     "datasets/write.jsonl",
     "datasets/maint.jsonl",
 )
+_OFFICIAL_DOMAIN_SPLITS = {
+    "retail": (
+        OFFICIAL_SPLIT_COUNTS,
+        OFFICIAL_SPLIT_SHA256,
+        OFFICIAL_TRAIN_TASK_IDS,
+    ),
+    "airline": (
+        OFFICIAL_AIRLINE_SPLIT_COUNTS,
+        OFFICIAL_AIRLINE_SPLIT_SHA256,
+        OFFICIAL_AIRLINE_TRAIN_TASK_IDS,
+    ),
+}
 
 
 class _AuditModel(BaseModel):
@@ -82,15 +97,21 @@ def audit_dataset(path: Path, *, project_root: Path | None = None) -> AuditRepor
     if not isinstance(official, dict):
         _error(errors, "non_train_source", "official split metadata is missing")
     else:
-        if official.get("sha256") != OFFICIAL_SPLIT_SHA256:
-            _error(errors, "non_train_source", "official retail split hash mismatch")
+        domain = official.get("domain", "retail")
+        expected = _OFFICIAL_DOMAIN_SPLITS.get(domain)
+        if expected is None:
+            _error(errors, "non_train_source", "official Tau2 domain is invalid")
+            expected = _OFFICIAL_DOMAIN_SPLITS["retail"]
+        expected_counts, expected_split_hash, expected_train_ids = expected
+        if official.get("sha256") != expected_split_hash:
+            _error(errors, "non_train_source", f"official {domain} split hash mismatch")
         raw_train_ids = official.get("train_task_ids")
         if (
             not isinstance(raw_train_ids, list)
             or not all(isinstance(task_id, str) and task_id for task_id in raw_train_ids)
             or len(raw_train_ids) != len(set(raw_train_ids))
-            or len(raw_train_ids) != OFFICIAL_SPLIT_COUNTS["train"]
-            or tuple(raw_train_ids) != OFFICIAL_TRAIN_TASK_IDS
+            or len(raw_train_ids) != expected_counts["train"]
+            or tuple(raw_train_ids) != expected_train_ids
         ):
             _error(errors, "non_train_source", "official train task ID set is invalid")
         else:
@@ -301,8 +322,15 @@ def _audit_source_evidence(
             if project_root is not None
             else _infer_project_root(root, context)
         )
-        tasks_path = _context_path(project, context.get("retail_tasks_path"))
-        split_path = _context_path(project, context.get("retail_split_path"))
+        domain = context.get("domain", "retail")
+        tasks_path = _context_path(
+            project,
+            context.get("tasks_path", context.get("retail_tasks_path")),
+        )
+        split_path = _context_path(
+            project,
+            context.get("split_path", context.get("retail_split_path")),
+        )
         memory_root = _context_path(project, context.get("memory_root"))
         raw_source_paths = context.get("source_run_paths")
         if not isinstance(raw_source_paths, list) or not raw_source_paths:
@@ -310,7 +338,11 @@ def _audit_source_evidence(
         source_paths = tuple(
             _context_path(project, value) for value in raw_source_paths
         )
-        catalog = RetailTaskCatalog.from_files(tasks_path, split_path)
+        catalog = RetailTaskCatalog.from_files(
+            tasks_path,
+            split_path,
+            domain=domain,
+        )
         catalog.require_official_compatibility()
         source_set = load_source_runs(
             source_paths,
@@ -327,12 +359,13 @@ def _audit_source_evidence(
                     for task_id in source.manifest["task_ids"]
                 )
             ),
+            domain=domain,
         )
         if any(
             episode.task_group != groups.signature_for(episode.task_id)
             for episode in rebuilt.episodes
         ):
-            raise ValueError("source task group does not match Retail task metadata")
+            raise ValueError(f"source task group does not match {domain} task metadata")
     except (KeyError, OSError, TypeError, ValueError) as error:
         _error(errors, "source_evidence_mismatch", str(error))
         return

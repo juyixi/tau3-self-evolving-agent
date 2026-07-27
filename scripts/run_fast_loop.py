@@ -15,10 +15,9 @@ from urllib.parse import urlsplit
 
 from tau3_retail_evolver.config import load_config
 from tau3_retail_evolver.credential_policy import is_credential_key
-from tau3_retail_evolver.envs.runtime import Tau2Runtime
+from tau3_retail_evolver.envs.runtime import Tau2RunDomainRuntime, Tau2Runtime
 from tau3_retail_evolver.envs.split_guard import require_learning_split
 from tau3_retail_evolver.envs.task_catalog import RetailTaskCatalog
-from tau3_retail_evolver.envs.tau2_retail import Tau2RetailEnv
 from tau3_retail_evolver.evaluation.tau2_nl_assertions import bind_tau2_nl_assertions
 from tau3_retail_evolver.fast_loop.events import RunContext, RunMode
 from tau3_retail_evolver.fast_loop.maintenance import run_due_maintenance
@@ -27,6 +26,10 @@ from tau3_retail_evolver.fast_loop.runner import (
     FastLoopConfig,
     run_fast_loop_episode,
     validate_fast_loop_dependencies,
+)
+from tau3_retail_evolver.fast_loop.tau2_run_domain import (
+    Tau2BatchFailure,
+    run_tau2_fast_loop_batch,
 )
 from tau3_retail_evolver.io.jsonl import JsonlWriter
 from tau3_retail_evolver.memory.embeddings import build_embedding_provider
@@ -43,6 +46,7 @@ from tau3_retail_evolver.runs.manifest import create_manifest
 from tau3_retail_evolver.slow_loop.task_grouping import (
     MAINTENANCE_TASK_GROUP,
     RetailTaskGroups,
+    maintenance_task_group,
 )
 
 
@@ -82,7 +86,9 @@ class _EventBuffer:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run canonical Qwen retail fast-loop learning.")
+    parser = argparse.ArgumentParser(
+        description="Run canonical Qwen Tau2 fast-loop learning."
+    )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--split", required=True)
     tasks = parser.add_mutually_exclusive_group(required=True)
@@ -110,9 +116,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileExistsError(f"refusing to reuse existing run: {run_path}")
 
     config = load_config(args.config)
-    runtime = Tau2Runtime.inspect_metadata(config.tau2.repo_path)
+    runtime = Tau2Runtime.inspect_metadata(
+        config.tau2.repo_path,
+        domain=config.tau2.domain,
+    )
     Tau2Runtime.require_pinned_commit(runtime)
-    catalog = RetailTaskCatalog.from_files(runtime.retail_tasks_path, runtime.retail_split_path)
+    catalog = RetailTaskCatalog.from_files(
+        runtime.tasks_path,
+        runtime.split_path,
+        domain=config.tau2.domain,
+    )
     catalog.require_official_compatibility()
     run_seed = config.training.seed if args.seed is None else args.seed
     task_ids = _resolve_train_tasks(
@@ -127,22 +140,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("QWEN_BASE_URL or --qwen-base-url is required")
 
     task_groups = RetailTaskGroups.from_file(
-        runtime.retail_tasks_path,
+        runtime.tasks_path,
         task_ids=task_ids,
+        domain=config.tau2.domain,
     )
 
-    gym_factory = Tau2Runtime.load_verified_gym_factory(runtime.repo_path)
+    if config.tau2.solo_mode:
+        raise ValueError("run_domain fast-loop execution requires tau2.solo_mode=false")
+    run_domain_runtime = Tau2Runtime.load_verified_run_domain(runtime.repo_path)
     evaluation_provenance = bind_tau2_nl_assertions(config.evaluation.nl_assertions)
-    probe = Tau2RetailEnv(task_ids[0], config, gym_factory=gym_factory)
-    try:
-        user_simulator_config = probe.user_simulator_config
-    finally:
-        probe.close()
+    user_simulator_config = {
+        "solo_mode": False,
+        "user_llm": config.tau2.user_llm,
+        "user_llm_args": dict(config.tau2.user_llm_args),
+    }
 
     fast_loop_config = FastLoopConfig(
         retrieve_top_k=config.memory.retrieve_top_k,
         max_episode_steps=config.rollout.max_episode_steps,
         memory_enabled=config.memory.enabled,
+        max_new_tips_per_episode=config.memory.max_new_tips_per_episode,
+        max_new_skills_per_episode=config.memory.max_new_skills_per_episode,
+        max_new_tools_per_episode=config.memory.max_new_tools_per_episode,
+        max_new_trajectories_per_episode=config.memory.max_new_trajectories_per_episode,
+        maintenance_tip_capacity=config.memory.maintenance_tip_capacity,
+        maintenance_similarity_threshold=config.memory.maintenance_similarity_threshold,
+        maintenance_priority_pair_limit=config.memory.maintenance_priority_pair_limit,
     )
     if fast_loop_config.memory_enabled:
         repository = open_training_memory(config.memory, root=args.project_root)
@@ -195,7 +218,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         user_simulator_config=user_simulator_config,
         environment_options={
             "domain": config.tau2.domain,
-            "all_messages_as_observation": True,
+            "execution_backend": "tau2.run.run_domain",
+            "max_concurrency": config.rollout.max_concurrency,
         },
         rollout_options={
             "temperature": config.rollout.temperature,
@@ -206,6 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config.memory.agent_id if fast_loop_config.memory_enabled else None
             ),
             "task_order_seed": run_seed,
+            "max_concurrency": config.rollout.max_concurrency,
         },
         model_serving_contract=MODEL_SERVING_CONTRACT,
         evaluation_config={"nl_assertions": evaluation_provenance},
@@ -226,20 +251,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         temperature=config.rollout.temperature,
         top_p=config.rollout.top_p,
-        default_task_group=MAINTENANCE_TASK_GROUP,
+        default_task_group=maintenance_task_group(config.tau2.domain),
     )
-    results, maintenance_rounds, failures = _run_requested_tasks(
+    results, maintenance_rounds, failures = _run_requested_tasks_via_domain(
+        runtime=run_domain_runtime,
+        domain=config.tau2.domain,
+        split=args.split,
         task_ids=task_ids,
-        env_factory=lambda task_id: Tau2RetailEnv(
-            task_id,
-            config,
-            gym_factory=gym_factory,
-        ),
+        run_seed=run_seed,
+        max_concurrency=config.rollout.max_concurrency,
+        user_llm=config.tau2.user_llm,
+        user_llm_args=config.tau2.user_llm_args,
+        agent_model=config.model.base_model,
         policy=policy,
         repository=repository,
         retriever=retriever,
         fast_loop_config=fast_loop_config,
         context=context,
+        task_instruction=(
+            f"Resolve the {config.tau2.domain} request shown in the current conversation."
+        ),
         completed_train_tasks_before=args.completed_train_tasks_before,
         maintenance_period=config.memory.maintenance_period,
     )
@@ -328,6 +359,164 @@ def main(argv: Sequence[str] | None = None) -> int:
     write_bytes_atomic(run_path / "fast_loop_summary.json", summary_bytes)
     sys.stdout.write(summary_bytes.decode("utf-8"))
     return 0
+
+
+def _run_requested_tasks_via_domain(
+    *,
+    runtime: Tau2RunDomainRuntime,
+    domain: str,
+    split: str,
+    task_ids: Sequence[str],
+    run_seed: int,
+    max_concurrency: int,
+    user_llm: str,
+    user_llm_args: dict[str, Any],
+    agent_model: str,
+    policy: Any,
+    repository: MemoryRepository | None,
+    retriever: Retriever | None,
+    fast_loop_config: FastLoopConfig,
+    context: RunContext,
+    task_instruction: str,
+    completed_train_tasks_before: int,
+    maintenance_period: int,
+) -> tuple[
+    tuple[EpisodeResult, ...],
+    tuple[int, ...],
+    tuple[dict[str, Any], ...],
+]:
+    """Run task batches concurrently, pausing only at Memory maintenance boundaries."""
+    validate_fast_loop_dependencies(
+        config=fast_loop_config,
+        repository=repository,
+        retriever=retriever,
+    )
+    if max_concurrency < 1:
+        raise ValueError("max_concurrency must be positive")
+    if maintenance_period < 1:
+        raise ValueError("maintenance_period must be positive")
+
+    results: list[EpisodeResult] = []
+    maintenance_rounds: list[int] = []
+    failures: list[dict[str, Any]] = []
+    task_offset = 0
+    batch_index = 0
+    while task_offset < len(task_ids):
+        if fast_loop_config.memory_enabled:
+            completed = completed_train_tasks_before + task_offset
+            remaining_until_maintenance = maintenance_period - (
+                completed % maintenance_period
+            )
+            batch_size = min(
+                remaining_until_maintenance,
+                len(task_ids) - task_offset,
+            )
+            assert repository is not None
+            batch_snapshot_id = repository.snapshot().memory_snapshot_id
+        else:
+            batch_size = len(task_ids) - task_offset
+            batch_snapshot_id = None
+
+        batch_task_ids = tuple(task_ids[task_offset : task_offset + batch_size])
+        batch = run_tau2_fast_loop_batch(
+            runtime=runtime,
+            domain=domain,
+            split=split,
+            task_ids=batch_task_ids,
+            run_seed=_run_domain_batch_seed(run_seed, batch_index),
+            max_concurrency=max_concurrency,
+            user_llm=user_llm,
+            user_llm_args=user_llm_args,
+            agent_model=agent_model,
+            policy=policy,
+            repository=repository,
+            retriever=retriever,
+            config=fast_loop_config,
+            context_factory=lambda _task_id, _tau2_seed: replace(
+                context,
+                memory_snapshot_id=batch_snapshot_id,
+            ),
+            task_instruction=task_instruction,
+            write_memory=fast_loop_config.memory_enabled,
+            memory_disabled_reason="config",
+        )
+        results.extend(episode.result for episode in batch.episodes)
+        failures.extend(_run_domain_failure_record(failure) for failure in batch.failures)
+        task_offset += batch_size
+        batch_index += 1
+
+        if not fast_loop_config.memory_enabled:
+            continue
+        assert repository is not None
+        completed_tasks = completed_train_tasks_before + task_offset
+        if completed_tasks % maintenance_period != 0:
+            continue
+        maintenance_buffer = _EventBuffer()
+        maintenance_context = replace(
+            context,
+            event_writer=maintenance_buffer,
+            memory_snapshot_id=repository.snapshot().memory_snapshot_id,
+        )
+        try:
+            maintenance = run_due_maintenance(
+                completed_train_tasks=completed_tasks,
+                period=maintenance_period,
+                repository=repository,
+                policy=policy,
+                context=maintenance_context,
+                tip_capacity=fast_loop_config.maintenance_tip_capacity,
+                similarity_threshold=fast_loop_config.maintenance_similarity_threshold,
+                priority_pair_limit=fast_loop_config.maintenance_priority_pair_limit,
+            )
+        except Exception as error:
+            maintenance_round = max(1, completed_tasks // maintenance_period)
+            failure = _failure_record(
+                error,
+                task_id=f"maintenance-round-{maintenance_round}",
+                stage="maintenance",
+            )
+            failure["maintenance_round"] = maintenance_round
+            failures.append(failure)
+            context.event_writer.append(
+                maintenance_context.event(
+                    "MaintenanceTaskFailed",
+                    failure["task_id"],
+                    error=failure["error"],
+                    maintenance_round=maintenance_round,
+                )
+            )
+        else:
+            maintenance_buffer.flush_to(context.event_writer)
+            if maintenance.executed:
+                maintenance_rounds.append(maintenance.maintenance_round)
+
+    return tuple(results), tuple(maintenance_rounds), tuple(failures)
+
+
+def _run_domain_batch_seed(run_seed: int, batch_index: int) -> int:
+    digest = hashlib.sha256(
+        f"{run_seed}:tau2-run-domain-batch:{batch_index}".encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
+
+
+def _run_domain_failure_record(failure: Tau2BatchFailure) -> dict[str, Any]:
+    fingerprint_source = (
+        f"episode|{failure.stage}|{failure.error_type}|{failure.task_id}|{failure.seed}"
+    )
+    return {
+        "task_id": failure.task_id,
+        "stage": "episode",
+        "error": {
+            "types": [failure.error_type],
+            "messages": [f"Tau2 {failure.stage} failed"],
+            "fingerprint": hashlib.sha256(
+                fingerprint_source.encode("utf-8")
+            ).hexdigest()[:16],
+        },
+        "tau2_seed": failure.seed,
+        "tau2_stage": failure.stage,
+    }
 
 
 def _run_requested_tasks(
@@ -420,6 +609,9 @@ def _run_requested_tasks(
                     repository=repository,
                     policy=policy,
                     context=maintenance_context,
+                    tip_capacity=fast_loop_config.maintenance_tip_capacity,
+                    similarity_threshold=fast_loop_config.maintenance_similarity_threshold,
+                    priority_pair_limit=fast_loop_config.maintenance_priority_pair_limit,
                 )
             except Exception as error:
                 maintenance_round = max(1, completed_tasks // maintenance_period)

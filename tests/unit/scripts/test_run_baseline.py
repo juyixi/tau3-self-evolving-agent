@@ -7,10 +7,8 @@ from typing import Any
 
 import pytest
 
-from tau3_retail_evolver.fast_loop.baseline_runner import RolloutSummary
-from tau3_retail_evolver.models.policy import DecisionResponse
+from tau3_retail_evolver.fast_loop.tau2_run_domain import Tau2BatchResult
 from scripts import run_baseline
-from tests.support.policy import ScriptedPolicy
 
 
 def test_rejects_non_train_before_loading_configuration(
@@ -60,7 +58,13 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
             user_llm_args={"api_key": "simulator-secret", "temperature": 0.0},
         ),
         model=SimpleNamespace(base_model="Qwen/Qwen3.5-9B"),
-        rollout=SimpleNamespace(temperature=1.0, top_p=0.95, max_episode_steps=40),
+        rollout=SimpleNamespace(
+            temperature=1.0,
+            top_p=0.95,
+            max_episode_steps=40,
+            max_concurrency=8,
+        ),
+        memory=SimpleNamespace(retrieve_top_k=50),
         training=SimpleNamespace(seed=17),
         evaluation=SimpleNamespace(
             nl_assertions=SimpleNamespace(
@@ -75,6 +79,8 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         git_commit="a" * 40,
         retail_tasks_path=tmp_path / "tasks.json",
         retail_split_path=tmp_path / "split_tasks.json",
+        tasks_path=tmp_path / "tasks.json",
+        split_path=tmp_path / "split_tasks.json",
     )
     catalog = SimpleNamespace(
         split_sha256="b" * 64,
@@ -85,34 +91,18 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
     captured: dict[str, Any] = {}
     ordering: list[str] = []
 
-    class FakeEnvironment:
-        def __init__(self, task_id: str, config: Any, gym_factory: Any) -> None:
-            ordering.append("probe")
-            captured.setdefault("environments", []).append((task_id, gym_factory))
-            self.user_simulator_config = {
-                "solo_mode": False,
-                "user_llm": "resolved-simulator-model",
-                "user_llm_args": {"api_key": "resolved-secret", "temperature": 0.2},
-            }
-
-        def close(self) -> None:
-            captured["probe_close_calls"] = captured.get("probe_close_calls", 0) + 1
-
     def construct_client(**kwargs: Any) -> object:
         ordering.append("policy")
         client_args.update(kwargs)
         return object()
 
-    def fake_run(
-        tasks: tuple[str, ...], env_factory: Any, policy: Any, context: Any
-    ) -> RolloutSummary:
+    def fake_run(**kwargs: Any) -> Tau2BatchResult:
         ordering.append("episodes")
-        captured["tasks"] = tasks
-        captured["policy"] = policy
-        captured["context"] = context
-        environment = env_factory("task-1")
-        environment.close()
-        return RolloutSummary(episodes=())
+        captured["tasks"] = tuple(kwargs["task_ids"])
+        captured["policy"] = kwargs["policy"]
+        captured["context"] = kwargs["context_factory"]("task-1", 17)
+        captured["batch"] = kwargs
+        return Tau2BatchResult(episodes=(), failures=(), tau2_results={})
 
     def bind_assertions(nl_assertions: Any) -> dict[str, Any]:
         ordering.append("bind")
@@ -136,37 +126,38 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         run_baseline,
         "Tau2Runtime",
         SimpleNamespace(
-            inspect_metadata=lambda repo_path: runtime,
+            inspect_metadata=lambda repo_path, **kwargs: runtime,
             require_pinned_commit=lambda fingerprint: None,
-            load_verified_gym_factory=lambda repo_path: (
-                ordering.append("gym") or "verified-gym-factory"
+            load_verified_run_domain=lambda repo_path: (
+                ordering.append("run-domain") or "verified-run-domain"
             ),
         ),
     )
     monkeypatch.setattr(
         run_baseline,
         "RetailTaskCatalog",
-        SimpleNamespace(from_files=lambda tasks_path, split_path: catalog),
+        SimpleNamespace(
+            from_files=lambda tasks_path, split_path, **kwargs: catalog
+        ),
     )
-    monkeypatch.setattr(run_baseline, "Tau2RetailEnv", FakeEnvironment)
+    monkeypatch.setattr(
+        run_baseline,
+        "RetailTaskGroups",
+        SimpleNamespace(
+            from_file=lambda *args, **kwargs: SimpleNamespace(
+                signature_for=lambda task_id: "retail-v2"
+            )
+        ),
+    )
     monkeypatch.setattr(run_baseline, "bind_tau2_nl_assertions", bind_assertions, raising=False)
     monkeypatch.setattr(run_baseline, "OpenAICompatibleHttpClient", construct_client)
     monkeypatch.setattr(run_baseline, "create_manifest", create_recorded_manifest)
     monkeypatch.setattr(
         run_baseline,
-        "OpenAICompatibleQwenPolicy",
-        lambda *, client: ScriptedPolicy(
-            [
-                DecisionResponse(
-                    raw_output="raw",
-                    parsed_action="stop",
-                    sampling_params={"temperature": 1.0, "top_p": 0.95},
-                    latency_s=0.0,
-                )
-            ]
-        ),
+        "OpenAICompatibleFastLoopPolicy",
+        lambda **kwargs: kwargs,
     )
-    monkeypatch.setattr(run_baseline, "run_baseline", fake_run)
+    monkeypatch.setattr(run_baseline, "run_tau2_fast_loop_batch", fake_run)
 
     returncode = run_baseline.main(
         [
@@ -195,12 +186,10 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
     assert captured["context"].adapter_revision is None
     assert captured["context"].memory_snapshot_id is None
     assert captured["context"].seed == 17
-    assert captured["environments"] == [
-        ("task-1", "verified-gym-factory"),
-        ("task-1", "verified-gym-factory"),
-    ]
-    assert captured["probe_close_calls"] == 2
-    assert ordering == ["gym", "bind", "probe", "policy", "manifest", "episodes", "probe"]
+    assert captured["batch"]["runtime"] == "verified-run-domain"
+    assert captured["batch"]["domain"] == "retail"
+    assert captured["batch"]["max_concurrency"] == 8
+    assert ordering == ["run-domain", "bind", "policy", "manifest", "episodes"]
     assert client_args == {
         "base_url": "http://qwen.invalid/v1",
         "model": "Qwen/Qwen3.5-9B",
@@ -219,8 +208,8 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
     assert manifest["parent_checkpoint"] is None
     assert manifest["user_simulator_config"] == {
         "solo_mode": False,
-        "user_llm": "resolved-simulator-model",
-        "user_llm_args": {"api_key": "[REDACTED]", "temperature": 0.2},
+        "user_llm": "simulator-model",
+        "user_llm_args": {"api_key": "[REDACTED]", "temperature": 0.0},
     }
     assert manifest["model_serving_contract"] == {
         "language_model_only": True,
@@ -233,7 +222,9 @@ def test_creates_verified_no_memory_baseline_artifacts_without_api_key_leakage(
         "parallel_tool_calls": False,
     }
     assert manifest["rollout_options"] == {
+        "max_concurrency": 8,
         "max_episode_steps": 40,
+        "memory_enabled": False,
         "temperature": 1.0,
         "top_p": 0.95,
     }

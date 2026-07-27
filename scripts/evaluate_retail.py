@@ -12,14 +12,13 @@ from urllib.parse import urlsplit
 from tau3_retail_evolver.config import load_config
 from tau3_retail_evolver.envs.runtime import Tau2Runtime
 from tau3_retail_evolver.envs.task_catalog import RetailTaskCatalog
-from tau3_retail_evolver.envs.tau2_retail import Tau2RetailEnv
 from tau3_retail_evolver.eval.guard import EvaluationGuard, EvaluationProtocol
 from tau3_retail_evolver.eval.metrics import (
     EvaluationProvenance,
     build_evaluation_report,
     write_evaluation_json,
 )
-from tau3_retail_evolver.eval.runner import run_evaluation_trials
+from tau3_retail_evolver.eval.runner import run_evaluation_trials_via_domain
 from tau3_retail_evolver.evaluation.tau2_nl_assertions import (
     bind_tau2_nl_assertions,
 )
@@ -36,7 +35,10 @@ from tau3_retail_evolver.models.openai_compatible import (
     OpenAICompatibleHttpClient,
 )
 from tau3_retail_evolver.runs.manifest import create_manifest
-from tau3_retail_evolver.slow_loop.task_grouping import RetailTaskGroups
+from tau3_retail_evolver.slow_loop.task_grouping import (
+    RetailTaskGroups,
+    maintenance_task_group,
+)
 
 
 MODEL_SERVING_CONTRACT = {
@@ -63,7 +65,7 @@ _SAFE_SLUG = re.compile(r"^[a-z0-9_-]+$")
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate Qwen/LoRA on held-out Tau2 Retail tasks."
+        description="Evaluate Qwen/LoRA on held-out Tau2 tasks."
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument(
@@ -89,7 +91,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    expected_domain: str | None = None,
+) -> int:
     args = parse_args(argv)
     _validate_early_arguments(args)
     split = "base" if args.official_base_reproduction else args.split
@@ -103,6 +109,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileExistsError(f"refusing to reuse existing evaluation run: {run_path}")
 
     config = load_config(args.config)
+    if expected_domain is not None and config.tau2.domain != expected_domain:
+        raise ValueError(
+            f"evaluation entry point requires Tau2 domain {expected_domain!r}, "
+            f"resolved {config.tau2.domain!r}"
+        )
     model_serving_contract = {
         **MODEL_SERVING_CONTRACT,
         "temperature": config.rollout.temperature,
@@ -113,11 +124,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         num_trials=args.num_trials,
         base_seed=config.training.seed,
     )
-    runtime = Tau2Runtime.inspect_metadata(config.tau2.repo_path)
+    runtime = Tau2Runtime.inspect_metadata(
+        config.tau2.repo_path,
+        domain=config.tau2.domain,
+    )
     Tau2Runtime.require_pinned_commit(runtime)
     catalog = RetailTaskCatalog.from_files(
-        runtime.retail_tasks_path,
-        runtime.retail_split_path,
+        runtime.tasks_path,
+        runtime.split_path,
+        domain=config.tau2.domain,
     )
     catalog.require_official_compatibility()
     task_ids = _resolve_task_ids(args.task_ids, catalog.task_ids(split))
@@ -140,16 +155,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     source_memory_snapshot_id = guard.source_memory_snapshot_id()
     source_memory_counts = _source_memory_counts(guard)
     task_groups = RetailTaskGroups.from_file(
-        runtime.retail_tasks_path,
+        runtime.tasks_path,
         task_ids=task_ids,
+        domain=config.tau2.domain,
     )
-    gym_factory = Tau2Runtime.load_verified_gym_factory(runtime.repo_path)
+    if config.tau2.solo_mode:
+        raise ValueError("run_domain evaluation requires tau2.solo_mode=false")
+    run_domain_runtime = Tau2Runtime.load_verified_run_domain(runtime.repo_path)
     nl_evaluator = bind_tau2_nl_assertions(config.evaluation.nl_assertions)
-    probe = Tau2RetailEnv(task_ids[0], config, gym_factory=gym_factory)
-    try:
-        user_simulator_config = probe.user_simulator_config
-    finally:
-        probe.close()
+    user_simulator_config = {
+        "solo_mode": False,
+        "user_llm": config.tau2.user_llm,
+        "user_llm_args": dict(config.tau2.user_llm_args),
+    }
 
     client = OpenAICompatibleHttpClient(
         base_url=base_url,
@@ -169,6 +187,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         retrieve_top_k=config.memory.retrieve_top_k,
         max_episode_steps=config.rollout.max_episode_steps,
         memory_enabled=memory_enabled,
+        max_new_tips_per_episode=config.memory.max_new_tips_per_episode,
+        max_new_skills_per_episode=config.memory.max_new_skills_per_episode,
+        max_new_tools_per_episode=config.memory.max_new_tools_per_episode,
+        max_new_trajectories_per_episode=config.memory.max_new_trajectories_per_episode,
+        maintenance_tip_capacity=config.memory.maintenance_tip_capacity,
+        maintenance_similarity_threshold=config.memory.maintenance_similarity_threshold,
+        maintenance_priority_pair_limit=config.memory.maintenance_priority_pair_limit,
     )
     if memory_enabled:
         retriever_factory = lambda memory: Retriever(
@@ -197,7 +222,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         user_simulator_config=user_simulator_config,
         environment_options={
             "domain": config.tau2.domain,
-            "all_messages_as_observation": True,
+            "execution_backend": "tau2.run.run_domain",
+            "max_concurrency": config.rollout.max_concurrency,
             "official_base_reproduction": args.official_base_reproduction,
         },
         rollout_options={
@@ -215,13 +241,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "seeds": list(seeds),
             "task_order": list(task_ids),
             "capabilities": guard.capabilities.as_dict(),
+            "max_concurrency": config.rollout.max_concurrency,
         },
         model_serving_contract=model_serving_contract,
         evaluation_config={
             "nl_assertions": nl_evaluator,
             "protocol": args.protocol.value,
         },
-        command=_command_for_manifest(argv),
+        command=_command_for_manifest(argv, domain=config.tau2.domain),
     )
     context = RunContext(
         run_id=args.run_id,
@@ -239,24 +266,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         temperature=config.rollout.temperature,
         top_p=config.rollout.top_p,
-        default_task_group="retail-actions-v1:evaluation-maintenance",
+        default_task_group=maintenance_task_group(config.tau2.domain),
     )
-    run = run_evaluation_trials(
+    run = run_evaluation_trials_via_domain(
+        runtime=run_domain_runtime,
+        domain=config.tau2.domain,
+        split=split,
         task_ids=task_ids,
         seeds=seeds,
-        env_factory=lambda task_id: Tau2RetailEnv(
-            task_id,
-            config,
-            gym_factory=gym_factory,
-        ),
+        max_concurrency=config.rollout.max_concurrency,
+        user_llm=config.tau2.user_llm,
+        user_llm_args=config.tau2.user_llm_args,
+        agent_model=config.model.base_model,
         policy=policy,
         guard=guard,
         retriever_factory=retriever_factory,
         config=fast_loop_config,
         context=context,
         maintenance_period=config.memory.maintenance_period,
+        task_instruction=(
+            f"Resolve the {config.tau2.domain} request shown in the current conversation."
+        ),
     )
     provenance = EvaluationProvenance(
+        domain=config.tau2.domain,
         run_id=args.run_id,
         protocol=args.protocol,
         official_base_reproduction=args.official_base_reproduction,
@@ -399,9 +432,14 @@ def _require_memory_root(root: Path | None) -> Path:
     return root
 
 
-def _command_for_manifest(argv: Sequence[str] | None) -> list[str]:
+def _command_for_manifest(
+    argv: Sequence[str] | None,
+    *,
+    domain: str = "retail",
+) -> list[str]:
     arguments = list(argv) if argv is not None else sys.argv[1:]
-    return [sys.executable, "-m", "scripts.evaluate_retail", *arguments]
+    module = "scripts.evaluate_airline" if domain == "airline" else "scripts.evaluate_retail"
+    return [sys.executable, "-m", module, *arguments]
 
 
 if __name__ == "__main__":

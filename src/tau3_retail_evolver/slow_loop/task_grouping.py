@@ -13,14 +13,29 @@ GROUPING_REVISION = "retail-v2"
 RETAIL_TASK_GROUP = GROUPING_REVISION
 MAINTENANCE_TASK_GROUP = f"{GROUPING_REVISION}:maintenance"
 _LEGACY_ACTION_SIGNATURE = re.compile(r"^retail-actions-v1:[0-9a-f]{64}$")
+_DOMAIN_NAME = re.compile(r"^[a-z0-9_-]+$")
+
+
+def domain_task_group(domain: str) -> str:
+    if not isinstance(domain, str) or not _DOMAIN_NAME.fullmatch(domain):
+        raise ValueError(f"invalid Tau2 domain for task grouping: {domain!r}")
+    return f"{domain}-v2"
+
+
+def maintenance_task_group(domain: str) -> str:
+    return f"{domain_task_group(domain)}:maintenance"
 
 
 @dataclass(frozen=True, slots=True)
 class RetailTaskGroups:
-    """One attribution group for all Retail tasks in the same domain."""
+    """One attribution group for every task in a Tau2 domain.
+
+    The historical class name remains compatible with Retail callers.
+    """
 
     task_ids: tuple[str, ...]
     _signatures: Mapping[str, str] = field(repr=False)
+    domain: str = "retail"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_signatures", MappingProxyType(dict(self._signatures)))
@@ -31,7 +46,9 @@ class RetailTaskGroups:
         path: Path,
         *,
         task_ids: Sequence[str],
+        domain: str = "retail",
     ) -> "RetailTaskGroups":
+        group = domain_task_group(domain)
         requested = tuple(str(task_id) for task_id in task_ids)
         if not requested:
             raise ValueError("task grouping requires at least one requested task ID")
@@ -47,7 +64,8 @@ class RetailTaskGroups:
             raise ValueError(f"tasks JSON file {path} is missing requested task ID(s): {rendered}")
         return cls(
             task_ids=requested,
-            _signatures={task_id: RETAIL_TASK_GROUP for task_id in requested},
+            _signatures={task_id: group for task_id in requested},
+            domain=domain,
         )
 
     def signature_for(self, task_id: str) -> str:
@@ -73,6 +91,37 @@ def is_supported_retail_task_group(value: object) -> bool:
     except ValueError:
         return False
     return True
+
+
+def canonicalize_domain_task_group(value: object, *, domain: str) -> str:
+    expected = domain_task_group(domain)
+    if value == expected:
+        return expected
+    if domain == "retail" and isinstance(value, str) and _LEGACY_ACTION_SIGNATURE.fullmatch(
+        value
+    ):
+        return expected
+    raise ValueError(f"unsupported {domain} task group: {value!r}")
+
+
+def is_supported_domain_task_group(value: object, *, domain: str) -> bool:
+    try:
+        canonicalize_domain_task_group(value, domain=domain)
+    except ValueError:
+        return False
+    return True
+
+
+def canonicalize_tau2_task_group(value: object) -> str:
+    for domain in ("retail", "airline"):
+        try:
+            return canonicalize_domain_task_group(value, domain=domain)
+        except ValueError:
+            continue
+    raise ValueError(f"unsupported Tau2 task group: {value!r}")
+
+
+Tau2TaskGroups = RetailTaskGroups
 
 
 def _load_task_ids(path: Path) -> set[str]:

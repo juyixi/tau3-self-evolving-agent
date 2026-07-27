@@ -40,9 +40,9 @@ def test_repeated_task_passes_build_and_audit_four_opd_views(
         gym_available=False,
     )
     monkeypatch.setattr(
-        dataset_module.Tau2Runtime,
-        "inspect_metadata",
-        staticmethod(lambda path: fingerprint),
+            dataset_module.Tau2Runtime,
+            "inspect_metadata",
+            staticmethod(lambda path, **kwargs: fingerprint),
     )
     monkeypatch.setattr(
         dataset_module.Tau2Runtime,

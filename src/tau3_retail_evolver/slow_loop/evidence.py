@@ -30,7 +30,7 @@ from tau3_retail_evolver.memory.types import (
     stable_memory_id,
 )
 from tau3_retail_evolver.slow_loop.source_runs import SourceRun, SourceRunSet
-from tau3_retail_evolver.slow_loop.task_grouping import canonicalize_retail_task_group
+from tau3_retail_evolver.slow_loop.task_grouping import canonicalize_tau2_task_group
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -459,7 +459,7 @@ def _build_episode(
         source_event_sha256=_block_hash(block),
         iteration=source_run.manifest["iteration"],
         task_id=task_id,
-        task_group=canonicalize_retail_task_group(started["task_group"]),
+        task_group=canonicalize_tau2_task_group(started["task_group"]),
         model_revision=source_run.manifest["model_revision"],
         adapter_revision=source_run.manifest["adapter_revision"],
         tau2_commit=source_run.manifest["tau2_commit"],

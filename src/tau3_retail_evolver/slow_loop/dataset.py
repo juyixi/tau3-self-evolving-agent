@@ -29,8 +29,8 @@ from tau3_retail_evolver.slow_loop.examples import (
 )
 from tau3_retail_evolver.slow_loop.source_runs import load_source_runs
 from tau3_retail_evolver.slow_loop.task_grouping import (
-    GROUPING_REVISION,
     RetailTaskGroups,
+    domain_task_group,
 )
 
 
@@ -67,6 +67,7 @@ class _MaterializedDataset:
     resolved_config: Mapping[str, Any]
     build_code_revision: str
     source_context: Mapping[str, Any]
+    domain: str = "retail"
 
 
 def build_opd_dataset(request: DatasetBuildRequest) -> DatasetBuildResult:
@@ -130,11 +131,12 @@ def _materialize(request: DatasetBuildRequest) -> _MaterializedDataset:
         raise ValueError("Stage 5 requires memory.enabled=true")
 
     tau2_path = _resolve_from_project(config.tau2.repo_path, project)
-    runtime = Tau2Runtime.inspect_metadata(tau2_path)
+    runtime = Tau2Runtime.inspect_metadata(tau2_path, domain=config.tau2.domain)
     Tau2Runtime.require_pinned_commit(runtime)
     catalog = RetailTaskCatalog.from_files(
         runtime.retail_tasks_path,
         runtime.retail_split_path,
+        domain=config.tau2.domain,
     )
     catalog.require_official_compatibility()
     memory_root = training_memory_root(config.memory.agent_id, root=project)
@@ -158,6 +160,7 @@ def _materialize(request: DatasetBuildRequest) -> _MaterializedDataset:
     task_groups = RetailTaskGroups.from_file(
         runtime.retail_tasks_path,
         task_ids=tuple(dict.fromkeys(task_ids)),
+        domain=config.tau2.domain,
     )
     for episode in ledger.episodes:
         if episode.task_group != task_groups.signature_for(episode.task_id):
@@ -216,6 +219,7 @@ def _materialize(request: DatasetBuildRequest) -> _MaterializedDataset:
         *(row["output_memory_snapshot_id"] for row in source_rows),
     )
     return _MaterializedDataset(
+        domain=config.tau2.domain,
         ledger=ledger,
         scores=scores,
         examples=examples,
@@ -233,12 +237,9 @@ def _materialize(request: DatasetBuildRequest) -> _MaterializedDataset:
         },
         build_code_revision=_git_revision(project),
         source_context={
-            "retail_tasks_path": _relative_to_project(
-                runtime.retail_tasks_path, project
-            ),
-            "retail_split_path": _relative_to_project(
-                runtime.retail_split_path, project
-            ),
+            "domain": config.tau2.domain,
+            "tasks_path": _relative_to_project(runtime.tasks_path, project),
+            "split_path": _relative_to_project(runtime.split_path, project),
             "memory_root": _relative_to_project(memory_root, project),
             "source_run_paths": [
                 _relative_to_project(source.path, project)
@@ -303,6 +304,7 @@ def _build_manifest(
             "tau2_commit": ledger.tau2_commit,
         },
         "official_split": {
+            "domain": materialized.domain,
             "name": "train",
             "sha256": ledger.split_hash,
             "train_task_ids": list(materialized.official_train_task_ids),
@@ -315,7 +317,7 @@ def _build_manifest(
             "snapshot_chain": list(materialized.snapshot_chain),
         },
         "revisions": {
-            "task_grouping": GROUPING_REVISION,
+            "task_grouping": domain_task_group(materialized.domain),
             "attribution": ATTRIBUTION_REVISION,
         },
         "resolved_config": _json_copy(materialized.resolved_config),

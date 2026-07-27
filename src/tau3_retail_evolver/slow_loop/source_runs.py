@@ -14,7 +14,7 @@ from tau3_retail_evolver.eval.guard import (
     reject_evaluation_artifact_for_training,
 )
 from tau3_retail_evolver.io.jsonl import iter_jsonl_objects
-from tau3_retail_evolver.slow_loop.task_grouping import is_supported_retail_task_group
+from tau3_retail_evolver.slow_loop.task_grouping import is_supported_domain_task_group
 
 
 _FAILURE_EVENTS = frozenset(
@@ -155,8 +155,14 @@ def _validate_manifest(
         raise ValueError(f"source manifest contains non-train task IDs: {sorted(non_train)}")
 
     environment = manifest.get("environment_options")
-    if not isinstance(environment, Mapping) or environment.get("domain") != "retail":
-        raise ValueError(f"source manifest domain must be retail: {path}")
+    catalog_domain = getattr(catalog, "domain", "retail")
+    if (
+        not isinstance(environment, Mapping)
+        or environment.get("domain") != catalog_domain
+    ):
+        raise ValueError(
+            f"source manifest domain must be {catalog_domain}: {path}"
+        )
     rollout = manifest.get("rollout_options")
     if not isinstance(rollout, Mapping) or rollout.get("memory_enabled") is not True:
         raise ValueError(f"source run must be memory-enabled: {path}")
@@ -265,7 +271,10 @@ def _validate_events(
         if task_id not in events_by_task:
             raise ValueError(f"source event references undeclared task ID: {run_id}")
         task_group = event.get("task_group")
-        if not is_supported_retail_task_group(task_group):
+        if not is_supported_domain_task_group(
+            task_group,
+            domain=str(manifest["environment_options"]["domain"]),
+        ):
             raise ValueError(f"source event task group is invalid: {run_id}")
         if event_type in {"EpisodeStarted", "TaskFailed"}:
             first_episode_order.append(task_id)

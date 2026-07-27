@@ -23,6 +23,10 @@ DEFAULT_TRAIN_PASSES = 3
 DEFAULT_TEST_TRIALS = 1
 TRAIN_TASK_COUNT = 74
 TEST_TASK_COUNT = 40
+DOMAIN_TASK_COUNTS = {
+    "retail": {"train": TRAIN_TASK_COUNT, "test": TEST_TASK_COUNT},
+    "airline": {"train": 30, "test": 20},
+}
 
 BASE_NO_MEMORY = "base_no_memory"
 BASE_WITH_MEMORY = "base_with_memory"
@@ -54,7 +58,8 @@ def build_stage8_experiment_report(
     training_dir: Path,
     memory_snapshot_path: Path,
     expected_train_passes: int = DEFAULT_TRAIN_PASSES,
-    expected_test_tasks: int = TEST_TASK_COUNT,
+    expected_train_tasks: int | None = None,
+    expected_test_tasks: int | None = None,
     expected_test_trials: int = DEFAULT_TEST_TRIALS,
     bootstrap_samples: int = 2_000,
     bootstrap_seed: int = 42,
@@ -63,17 +68,28 @@ def build_stage8_experiment_report(
         raise ValueError("experiment ID must not be blank")
     if type(expected_train_passes) is not int or expected_train_passes < 1:
         raise ValueError("expected train passes must be positive")
-    if type(expected_test_tasks) is not int or expected_test_tasks < 1:
-        raise ValueError("expected test tasks must be positive")
     if type(expected_test_trials) is not int or expected_test_trials < 1:
         raise ValueError("expected test trials must be positive")
     if type(bootstrap_samples) is not int or bootstrap_samples < 100:
         raise ValueError("bootstrap samples must be at least 100")
 
+    domain = _evaluation_domain(evaluation_reports)
+    counts = DOMAIN_TASK_COUNTS[domain]
+    train_task_count = (
+        counts["train"] if expected_train_tasks is None else expected_train_tasks
+    )
+    test_task_count = (
+        counts["test"] if expected_test_tasks is None else expected_test_tasks
+    )
+    if type(train_task_count) is not int or train_task_count < 1:
+        raise ValueError("expected train tasks must be positive")
+    if type(test_task_count) is not int or test_task_count < 1:
+        raise ValueError("expected test tasks must be positive")
+
     reports = _validate_evaluation_matrix(
         evaluation_reports,
         memory_snapshot_path=memory_snapshot_path,
-        expected_test_tasks=expected_test_tasks,
+        expected_test_tasks=test_task_count,
         expected_test_trials=expected_test_trials,
     )
     comparison = compare_evaluation_reports(
@@ -84,6 +100,8 @@ def build_stage8_experiment_report(
         train_run_dirs,
         memory_snapshot_path=memory_snapshot_path,
         expected_train_passes=expected_train_passes,
+        expected_train_tasks=train_task_count,
+        expected_domain=domain,
     )
     dataset_summary = _summarize_dataset(dataset_dir)
     training_summary = _summarize_training(training_dir)
@@ -111,13 +129,14 @@ def build_stage8_experiment_report(
 
     report = {
         "schema_version": EXPERIMENT_SCHEMA_VERSION,
-        "report_type": EXPERIMENT_REPORT_TYPE,
+        "report_type": f"tau3-{domain}-stage8-experiment",
         "experiment_id": experiment_id,
         "design": {
+            "domain": domain,
             "matrix": "base_or_opd_checkpoint_x_no_memory_or_frozen_memory",
             "train_passes": expected_train_passes,
             "train_tasks_per_pass": train_summary["tasks_per_pass"],
-            "test_tasks": expected_test_tasks,
+            "test_tasks": test_task_count,
             "test_trials": expected_test_trials,
             "memory_protocol": "test_static",
             "primary_metric": "pass_at_1",
@@ -175,8 +194,14 @@ def _validate_evaluation_matrix(
         )
     ordered = {label: reports[label] for label in EXPERIMENT_ORDER}
     for label, report in ordered.items():
-        if report.get("report_type") != "tau3-retail-evaluation":
-            raise ValueError(f"{label} is not a Retail evaluation report")
+        provenance = report.get("provenance")
+        domain = (
+            provenance.get("domain", "retail")
+            if isinstance(provenance, Mapping)
+            else None
+        )
+        if report.get("report_type") != f"tau3-{domain}-evaluation":
+            raise ValueError(f"{label} is not a Tau2 evaluation report")
 
     base_none = ordered[BASE_NO_MEMORY]["provenance"]
     base_memory = ordered[BASE_WITH_MEMORY]["provenance"]
@@ -235,6 +260,22 @@ def _validate_evaluation_matrix(
         expected_test_trials=expected_test_trials,
     )
     return ordered
+
+
+def _evaluation_domain(
+    reports: Mapping[str, Mapping[str, Any]],
+) -> str:
+    domains = {
+        str(report.get("provenance", {}).get("domain", "retail"))
+        for report in reports.values()
+        if isinstance(report.get("provenance"), Mapping)
+    }
+    if len(domains) != 1:
+        raise ValueError("Stage 8 evaluation reports must use one Tau2 domain")
+    domain = next(iter(domains))
+    if domain not in DOMAIN_TASK_COUNTS:
+        raise ValueError(f"unsupported Stage 8 Tau2 domain: {domain!r}")
+    return domain
 
 
 def _require_cell(
@@ -437,6 +478,8 @@ def _summarize_train_passes(
     *,
     memory_snapshot_path: Path,
     expected_train_passes: int,
+    expected_train_tasks: int,
+    expected_domain: str,
 ) -> dict[str, Any]:
     paths = tuple(Path(path).resolve() for path in run_dirs)
     if len(paths) != expected_train_passes:
@@ -461,14 +504,22 @@ def _summarize_train_passes(
         start=1,
     ):
         task_ids = manifest.get("task_ids")
+        environment_options = manifest.get("environment_options", {})
+        train_domain = (
+            environment_options.get("domain", "retail")
+            if isinstance(environment_options, Mapping)
+            else None
+        )
         if (
             manifest.get("split") != "train"
+            or train_domain != expected_domain
             or not isinstance(task_ids, list)
-            or len(task_ids) != TRAIN_TASK_COUNT
+            or len(task_ids) != expected_train_tasks
             or len(task_ids) != len(set(task_ids))
         ):
             raise ValueError(
-                f"train pass {index} must contain all {TRAIN_TASK_COUNT} train tasks"
+                f"train pass {index} must contain all "
+                f"{expected_train_tasks} train tasks"
             )
         task_sets.append(set(task_ids))
         failed_task_ids = summary.get("failed_task_ids", [])
@@ -484,7 +535,7 @@ def _summarize_train_passes(
         ]
         attempted_count = summary.get(
             "attempted_task_count",
-            TRAIN_TASK_COUNT,
+            expected_train_tasks,
         )
         failed_count = summary.get(
             "failed_task_count",
@@ -492,7 +543,7 @@ def _summarize_train_passes(
         )
         if (
             summary.get("run_id") != manifest.get("run_id")
-            or attempted_count != TRAIN_TASK_COUNT
+            or attempted_count != expected_train_tasks
             or summary.get("episode_count") != len(successful_task_ids)
             or failed_count != len(failed_task_ids)
             or summary.get("memory_enabled") is not True
@@ -510,7 +561,7 @@ def _summarize_train_passes(
             type(completed_before) is not int
             or type(completed_after) is not int
             or completed_before < 0
-            or completed_after != completed_before + TRAIN_TASK_COUNT
+            or completed_after != completed_before + expected_train_tasks
             or (
                 previous_completed_after is not None
                 and completed_before != previous_completed_after
@@ -581,7 +632,7 @@ def _summarize_train_passes(
                 "run_id": manifest["run_id"],
                 "seed": manifest.get("seed"),
                 "task_order": list(task_ids),
-                "attempted_task_count": TRAIN_TASK_COUNT,
+                "attempted_task_count": expected_train_tasks,
                 "episode_count": len(finished),
                 "failed_task_count": len(failed),
                 "failed_task_ids": list(failed_task_ids),
@@ -591,7 +642,7 @@ def _summarize_train_passes(
                         for event in finished
                         if event.get("final_reward") == 1.0
                     )
-                    / TRAIN_TASK_COUNT
+                    / expected_train_tasks
                 ),
                 "mean_agent_tokens": (
                     float(mean_tokens) if mean_tokens is not None else None
@@ -648,8 +699,8 @@ def _summarize_train_passes(
     )
     return {
         "pass_count": len(paths),
-        "tasks_per_pass": TRAIN_TASK_COUNT,
-        "attempted_episode_count": TRAIN_TASK_COUNT * len(paths),
+        "tasks_per_pass": expected_train_tasks,
+        "attempted_episode_count": expected_train_tasks * len(paths),
         "episode_count": sum(row["episode_count"] for row in pass_rows),
         "failed_task_count": sum(
             row["failed_task_count"] for row in pass_rows
@@ -929,8 +980,12 @@ def _validate_training_lineage(
                 f"OPD dataset {field} lineage does not match train passes"
             )
     official_split = dataset_summary["official_split"]
+    evaluation_domain = str(
+        reports[BASE_NO_MEMORY]["provenance"].get("domain", "retail")
+    )
     if (
         official_split.get("name") != "train"
+        or official_split.get("domain", "retail") != evaluation_domain
         or official_split.get("sha256") != train_lineage["split_hash"]
     ):
         raise ValueError("OPD dataset split lineage does not match train passes")

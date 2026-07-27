@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tau3-retail-evolver"
 version = "0.1.0"
-description = "Retail OPD evolver configuration"
+description = "Tau2 Retail and Airline OPD evolver"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "pydantic>=2.10,<3",

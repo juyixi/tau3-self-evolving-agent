@@ -52,6 +52,7 @@ def test_default_config_has_the_required_retail_environment() -> None:
     assert config.rollout.temperature == 1.0
     assert config.rollout.top_p == 0.95
     assert config.rollout.max_episode_steps == 40
+    assert config.rollout.max_concurrency == 8
     assert config.memory.agent_id == "retail"
     assert config.memory.enabled is True
     assert config.memory.model_dump() == {
@@ -62,6 +63,13 @@ def test_default_config_has_the_required_retail_environment() -> None:
         "teacher_memory_cap": 20,
         "score_threshold": 0.01,
         "maintenance_period": 30,
+        "maintenance_tip_capacity": 240,
+        "maintenance_similarity_threshold": 0.92,
+        "maintenance_priority_pair_limit": 24,
+        "max_new_tips_per_episode": 2,
+        "max_new_skills_per_episode": 1,
+        "max_new_tools_per_episode": 1,
+        "max_new_trajectories_per_episode": 1,
         "embedding_provider": "local",
         "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
         "embedding_device": "cuda",
@@ -90,6 +98,17 @@ def test_default_config_has_the_required_retail_environment() -> None:
         "thinking": {"type": "disabled"},
     }
     assert config.evaluation.nl_assertions.api_key_env == "DEEPSEEK_API_KEY"
+
+
+def test_airline_config_uses_an_isolated_domain_and_memory_namespace() -> None:
+    config = load_config(PROJECT_ROOT / "configs" / "airline.yaml")
+
+    assert config.tau2.domain == "airline"
+    assert config.memory.agent_id == "airline"
+    assert config.pipeline.iteration_task_count == 30
+    assert config.rollout.max_concurrency == 8
+    assert config.memory.maintenance_tip_capacity == 240
+    assert config.memory.max_new_tips_per_episode == 2
 
 
 @pytest.mark.parametrize(

@@ -21,6 +21,7 @@ rollout:
   temperature: 1.0
   top_p: 0.95
   max_episode_steps: 40
+  max_concurrency: 8
 memory:
   enabled: true
   agent_id: retail

@@ -21,12 +21,12 @@ class _ConfigModel(BaseModel):
 
 class Tau2Config(_ConfigModel):
     repo_path: Path
-    domain: Literal["retail"]
+    domain: Literal["retail", "airline"]
     train_split: Literal["train"]
     eval_split: Literal["test"]
     user_llm: str
     user_llm_args: dict[str, Any] = Field(default_factory=dict)
-    solo_mode: bool = True
+    solo_mode: bool = False
 
 
 class ModelConfig(_ConfigModel):
@@ -44,6 +44,7 @@ class RolloutConfig(_ConfigModel):
     temperature: float = 1.0
     top_p: float = 0.95
     max_episode_steps: int = 40
+    max_concurrency: int = Field(default=8, ge=1)
 
 
 class MemoryConfig(_ConfigModel):
@@ -59,6 +60,13 @@ class MemoryConfig(_ConfigModel):
     teacher_memory_cap: int = 20
     score_threshold: float = 0.01
     maintenance_period: int = 30
+    maintenance_tip_capacity: int = Field(default=240, ge=1)
+    maintenance_similarity_threshold: float = Field(default=0.92, ge=-1.0, le=1.0)
+    maintenance_priority_pair_limit: int = Field(default=24, ge=0, le=50)
+    max_new_tips_per_episode: int = Field(default=2, ge=0)
+    max_new_skills_per_episode: int = Field(default=1, ge=0)
+    max_new_tools_per_episode: int = Field(default=1, ge=0)
+    max_new_trajectories_per_episode: int = Field(default=1, ge=0)
     embedding_provider: Literal["local"] = "local"
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
     embedding_device: str = "cuda"

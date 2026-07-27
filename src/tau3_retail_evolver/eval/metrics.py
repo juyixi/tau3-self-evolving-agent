@@ -42,6 +42,7 @@ class EvaluationProvenance:
     model_serving_contract: Mapping[str, Any]
     capabilities: Mapping[str, bool]
     memory_counts: Mapping[str, int] | None = None
+    domain: str = "retail"
 
     def __post_init__(self) -> None:
         for field, value in (
@@ -55,6 +56,8 @@ class EvaluationProvenance:
                 raise ValueError(f"{field} must not be blank")
         if not isinstance(self.protocol, EvaluationProtocol):
             raise TypeError("protocol must be an EvaluationProtocol")
+        if self.domain not in {"retail", "airline"}:
+            raise ValueError("evaluation provenance domain must be retail or airline")
         if self.split not in {"test", "base"}:
             raise ValueError("evaluation provenance split must be test or base")
         if self.official_base_reproduction != (self.split == "base"):
@@ -100,6 +103,7 @@ class EvaluationProvenance:
         return sanitize_artifact_data(
             {
                 "run_id": self.run_id,
+                "domain": self.domain,
                 "protocol": self.protocol.value,
                 "official_base_reproduction": self.official_base_reproduction,
                 "split": self.split,
@@ -169,7 +173,7 @@ def build_evaluation_report(
     ]
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
-        "report_type": REPORT_TYPE,
+        "report_type": _evaluation_report_type(provenance.domain),
         "provenance": provenance.as_dict(
             output_memory_snapshot_ids=run.output_memory_snapshot_ids,
         ),
@@ -355,7 +359,9 @@ def compare_evaluation_reports(
         )
     comparison = {
         "schema_version": REPORT_SCHEMA_VERSION,
-        "report_type": COMPARISON_TYPE,
+        "report_type": _comparison_report_type(
+            str(baseline["provenance"].get("domain", "retail"))
+        ),
         "baseline_label": baseline_label,
         "controls": controls,
         "rows": rows,
@@ -519,7 +525,7 @@ def _task_result(
 
 def _comparison_controls(report: Mapping[str, Any]) -> dict[str, Any]:
     provenance = report["provenance"]
-    return {
+    controls = {
         key: provenance[key]
         for key in (
             "official_base_reproduction",
@@ -538,6 +544,8 @@ def _comparison_controls(report: Mapping[str, Any]) -> dict[str, Any]:
             "model_serving_contract",
         )
     }
+    controls["domain"] = provenance.get("domain", "retail")
+    return controls
 
 
 def _validated_report(
@@ -545,10 +553,17 @@ def _validated_report(
     *,
     label: str,
 ) -> Mapping[str, Any]:
+    provenance = report.get("provenance")
+    domain = (
+        str(provenance.get("domain", "retail"))
+        if isinstance(provenance, Mapping)
+        else ""
+    )
     if (
         report.get("schema_version") != REPORT_SCHEMA_VERSION
-        or report.get("report_type") != REPORT_TYPE
-        or not isinstance(report.get("provenance"), Mapping)
+        or domain not in {"retail", "airline"}
+        or report.get("report_type") != _evaluation_report_type(domain)
+        or not isinstance(provenance, Mapping)
         or not isinstance(report.get("summary"), Mapping)
     ):
         raise ValueError(f"invalid evaluation report: {label}")
@@ -561,6 +576,14 @@ def _validated_report(
         ):
             raise ValueError(f"invalid evaluation metric {metric}: {label}")
     return report
+
+
+def _evaluation_report_type(domain: str) -> str:
+    return f"tau3-{domain}-evaluation"
+
+
+def _comparison_report_type(domain: str) -> str:
+    return f"tau3-{domain}-evaluation-comparison"
 
 
 def _component_category(component: str) -> str:

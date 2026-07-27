@@ -236,6 +236,9 @@ def run_evaluation_maintenance(
     policy: FastLoopPolicy,
     context: RunContext,
     per_tier_limit: int = 100,
+    tip_capacity: int = 240,
+    similarity_threshold: float = 0.92,
+    priority_pair_limit: int = 24,
 ) -> MaintenanceResult:
     if type(completed_tasks) is not int or completed_tasks < 0:
         raise ValueError("completed tasks must be a non-negative integer")
@@ -250,6 +253,9 @@ def run_evaluation_maintenance(
         policy=policy,
         context=context,
         per_tier_limit=per_tier_limit,
+        tip_capacity=tip_capacity,
+        similarity_threshold=similarity_threshold,
+        priority_pair_limit=priority_pair_limit,
     )
 
 

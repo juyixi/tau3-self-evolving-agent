@@ -27,14 +27,29 @@ def _config(tmp_path: Path, *, memory_enabled: bool = True) -> SimpleNamespace:
         tau2=SimpleNamespace(
             repo_path=tmp_path / "external" / "tau2-bench",
             domain="retail",
+            solo_mode=False,
+            user_llm="resolved-simulator",
+            user_llm_args={"api_key": "simulator-secret", "temperature": 0.0},
         ),
         model=SimpleNamespace(base_model="Qwen/Qwen3.5-9B"),
-        rollout=SimpleNamespace(temperature=1.0, top_p=0.95, max_episode_steps=40),
+        rollout=SimpleNamespace(
+            temperature=1.0,
+            top_p=0.95,
+            max_episode_steps=40,
+            max_concurrency=8,
+        ),
         memory=SimpleNamespace(
             enabled=memory_enabled,
             agent_id="retail",
             retrieve_top_k=50,
             maintenance_period=30,
+            maintenance_tip_capacity=240,
+            maintenance_similarity_threshold=0.92,
+            maintenance_priority_pair_limit=24,
+            max_new_tips_per_episode=2,
+            max_new_skills_per_episode=1,
+            max_new_tools_per_episode=1,
+            max_new_trajectories_per_episode=1,
         ),
         training=SimpleNamespace(seed=17),
         evaluation=SimpleNamespace(
@@ -308,6 +323,8 @@ def _install_main_dependencies(
         git_commit="a" * 40,
         retail_tasks_path=tmp_path / "tasks.json",
         retail_split_path=tmp_path / "split_tasks.json",
+        tasks_path=tmp_path / "tasks.json",
+        split_path=tmp_path / "split_tasks.json",
     )
     catalog = SimpleNamespace(
         split_sha256="b" * 64,
@@ -342,16 +359,17 @@ def _install_main_dependencies(
         def close(self) -> None:
             ordering.append("environment-close")
 
-    def inspect_metadata(repo_path: Path) -> Any:
+    def inspect_metadata(repo_path: Path, *, domain: str) -> Any:
         ordering.append("runtime-inspect")
+        assert domain == "retail"
         return runtime
 
     def require_pinned_commit(fingerprint: Any) -> None:
         ordering.append("runtime-pin")
 
-    def load_verified_gym_factory(repo_path: Path) -> str:
-        ordering.append("gym")
-        return "verified-gym-factory"
+    def load_verified_run_domain(repo_path: Path) -> str:
+        ordering.append("run-domain")
+        return "verified-run-domain"
 
     def open_memory(config_value: Any, *, root: Path | None = None) -> MemoryRepository:
         ordering.append("memory-open")
@@ -408,6 +426,26 @@ def _install_main_dependencies(
         captured.setdefault("maintenance_contexts", []).append(kwargs["context"])
         return real_maintenance(**kwargs)
 
+    def run_via_domain(**kwargs: Any):  # type: ignore[no-untyped-def]
+        assert kwargs["runtime"] == "verified-run-domain"
+        assert kwargs["domain"] == "retail"
+        assert kwargs["max_concurrency"] == 8
+        return run_fast_loop._run_requested_tasks(
+            task_ids=kwargs["task_ids"],
+            env_factory=lambda task_id: FakeEnvironment(
+                task_id,
+                config,
+                "verified-run-domain",
+            ),
+            policy=kwargs["policy"],
+            repository=kwargs["repository"],
+            retriever=kwargs["retriever"],
+            fast_loop_config=kwargs["fast_loop_config"],
+            context=kwargs["context"],
+            completed_train_tasks_before=kwargs["completed_train_tasks_before"],
+            maintenance_period=kwargs["maintenance_period"],
+        )
+
     monkeypatch.setattr(
         run_fast_loop,
         "load_config",
@@ -419,25 +457,27 @@ def _install_main_dependencies(
         SimpleNamespace(
             inspect_metadata=inspect_metadata,
             require_pinned_commit=require_pinned_commit,
-            load_verified_gym_factory=load_verified_gym_factory,
+            load_verified_run_domain=load_verified_run_domain,
         ),
     )
     monkeypatch.setattr(
         run_fast_loop,
         "RetailTaskCatalog",
         SimpleNamespace(
-            from_files=lambda tasks_path, split_path: ordering.append("catalog") or catalog
+            from_files=lambda tasks_path, split_path, **kwargs: (
+                ordering.append("catalog") or catalog
+            )
         ),
     )
     monkeypatch.setattr(
         run_fast_loop,
         "RetailTaskGroups",
         SimpleNamespace(
-            from_file=lambda tasks_path, *, task_ids: ordering.append("task-groups")
-            or task_groups
+            from_file=lambda tasks_path, *, task_ids, **kwargs: (
+                ordering.append("task-groups") or task_groups
+            )
         ),
     )
-    monkeypatch.setattr(run_fast_loop, "Tau2RetailEnv", FakeEnvironment)
     monkeypatch.setattr(run_fast_loop, "open_training_memory", open_memory)
     monkeypatch.setattr(run_fast_loop, "build_embedding_provider", build_provider)
     monkeypatch.setattr(run_fast_loop, "OpenAICompatibleHttpClient", construct_client)
@@ -445,6 +485,7 @@ def _install_main_dependencies(
     monkeypatch.setattr(run_fast_loop, "bind_tau2_nl_assertions", bind_assertions)
     monkeypatch.setattr(run_fast_loop, "create_manifest", create_manifest)
     monkeypatch.setattr(run_fast_loop, "run_fast_loop_episode", episode_runner)
+    monkeypatch.setattr(run_fast_loop, "_run_requested_tasks_via_domain", run_via_domain)
     monkeypatch.setattr(run_fast_loop, "run_due_maintenance", maintenance)
     return ordering, captured
 
@@ -585,6 +626,8 @@ def test_requires_qwen_base_url_after_catalog_verification(
         git_commit="a" * 40,
         retail_tasks_path=tmp_path / "tasks.json",
         retail_split_path=tmp_path / "split.json",
+        tasks_path=tmp_path / "tasks.json",
+        split_path=tmp_path / "split.json",
     )
     catalog = SimpleNamespace(
         split_sha256="b" * 64,
@@ -597,14 +640,14 @@ def test_requires_qwen_base_url_after_catalog_verification(
         run_fast_loop,
         "Tau2Runtime",
         SimpleNamespace(
-            inspect_metadata=lambda path: runtime,
+            inspect_metadata=lambda path, **kwargs: runtime,
             require_pinned_commit=lambda value: None,
         ),
     )
     monkeypatch.setattr(
         run_fast_loop,
         "RetailTaskCatalog",
-        SimpleNamespace(from_files=lambda tasks, split: catalog),
+        SimpleNamespace(from_files=lambda tasks, split, **kwargs: catalog),
     )
 
     with pytest.raises(ValueError, match="QWEN_BASE_URL"):
@@ -805,10 +848,8 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         "catalog",
         "catalog-official",
         "task-groups",
-        "gym",
+        "run-domain",
         "assertions",
-        "environment:task-1",
-        "environment-close",
         "memory-open",
         "embedding",
         "snapshot",
@@ -906,8 +947,8 @@ def test_main_validates_enabled_memory_dependencies_before_input_snapshot(
         )
 
     assert snapshot_calls == []
-    assert len(captured["environments"]) == 1
-    assert ordering.count("environment:task-1") == 1
+    assert "environments" not in captured
+    assert ordering.count("environment:task-1") == 0
     assert episode_calls == []
 
 

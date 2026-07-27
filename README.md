@@ -2,13 +2,18 @@
 
 面向 Tau3 Retail 任务的工程实现：接入官方 Tau2 Retail 环境，通过四层 Memory、Fast Loop 和共享 Qwen3.5-9B LoRA 的 On-Policy Distillation（OPD）构建可持续积累经验的 Agent。
 
+当前实现同时兼容 Tau2 Airline。训练、baseline 和评测统一通过官方
+`tau2.run.run_domain` 批量并发执行；Retail 保持原有配置兼容，Airline 使用
+[`configs/airline.yaml`](configs/airline.yaml)，完整实验步骤见
+[`docs/airline-evaluation-protocol.md`](docs/airline-evaluation-protocol.md)。
+
 ## 系统架构
 
 项目将在线任务交互和模型更新拆为两条相互衔接的路径：Fast Loop 在 Retail 环境中积累和维护经验，Slow Loop 从同策略轨迹构建特权教师信号并更新当前 LoRA。
 
 ```mermaid
 flowchart TD
-    Tau2["Tau2 Retail Gym"] --> Baseline["无 Memory Baseline"]
+    Tau2["Tau2 run_domain<br/>Retail / Airline"] --> Baseline["无 Memory Baseline"]
     Tau2 --> Fast["Fast Loop"]
     Base["Qwen3.5-9B Base"] --> Baseline
     Policy --> Fast

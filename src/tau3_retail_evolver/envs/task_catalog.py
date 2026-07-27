@@ -20,17 +20,50 @@ OFFICIAL_TRAIN_TASK_IDS = (
     "88", "89", "91", "92", "93", "95", "96", "98", "99", "103", "104",
     "105", "106", "107", "109", "110", "112", "113",
 )
+OFFICIAL_AIRLINE_SPLIT_COUNTS = {"train": 30, "test": 20, "base": 50}
+OFFICIAL_AIRLINE_SPLIT_SHA256 = (
+    "46e2ced1b82b193a5c0057a471c4884cece06105ea0a94a726f9b24acb090051"
+)
+OFFICIAL_AIRLINE_TRAIN_TASK_IDS = (
+    "0", "1", "3", "4", "5", "7", "9", "10", "11", "12", "14", "15",
+    "17", "20", "21", "23", "27", "28", "33", "34", "36", "38", "39",
+    "40", "41", "42", "43", "46", "47", "49",
+)
+_OFFICIAL_DOMAIN_SPLITS = {
+    "retail": (
+        OFFICIAL_SPLIT_COUNTS,
+        OFFICIAL_SPLIT_SHA256,
+        OFFICIAL_TRAIN_TASK_IDS,
+    ),
+    "airline": (
+        OFFICIAL_AIRLINE_SPLIT_COUNTS,
+        OFFICIAL_AIRLINE_SPLIT_SHA256,
+        OFFICIAL_AIRLINE_TRAIN_TASK_IDS,
+    ),
+}
 
 
 @dataclass(frozen=True)
 class RetailTaskCatalog:
-    """Validated retail task IDs sourced from a Tau2 checkout."""
+    """Validated Tau2 domain task IDs sourced from a pinned checkout.
+
+    The historical name is retained for callers that only use Retail.
+    """
 
     _task_ids_by_split: dict[SplitName, tuple[str, ...]]
     split_sha256: str
+    domain: str = "retail"
 
     @classmethod
-    def from_files(cls, tasks_path: Path, split_path: Path) -> "RetailTaskCatalog":
+    def from_files(
+        cls,
+        tasks_path: Path,
+        split_path: Path,
+        *,
+        domain: str = "retail",
+    ) -> "RetailTaskCatalog":
+        if domain not in _OFFICIAL_DOMAIN_SPLITS:
+            raise ValueError(f"unsupported Tau2 domain: {domain!r}")
         tasks_data = _load_json(tasks_path, "tasks")
         split_data = _load_json(split_path, "split")
         task_ids = _task_ids(tasks_data, tasks_path)
@@ -59,40 +92,48 @@ class RetailTaskCatalog:
         return cls(
             _task_ids_by_split=split_ids,
             split_sha256=hashlib.sha256(fingerprint_data).hexdigest(),
+            domain=domain,
         )
 
     def task_ids(self, split: SplitName) -> tuple[str, ...]:
         try:
             return self._task_ids_by_split[split]
         except KeyError as error:
-            raise ValueError(f"unknown retail split: {split!r}") from error
+            raise ValueError(f"unknown {self.domain} split: {split!r}") from error
 
     def require_official_compatibility(self) -> None:
+        expected_counts, expected_hash, expected_train_ids = _OFFICIAL_DOMAIN_SPLITS[
+            self.domain
+        ]
         actual_counts = {
             split: len(self._task_ids_by_split[split]) for split in _REQUIRED_SPLITS
         }
-        if actual_counts != OFFICIAL_SPLIT_COUNTS:
+        if actual_counts != expected_counts:
             expected = ", ".join(
-                f"{split}={OFFICIAL_SPLIT_COUNTS[split]}" for split in _REQUIRED_SPLITS
+                f"{split}={expected_counts[split]}" for split in _REQUIRED_SPLITS
             )
             actual = ", ".join(
                 f"{split}={actual_counts[split]}" for split in _REQUIRED_SPLITS
             )
             raise RuntimeError(
-                f"Tau2 retail split count mismatch: expected {expected}; resolved {actual}. "
+                f"Tau2 {self.domain} split count mismatch: expected {expected}; "
+                f"resolved {actual}. "
                 "Restore the official split_tasks.json."
             )
-        if self.split_sha256 != OFFICIAL_SPLIT_SHA256:
+        if self.split_sha256 != expected_hash:
             raise RuntimeError(
-                "Tau2 retail split hash mismatch: expected "
-                f"{OFFICIAL_SPLIT_SHA256}, resolved {self.split_sha256}. "
+                f"Tau2 {self.domain} split hash mismatch: expected "
+                f"{expected_hash}, resolved {self.split_sha256}. "
                 "Restore the official split_tasks.json."
             )
-        if self._task_ids_by_split["train"] != OFFICIAL_TRAIN_TASK_IDS:
+        if self._task_ids_by_split["train"] != expected_train_ids:
             raise RuntimeError(
-                "Tau2 retail train task IDs do not match the pinned official order. "
+                f"Tau2 {self.domain} train task IDs do not match the pinned official order. "
                 "Restore the official split_tasks.json."
             )
+
+
+Tau2TaskCatalog = RetailTaskCatalog
 
 
 def _load_json(path: Path, label: str) -> Any:

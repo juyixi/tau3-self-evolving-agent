@@ -14,7 +14,7 @@ from tau3_retail_evolver.slow_loop.dataset import (
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build a deterministic Stage 5 retail OPD dataset."
+        description="Build a deterministic Stage 5 Tau2-domain OPD dataset."
     )
     parser.add_argument("--source-run", dest="source_runs", type=Path, action="append", required=True)
     parser.add_argument("--dataset-build-id", required=True)

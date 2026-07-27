@@ -12,16 +12,24 @@ from tau3_retail_evolver.config import load_config
 from tau3_retail_evolver.envs.runtime import Tau2Runtime
 from tau3_retail_evolver.envs.split_guard import require_learning_split
 from tau3_retail_evolver.envs.task_catalog import RetailTaskCatalog
-from tau3_retail_evolver.envs.tau2_retail import Tau2RetailEnv
 from tau3_retail_evolver.evaluation.tau2_nl_assertions import bind_tau2_nl_assertions
-from tau3_retail_evolver.fast_loop.baseline_runner import RolloutSummary, run_baseline
+from tau3_retail_evolver.fast_loop.baseline_runner import (
+    EpisodeSummary,
+    RolloutSummary,
+)
 from tau3_retail_evolver.fast_loop.events import RunContext
+from tau3_retail_evolver.fast_loop.runner import FastLoopConfig
+from tau3_retail_evolver.fast_loop.tau2_run_domain import run_tau2_fast_loop_batch
 from tau3_retail_evolver.io.jsonl import JsonlWriter
 from tau3_retail_evolver.models.openai_compatible import (
     OpenAICompatibleHttpClient,
-    OpenAICompatibleQwenPolicy,
+    OpenAICompatibleFastLoopPolicy,
 )
 from tau3_retail_evolver.runs.manifest import create_manifest
+from tau3_retail_evolver.slow_loop.task_grouping import (
+    RetailTaskGroups,
+    maintenance_task_group,
+)
 
 
 MODEL_SERVING_CONTRACT = {
@@ -44,7 +52,9 @@ QWEN_GENERATION_SETTINGS = {
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a canonical no-memory Qwen retail baseline.")
+    parser = argparse.ArgumentParser(
+        description="Run a canonical no-memory Qwen Tau2 baseline."
+    )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--split", required=True)
     parser.add_argument("--task-id", dest="task_ids", action="append", required=True)
@@ -65,9 +75,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("model revision is required")
 
     config = load_config(args.config)
-    runtime = Tau2Runtime.inspect_metadata(config.tau2.repo_path)
+    runtime = Tau2Runtime.inspect_metadata(
+        config.tau2.repo_path,
+        domain=config.tau2.domain,
+    )
     Tau2Runtime.require_pinned_commit(runtime)
-    catalog = RetailTaskCatalog.from_files(runtime.retail_tasks_path, runtime.retail_split_path)
+    catalog = RetailTaskCatalog.from_files(
+        runtime.tasks_path,
+        runtime.split_path,
+        domain=config.tau2.domain,
+    )
     catalog.require_official_compatibility()
     _require_explicit_train_tasks(args.task_ids, catalog.task_ids("train"))
 
@@ -75,13 +92,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not base_url:
         raise ValueError("QWEN_BASE_URL or --qwen-base-url is required")
     api_key = os.environ.get("QWEN_API_KEY") or "EMPTY"
-    gym_factory = Tau2Runtime.load_verified_gym_factory(runtime.repo_path)
+    if config.tau2.solo_mode:
+        raise ValueError("run_domain baseline execution requires tau2.solo_mode=false")
+    run_domain_runtime = Tau2Runtime.load_verified_run_domain(runtime.repo_path)
     evaluation_provenance = bind_tau2_nl_assertions(config.evaluation.nl_assertions)
-    probe = Tau2RetailEnv(args.task_ids[0], config, gym_factory=gym_factory)
-    try:
-        user_simulator_config = probe.user_simulator_config
-    finally:
-        probe.close()
+    user_simulator_config = {
+        "solo_mode": False,
+        "user_llm": config.tau2.user_llm,
+        "user_llm_args": dict(config.tau2.user_llm_args),
+    }
     client = OpenAICompatibleHttpClient(
         base_url=base_url,
         model=config.model.base_model,
@@ -89,7 +108,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_tokens=MODEL_SERVING_CONTRACT["max_tokens"],
         generation_settings=QWEN_GENERATION_SETTINGS,
     )
-    policy = OpenAICompatibleQwenPolicy(client=client)
+    policy = OpenAICompatibleFastLoopPolicy(
+        client=client,
+        temperature=config.rollout.temperature,
+        top_p=config.rollout.top_p,
+    )
+    task_groups = RetailTaskGroups.from_file(
+        runtime.tasks_path,
+        task_ids=args.task_ids,
+        domain=config.tau2.domain,
+    )
 
     run_path = args.output_root / args.run_id
     create_manifest(
@@ -106,12 +134,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         user_simulator_config=user_simulator_config,
         environment_options={
             "domain": config.tau2.domain,
-            "all_messages_as_observation": True,
+            "execution_backend": "tau2.run.run_domain",
+            "max_concurrency": config.rollout.max_concurrency,
         },
         rollout_options={
             "temperature": config.rollout.temperature,
             "top_p": config.rollout.top_p,
             "max_episode_steps": config.rollout.max_episode_steps,
+            "max_concurrency": config.rollout.max_concurrency,
+            "memory_enabled": False,
         },
         model_serving_contract=MODEL_SERVING_CONTRACT,
         evaluation_config={"nl_assertions": evaluation_provenance},
@@ -126,14 +157,56 @@ def main(argv: Sequence[str] | None = None) -> int:
         memory_snapshot_id=None,
         seed=config.training.seed,
         event_writer=JsonlWriter(run_path / "rollouts" / "events.jsonl"),
+        task_groups={
+            task_id: task_groups.signature_for(task_id)
+            for task_id in args.task_ids
+        },
         temperature=config.rollout.temperature,
         top_p=config.rollout.top_p,
+        default_task_group=maintenance_task_group(config.tau2.domain),
     )
-    summary = run_baseline(
-        tuple(args.task_ids),
-        lambda task_id: Tau2RetailEnv(task_id, config, gym_factory=gym_factory),
-        policy,
-        context,
+    batch = run_tau2_fast_loop_batch(
+        runtime=run_domain_runtime,
+        domain=config.tau2.domain,
+        split=args.split,
+        task_ids=tuple(args.task_ids),
+        run_seed=config.training.seed,
+        max_concurrency=config.rollout.max_concurrency,
+        user_llm=config.tau2.user_llm,
+        user_llm_args=config.tau2.user_llm_args,
+        agent_model=config.model.base_model,
+        policy=policy,
+        repository=None,
+        retriever=None,
+        config=FastLoopConfig(
+            retrieve_top_k=config.memory.retrieve_top_k,
+            max_episode_steps=config.rollout.max_episode_steps,
+            memory_enabled=False,
+        ),
+        context_factory=lambda _task_id, _tau2_seed: context,
+        task_instruction=(
+            f"Resolve the {config.tau2.domain} request shown in the current conversation."
+        ),
+        write_memory=False,
+        memory_disabled_reason="baseline",
+    )
+    if batch.failures:
+        failed = ", ".join(
+            f"{failure.task_id} ({failure.stage}:{failure.error_type})"
+            for failure in batch.failures
+        )
+        raise RuntimeError(f"Tau2 run_domain baseline failures: {failed}")
+    summary = RolloutSummary(
+        episodes=tuple(
+            EpisodeSummary(
+                task_id=episode.result.task_id,
+                final_reward=episode.result.final_reward,
+                steps=episode.result.steps,
+                terminal_evaluation=episode.result.terminal_evaluation,
+                simulation_result=episode.result.simulation_result,
+            )
+            for episode in batch.episodes
+        )
     )
     _print_summary(args.run_id, summary)
     return 0

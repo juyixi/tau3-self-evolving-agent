@@ -10,7 +10,6 @@ from tau3_retail_evolver.eval.experiment import (
     BASE_NO_MEMORY,
     BASE_WITH_MEMORY,
     EXPERIMENT_ORDER,
-    EXPERIMENT_REPORT_TYPE,
     OPD_NO_MEMORY,
     OPD_WITH_MEMORY,
 )
@@ -37,7 +36,8 @@ def write_stage8_dashboard(
 
 
 def render_stage8_dashboard(report: Mapping[str, Any]) -> str:
-    if report.get("report_type") != EXPERIMENT_REPORT_TYPE:
+    domain = report.get("design", {}).get("domain", "retail")
+    if report.get("report_type") != f"tau3-{domain}-stage8-experiment":
         raise ValueError("dashboard requires a Stage 8 experiment report")
     cells = report["evaluation"]["cells"]
     pass_values = [_number(cells[label]["pass_at_1"]) for label in EXPERIMENT_ORDER]
@@ -104,6 +104,7 @@ def render_stage8_dashboard(report: Mapping[str, Any]) -> str:
     ]
     return _document(
         experiment_id=str(report["experiment_id"]),
+        domain=str(domain),
         charts=charts,
         contrast_table=_contrast_table(report["evaluation"]["contrasts"]),
         provenance_table=_provenance_table(report),
@@ -113,6 +114,7 @@ def render_stage8_dashboard(report: Mapping[str, Any]) -> str:
 def _document(
     *,
     experiment_id: str,
+    domain: str,
     charts: Sequence[str],
     contrast_table: str,
     provenance_table: str,
@@ -125,7 +127,7 @@ def _document(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Stage 8 Retail experiment report</title>
+<title>Stage 8 {escape(domain.title())} experiment report</title>
 <style>
 :root {{
   color-scheme: light;
@@ -190,7 +192,7 @@ th {{ color: #57606a; font-weight: 600; }}
 </head>
 <body>
 <header>
-  <h1>Stage 8 Retail experiment</h1>
+  <h1>Stage 8 {escape(domain.title())} experiment</h1>
   <p>{escape(experiment_id)} | Base/OPD x No Memory/Frozen Memory</p>
 </header>
 <main>

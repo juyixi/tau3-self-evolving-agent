@@ -183,6 +183,20 @@ def test_report_preserves_official_rewards_and_aggregates_metrics() -> None:
             "parse_error_rate": pytest.approx(0.25),
         },
     ]
+
+
+def test_airline_report_and_comparison_types_are_domain_specific() -> None:
+    provenance = replace(_provenance(), domain="airline")
+    report = build_evaluation_report(provenance, _run_result())
+
+    assert report["report_type"] == "tau3-airline-evaluation"
+    assert report["provenance"]["domain"] == "airline"
+    comparison = compare_evaluation_reports(
+        {"base": report, "candidate": report},
+        baseline_label="base",
+    )
+    assert comparison["report_type"] == "tau3-airline-evaluation-comparison"
+    assert comparison["controls"]["domain"] == "airline"
     assert report["provenance"]["task_order"] == ["75", "76"]
     assert report["provenance"]["seeds"] == [42, 43]
     assert report["provenance"]["num_trials"] == 2

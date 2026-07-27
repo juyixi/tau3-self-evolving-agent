@@ -1,2 +1,2 @@
-"""Held-out Retail evaluation with explicit Memory isolation."""
+"""Held-out Tau2-domain evaluation with explicit Memory isolation."""
 

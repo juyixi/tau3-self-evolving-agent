@@ -13,6 +13,7 @@ import tau3_retail_evolver.envs.runtime as runtime_module
 from tau3_retail_evolver.envs.runtime import RuntimeFingerprint, Tau2Runtime
 from tau3_retail_evolver.envs.split_guard import require_learning_split
 from tau3_retail_evolver.envs.task_catalog import (
+    OFFICIAL_AIRLINE_TRAIN_TASK_IDS,
     OFFICIAL_TRAIN_TASK_IDS,
     RetailTaskCatalog,
 )
@@ -21,6 +22,7 @@ from tau3_retail_evolver.envs.task_catalog import (
 SPLIT_FIXTURE = (
     Path(__file__).resolve().parents[2] / "fixtures" / "tau2_retail" / "split_tasks.json"
 )
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _write_tasks(path: Path, task_ids: set[str]) -> None:
@@ -52,6 +54,21 @@ def test_official_retail_splits_are_complete_disjoint_and_stably_fingerprinted(
     assert set(train_ids).isdisjoint(test_ids)
     assert set(base_ids) == set(train_ids) | set(test_ids)
     assert catalog.split_sha256 == expected_fingerprint
+
+
+def test_official_airline_splits_are_one_domain_level_catalog() -> None:
+    root = PROJECT_ROOT / "external" / "tau2-bench" / "data" / "tau2" / "domains" / "airline"
+    catalog = RetailTaskCatalog.from_files(
+        root / "tasks.json",
+        root / "split_tasks.json",
+        domain="airline",
+    )
+
+    catalog.require_official_compatibility()
+    assert catalog.domain == "airline"
+    assert catalog.task_ids("train") == OFFICIAL_AIRLINE_TRAIN_TASK_IDS
+    assert len(catalog.task_ids("test")) == 20
+    assert len(catalog.task_ids("base")) == 50
 
 
 @pytest.mark.parametrize(

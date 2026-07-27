@@ -20,7 +20,7 @@ _LABEL = re.compile(r"^[a-z0-9_-]+$")
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare controlled Tau3 Retail evaluation reports."
+        description="Compare controlled Tau3 Tau2-domain evaluation reports."
     )
     parser.add_argument("--report", action="append", required=True)
     parser.add_argument("--baseline-label", required=True)

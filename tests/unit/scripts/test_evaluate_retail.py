@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from scripts import evaluate_retail
+from scripts import evaluate_airline, evaluate_retail
 from tau3_retail_evolver.eval.guard import EvaluationProtocol
 from tau3_retail_evolver.eval.runner import EvaluationRunResult, TrialEpisode
 from tau3_retail_evolver.fast_loop.events import RunMode
@@ -44,6 +44,40 @@ def test_parser_defaults_to_full_single_trial_test_evaluation() -> None:
     assert args.num_trials == 1
     assert args.seeds is None
     assert args.official_base_reproduction is False
+
+
+def test_airline_entry_defaults_to_airline_config_and_enforces_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_evaluate(
+        argv: list[str],
+        *,
+        expected_domain: str | None = None,
+    ) -> int:
+        captured["argv"] = argv
+        captured["expected_domain"] = expected_domain
+        return 0
+
+    monkeypatch.setattr(evaluate_airline, "_evaluate", fake_evaluate)
+
+    assert (
+        evaluate_airline.main(
+            [
+                "--protocol",
+                "no_memory",
+                "--run-id",
+                "airline-eval",
+                "--model-revision",
+                "qwen-sha",
+            ]
+        )
+        == 0
+    )
+    assert captured["argv"][0] == "--config"
+    assert Path(captured["argv"][1]) == Path("configs") / "airline.yaml"
+    assert captured["expected_domain"] == "airline"
 
 
 def test_seed_resolution_uses_config_seed_or_exact_explicit_set() -> None:
@@ -134,18 +168,32 @@ def test_main_writes_manifest_events_contract_and_report(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     config = SimpleNamespace(
-        tau2=SimpleNamespace(repo_path=tmp_path / "tau2", domain="retail"),
+        tau2=SimpleNamespace(
+            repo_path=tmp_path / "tau2",
+            domain="retail",
+            solo_mode=False,
+            user_llm="deepseek/deepseek-v4-pro",
+            user_llm_args={"api_key": "simulator-secret"},
+        ),
         model=SimpleNamespace(base_model="Qwen/Qwen3.5-9B"),
         rollout=SimpleNamespace(
             temperature=1.0,
             top_p=0.95,
             max_episode_steps=40,
+            max_concurrency=8,
         ),
         training=SimpleNamespace(seed=42),
         memory=SimpleNamespace(
             agent_id="retail",
             retrieve_top_k=50,
             maintenance_period=30,
+            maintenance_tip_capacity=240,
+            maintenance_similarity_threshold=0.92,
+            maintenance_priority_pair_limit=24,
+            max_new_tips_per_episode=2,
+            max_new_skills_per_episode=1,
+            max_new_tools_per_episode=1,
+            max_new_trajectories_per_episode=1,
         ),
         evaluation=SimpleNamespace(nl_assertions=object()),
     )
@@ -153,6 +201,8 @@ def test_main_writes_manifest_events_contract_and_report(
         repo_path=tmp_path / "tau2",
         retail_tasks_path=tmp_path / "tasks.json",
         retail_split_path=tmp_path / "split.json",
+        tasks_path=tmp_path / "tasks.json",
+        split_path=tmp_path / "split.json",
         git_commit="tau2-sha",
     )
 
@@ -169,18 +219,6 @@ def test_main_writes_manifest_events_contract_and_report(
     class FakeGroups:
         def signature_for(self, task_id: str) -> str:
             return f"retail-actions-v1:{task_id * 64}"[:82]
-
-    class FakeEnvironment:
-        user_simulator_config = {
-            "model": "deepseek/deepseek-v4-pro",
-            "api_key": "simulator-secret",
-        }
-
-        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-            pass
-
-        def close(self) -> None:
-            pass
 
     captured: dict[str, Any] = {}
 
@@ -200,7 +238,7 @@ def test_main_writes_manifest_events_contract_and_report(
     monkeypatch.setattr(
         evaluate_retail.Tau2Runtime,
         "inspect_metadata",
-        lambda _path: runtime,
+        lambda _path, **_kwargs: runtime,
     )
     monkeypatch.setattr(
         evaluate_retail.Tau2Runtime,
@@ -209,13 +247,13 @@ def test_main_writes_manifest_events_contract_and_report(
     )
     monkeypatch.setattr(
         evaluate_retail.Tau2Runtime,
-        "load_verified_gym_factory",
-        lambda _path: object(),
+        "load_verified_run_domain",
+        lambda _path: "run-domain-runtime",
     )
     monkeypatch.setattr(
         evaluate_retail.RetailTaskCatalog,
         "from_files",
-        lambda *_args: FakeCatalog(),
+        lambda *_args, **_kwargs: FakeCatalog(),
     )
     monkeypatch.setattr(
         evaluate_retail.RetailTaskGroups,
@@ -230,7 +268,6 @@ def test_main_writes_manifest_events_contract_and_report(
             "temperature": 0.0,
         },
     )
-    monkeypatch.setattr(evaluate_retail, "Tau2RetailEnv", FakeEnvironment)
     monkeypatch.setattr(
         evaluate_retail,
         "OpenAICompatibleHttpClient",
@@ -241,7 +278,11 @@ def test_main_writes_manifest_events_contract_and_report(
         "OpenAICompatibleFastLoopPolicy",
         lambda **kwargs: captured.setdefault("policy", kwargs) or object(),
     )
-    monkeypatch.setattr(evaluate_retail, "run_evaluation_trials", fake_run)
+    monkeypatch.setattr(
+        evaluate_retail,
+        "run_evaluation_trials_via_domain",
+        fake_run,
+    )
     monkeypatch.setattr(
         evaluate_retail,
         "build_embedding_provider",
@@ -286,8 +327,11 @@ def test_main_writes_manifest_events_contract_and_report(
     assert report["summary"]["episode_count"] == 2
     assert report["summary"]["success_rate"] == 1.0
     assert report["provenance"]["protocol"] == "no_memory"
+    assert report["provenance"]["domain"] == "retail"
     assert captured["task_ids"] == ("75", "76")
     assert captured["seeds"] == (42,)
+    assert captured["runtime"] == "run-domain-runtime"
+    assert captured["max_concurrency"] == 8
     assert captured["retriever_factory"] is None
     assert stdout["run_id"] == "eval-001"
     assert stdout["report_path"].endswith("evaluation_report.json")
