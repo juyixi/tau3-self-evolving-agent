@@ -7,6 +7,7 @@ import pytest
 
 from tau3_retail_evolver.fast_loop.prompts import (
     LifecyclePrompt,
+    MAX_PROMPT_MEMORY_CONTENT_CHARS,
     build_action_prompt,
     build_maintenance_prompt,
     build_selection_prompt,
@@ -140,6 +141,26 @@ def test_action_prompt_marks_legacy_failed_tip_as_caution() -> None:
 
     assert prompt.payload["memories"][0]["polarity"] == "caution"
     assert prompt.payload["memories"][0]["outcome_class"] == "task_failure"
+
+
+def test_memory_content_is_bounded_in_model_prompts() -> None:
+    candidate = _candidate().item
+    oversized = MemoryItem(
+        id=candidate.id,
+        tier=candidate.tier,
+        content="x" * (MAX_PROMPT_MEMORY_CONTENT_CHARS + 1),
+        retrieval_text=candidate.retrieval_text,
+        embedding=candidate.embedding,
+        embedding_model_revision=candidate.embedding_model_revision,
+        source_task_ids=candidate.source_task_ids,
+        created_round=candidate.created_round,
+        updated_round=candidate.updated_round,
+        version=candidate.version,
+    )
+
+    prompt = build_selection_prompt(**_public_context(), candidates=(oversized,))
+
+    assert prompt.payload["memories"][0]["content"] == "x" * MAX_PROMPT_MEMORY_CONTENT_CHARS
 
 
 def test_action_prompt_can_exclude_memory_context() -> None:

@@ -17,7 +17,8 @@ from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
 
 PromptKind = Literal["selection", "action", "write", "maintenance"]
 MAX_DIAGNOSTIC_ITEMS_PER_TIER = 100
-MAX_DIAGNOSTIC_CONTENT_CHARS = 8_000
+MAX_DIAGNOSTIC_CONTENT_CHARS = 320
+MAX_PROMPT_MEMORY_CONTENT_CHARS = 800
 CUMULATIVE_TRAJECTORY_FORMAT = "final_observation_plus_actions_v1"
 _FORBIDDEN_PUBLIC_KEY_NAMES = frozenset(
     {
@@ -258,7 +259,7 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
         public = {
             "id": item.id,
             "tier": item.tier.value,
-            "content": item.content,
+            "content": _bounded_memory_content(item.content),
             "version": item.version,
             "rank": candidate.rank,
             "similarity": candidate.similarity,
@@ -276,7 +277,7 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
         public = {
             "id": candidate.id,
             "tier": candidate.tier.value,
-            "content": candidate.content,
+            "content": _bounded_memory_content(candidate.content),
             "version": candidate.version,
             "polarity": polarity.value,
             "outcome_class": outcome_class.value,
@@ -293,6 +294,7 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
     if any(key not in candidate for key in required):
         raise ValueError("memory mappings require id, tier, content, and version")
     public = {key: candidate[key] for key in required}
+    public["content"] = _bounded_memory_content(public["content"])
     public["polarity"] = candidate.get("polarity", "positive")
     public["outcome_class"] = candidate.get("outcome_class", "success")
     for key in ("rank", "similarity"):
@@ -300,6 +302,10 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
             public[key] = candidate[key]
     _require_json_safe(public, "public memory")
     return _json_copy(public, "public memory")
+
+
+def _bounded_memory_content(value: str) -> str:
+    return value[:MAX_PROMPT_MEMORY_CONTENT_CHARS]
 
 
 def _json_copy(value: Any, label: str) -> Any:

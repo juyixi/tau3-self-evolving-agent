@@ -51,7 +51,7 @@ MODEL_SERVING_CONTRACT = {
     "reasoning_parser": "qwen3",
     "tool_call_parser": "qwen3_coder",
     "enable_thinking": True,
-    "max_tokens": 8192,
+    "max_tokens": 2048,
     "request_timeout_s": 600.0,
     "top_k": 20,
     "presence_penalty": 1.5,
