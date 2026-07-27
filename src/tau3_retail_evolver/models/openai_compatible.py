@@ -41,11 +41,16 @@ QwenToolCallParser = Callable[[object], str | None]
 _SELECTION_SYSTEM = (
     'Return exactly one strict JSON object matching SelectionDecision: '
     '{"memory_ids":[...]}. Use only candidate IDs from the user payload. '
+    "Positive memories describe proven strategies. Caution memories describe failure "
+    "reflections and must only be selected when their warning is relevant. "
     'Do not use tools or include any other text.'
 )
 _ACTION_SYSTEM = (
     "Choose exactly one Tau2 action using the official policy and public context. "
     "Use at most one provided tool call, or return a valid Tau2 text action. "
+    "Treat positive memories as reusable strategies. Treat caution memories only as "
+    "behavior to avoid or correct; never imitate their failed behavior or treat them "
+    "as successful completion conditions. "
     "Do not include hidden data."
 )
 _WRITE_SYSTEM = (
@@ -59,6 +64,9 @@ _WRITE_SYSTEM = (
     '"retrieval_text":"optional retrieval query","metadata":{}}]}. '
     'Use {"memories":[]} when no durable lesson passes a tier definition. Content is '
     "rendered by the runtime and must not be returned. Attribution fields are not allowed. "
+    "Follow memory_outcome exactly: successful outcomes may write positive memories; "
+    "task failures may write only caution tips and failure trajectories. Failure memories "
+    "must state what to avoid and the corrective behavior, never a success condition. "
     'When trajectory_format is "final_observation_plus_actions_v1", observation contains '
     "the complete cumulative transcript and trajectory contains its ordered action and "
     "outcome metadata without repeated observations. "

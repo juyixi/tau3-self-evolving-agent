@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tau3_retail_evolver.io.jsonl import JsonlWriter
 from tau3_retail_evolver.memory.embeddings import EmbeddingProvider, validate_embedding
+from tau3_retail_evolver.memory.outcomes import is_retrieval_eligible
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.types import MEMORY_TIERS, MemoryItem, MemoryTier
 
@@ -77,7 +78,7 @@ class Retriever:
         query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
         tier_order = {tier: index for index, tier in enumerate(MEMORY_TIERS)}
         items = sorted(
-            repository.list(),
+            (item for item in repository.list() if is_retrieval_eligible(item)),
             key=lambda item: (tier_order[item.tier.value], item.id),
         )
         stale = [

@@ -88,6 +88,38 @@ def test_retrieval_backfills_embeddings_and_returns_auditable_candidates(
     assert reopened.get(tool.id).embedding is None
 
 
+def test_retrieval_excludes_failed_global_memory_but_keeps_caution_tips(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    failed_skill = repository.add(
+        tier="skill",
+        content="Treat transfer as successful completion",
+        source_task_ids=("failed-task",),
+        created_round=0,
+        metadata={"source_final_reward": 0.0},
+    )
+    caution_tip = repository.add(
+        tier="tip",
+        content="Avoid transferring requests supported by available tools",
+        source_task_ids=("failed-task",),
+        created_round=0,
+        metadata={"source_final_reward": 0.0},
+    )
+    provider = FakeEmbeddingProvider(
+        {
+            "exchange request": (1.0, 0.0),
+            caution_tip.retrieval_text: (1.0, 0.0),
+        }
+    )
+
+    candidates = Retriever(provider).retrieve("exchange request", repository)
+
+    assert [candidate.memory_id for candidate in candidates] == [caution_tip.id]
+    assert provider.batches == [[caution_tip.retrieval_text]]
+    assert repository.get(failed_skill.id).embedding is None
+
+
 def test_retrieval_recomputes_stale_embeddings_and_breaks_ties_deterministically(
     tmp_path: Path,
 ) -> None:
