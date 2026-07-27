@@ -429,7 +429,7 @@ def _generate_decision(
         response.raw_output,
         MaintenanceDecision,
         validator=lambda decision: _validate_commands(
-            decision, maintenance_round, reviewed_ids, reviewed_tip_ids, requires_tip_reduction
+            decision, reviewed_ids, reviewed_tip_ids, requires_tip_reduction
         ),
     )
     if result.decision is not None:
@@ -444,7 +444,7 @@ def _generate_decision(
         repair.raw_output,
         MaintenanceDecision,
         validator=lambda decision: _validate_commands(
-            decision, maintenance_round, reviewed_ids, reviewed_tip_ids, requires_tip_reduction
+            decision, reviewed_ids, reviewed_tip_ids, requires_tip_reduction
         ),
     )
     if repaired_result.decision is None:
@@ -470,7 +470,6 @@ def _bind_command_round(
 
 def _validate_commands(
     decision: MaintenanceDecision,
-    maintenance_round: int,
     reviewed_ids: set[str],
     reviewed_tip_ids: set[str],
     requires_tip_reduction: bool,
@@ -480,12 +479,6 @@ def _validate_commands(
     if has_lookup and has_write:
         raise ValueError("lookup commands cannot be mixed with write commands")
     for command in decision.commands:
-        if isinstance(command, (MergeCommand, DeleteCommand)) and (
-            command.updated_round != maintenance_round
-        ):
-            raise ValueError(
-                "maintenance command updated_round must equal maintenance_round"
-            )
         if isinstance(command, MergeCommand):
             _reject_forbidden_metadata(command.metadata)
     reviewed = [memory_id for review in decision.reviews for memory_id in review.memory_ids]

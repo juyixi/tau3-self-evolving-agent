@@ -50,6 +50,34 @@ def test_bind_command_round_overrides_model_supplied_round() -> None:
     assert bound.commands[0].updated_round == 5
 
 
+def test_model_supplied_updated_round_is_ignored_end_to_end(tmp_path: Path) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    first, second, _ = _seed(repository)
+    policy = ScriptedPolicy(
+        [
+            json.dumps(
+                {
+                    "commands": [
+                        {
+                            "operation": "merge",
+                            "source_ids": [first.id, second.id],
+                            "content": "Verify identity and confirmation before refund.",
+                            "updated_round": 0,
+                        }
+                    ]
+                }
+            )
+        ]
+    )
+
+    result = _run(repository, policy, completed_train_tasks=150)
+
+    assert result.maintenance_round == 5
+    assert result.executed is True
+    assert result.commands[0].updated_round == 5
+    assert repository.get(result.created_ids[0]).created_round == 5
+
+
 class ScriptedPolicy:
     def __init__(
         self,
@@ -609,19 +637,6 @@ def test_empty_decision_completes_noop_round(tmp_path: Path) -> None:
                 ]
             },
             "lookup commands cannot be mixed",
-        ),
-        (
-            {
-                "commands": [
-                    {
-                        "operation": "delete",
-                        "memory_ids": ["mem-tip-a"],
-                        "updated_round": 2,
-                        "reason": "wrong round",
-                    }
-                ]
-            },
-            "updated_round",
         ),
     ],
 )
