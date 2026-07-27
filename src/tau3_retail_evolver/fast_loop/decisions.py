@@ -148,21 +148,33 @@ class MaintenanceDecision(_DecisionModel):
     @model_validator(mode="before")
     @classmethod
     def commands_must_use_strict_input_types(cls, value: Any) -> Any:
-        if not isinstance(value, dict) or not isinstance(
-            value.get("commands"), (list, tuple)
-        ):
+        if not isinstance(value, dict):
             return value
-        commands = []
-        for command in value["commands"]:
-            payload = (
-                command.model_dump(mode="python")
-                if isinstance(command, BaseModel)
-                else command
+        normalized = dict(value)
+        if isinstance(value.get("commands"), (list, tuple)):
+            commands = []
+            for command in value["commands"]:
+                payload = (
+                    command.model_dump(mode="python")
+                    if isinstance(command, BaseModel)
+                    else command
+                )
+                encoded = json.dumps(payload, allow_nan=False)
+                strict_command = _STRICT_COMMAND_ADAPTER.validate_json(encoded)
+                commands.append(strict_command.model_dump(mode="python"))
+            normalized["commands"] = tuple(commands)
+        if isinstance(value.get("reviews"), (list, tuple)):
+            normalized["reviews"] = tuple(
+                {
+                    **review,
+                    "memory_ids": tuple(review["memory_ids"]),
+                }
+                if isinstance(review, dict)
+                and isinstance(review.get("memory_ids"), (list, tuple))
+                else review
+                for review in value["reviews"]
             )
-            encoded = json.dumps(payload, allow_nan=False)
-            strict_command = _STRICT_COMMAND_ADAPTER.validate_json(encoded)
-            commands.append(strict_command.model_dump(mode="python"))
-        return {**value, "commands": tuple(commands)}
+        return normalized
 
 
 class MaintenanceReview(_DecisionModel):

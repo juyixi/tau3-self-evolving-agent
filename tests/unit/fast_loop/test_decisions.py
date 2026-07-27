@@ -174,6 +174,27 @@ def test_maintenance_decision_parses_only_known_typed_commands() -> None:
         MaintenanceDecision.model_validate({"commands": [{"operation": "invent"}]})
 
 
+def test_maintenance_decision_parses_json_review_arrays() -> None:
+    result = parse_decision(
+        json.dumps(
+            {
+                "commands": [],
+                "reviews": [
+                    {
+                        "memory_ids": ["memory-1"],
+                        "disposition": "keep",
+                        "reason": "Still relevant.",
+                    }
+                ],
+            }
+        ),
+        MaintenanceDecision,
+    )
+
+    assert result.decision is not None
+    assert result.decision.reviews[0].memory_ids == ("memory-1",)
+
+
 @pytest.mark.parametrize("updated_round", ("3", 3.0, True))
 def test_maintenance_parse_rejects_coerced_updated_round_scalars(updated_round: object) -> None:
     result = parse_decision(
