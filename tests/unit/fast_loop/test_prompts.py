@@ -119,7 +119,27 @@ def test_selection_and_action_prompts_project_only_public_memory_data() -> None:
             "version": 2,
             "rank": 1,
             "similarity": 0.8,
+            "polarity": "positive",
+            "outcome_class": "success",
         }
+
+
+def test_action_prompt_marks_legacy_failed_tip_as_caution() -> None:
+    item = MemoryItem(
+        id="failed-tip",
+        tier=MemoryTier.TIP,
+        content="Avoid transferring a supported request.",
+        retrieval_text="premature transfer",
+        metadata={"source_final_reward": 0.0},
+        source_task_ids=("failed-task",),
+        created_round=0,
+        updated_round=0,
+    )
+
+    prompt = build_action_prompt(**_public_context(), memories=(item,))
+
+    assert prompt.payload["memories"][0]["polarity"] == "caution"
+    assert prompt.payload["memories"][0]["outcome_class"] == "task_failure"
 
 
 def test_action_prompt_can_exclude_memory_context() -> None:
@@ -148,6 +168,24 @@ def test_write_prompt_allows_terminal_public_evaluation_but_rejects_hidden_crite
             trajectory=[],
             terminal_evaluation={"evaluation_criteria": "private rubric"},
         )
+
+
+def test_write_prompt_includes_outcome_write_contract() -> None:
+    memory_outcome = {
+        "final_reward": 0.0,
+        "outcome_class": "task_failure",
+        "polarity": "caution",
+        "allowed_tiers": ["tip", "trajectory"],
+    }
+
+    prompt = build_write_prompt(
+        **_public_context(),
+        trajectory=[{"role": "assistant", "content": "Transferred too early."}],
+        terminal_evaluation={"reward": 0.0},
+        memory_outcome=memory_outcome,
+    )
+
+    assert prompt.payload["memory_outcome"] == memory_outcome
 
 
 def test_write_prompt_compacts_cumulative_transcript_without_losing_step_metadata() -> None:

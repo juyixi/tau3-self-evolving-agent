@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from tau3_retail_evolver.fast_loop.baseline_prompt import normalize_tool_schema
 from tau3_retail_evolver.fast_loop.decisions import maintenance_command_schemas
+from tau3_retail_evolver.memory.outcomes import memory_outcome_labels
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate
 from tau3_retail_evolver.memory.types import MemoryItem
 from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
@@ -158,6 +159,7 @@ def build_write_prompt(
     history: Sequence[Mapping[str, Any]] = (),
     trajectory: Sequence[Mapping[str, Any]],
     terminal_evaluation: Mapping[str, Any],
+    memory_outcome: Mapping[str, Any] | None = None,
 ) -> LifecyclePrompt:
     context = project_public_context(
         task_instruction=task_instruction,
@@ -177,13 +179,16 @@ def build_write_prompt(
     trajectory_payload: dict[str, Any] = {"trajectory": prompt_trajectory}
     if prompt_trajectory is not normalized_trajectory:
         trajectory_payload["trajectory_format"] = CUMULATIVE_TRAJECTORY_FORMAT
+    payload = {
+        **context,
+        **trajectory_payload,
+        "terminal_evaluation": normalized_evaluation,
+    }
+    if memory_outcome is not None:
+        payload["memory_outcome"] = _json_copy(memory_outcome, "memory outcome")
     return LifecyclePrompt(
         kind="write",
-        payload={
-            **context,
-            **trajectory_payload,
-            "terminal_evaluation": normalized_evaluation,
-        },
+        payload=payload,
         command_schemas=(),
     )
 
@@ -201,14 +206,15 @@ def build_maintenance_prompt(
         )
     except ValidationError as error:
         raise ValueError(f"invalid maintenance diagnostics: {error}") from error
+    payload = {"diagnostics": validated_diagnostics.model_dump(mode="json")}
+    if maintenance_context is not None:
+        payload["maintenance_context"] = _json_copy(
+            maintenance_context,
+            "maintenance context",
+        )
     return LifecyclePrompt(
         kind="maintenance",
-        payload={
-            "diagnostics": validated_diagnostics.model_dump(mode="json"),
-            "maintenance_context": _json_copy(
-                maintenance_context or {}, "maintenance context"
-            ),
-        },
+        payload=payload,
         command_schemas=maintenance_command_schemas(),
     )
 
@@ -248,6 +254,7 @@ def project_public_context(
 def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(candidate, MemoryCandidate):
         item = candidate.item
+        polarity, outcome_class = memory_outcome_labels(item)
         public = {
             "id": item.id,
             "tier": item.tier.value,
@@ -255,6 +262,8 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
             "version": item.version,
             "rank": candidate.rank,
             "similarity": candidate.similarity,
+            "polarity": polarity.value,
+            "outcome_class": outcome_class.value,
         }
         if item.tier_schema_version == 2:
             public.update(
@@ -263,11 +272,14 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
             )
         return public
     if isinstance(candidate, MemoryItem):
+        polarity, outcome_class = memory_outcome_labels(candidate)
         public = {
             "id": candidate.id,
             "tier": candidate.tier.value,
             "content": candidate.content,
             "version": candidate.version,
+            "polarity": polarity.value,
+            "outcome_class": outcome_class.value,
         }
         if candidate.tier_schema_version == 2:
             public.update(
@@ -281,6 +293,8 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
     if any(key not in candidate for key in required):
         raise ValueError("memory mappings require id, tier, content, and version")
     public = {key: candidate[key] for key in required}
+    public["polarity"] = candidate.get("polarity", "positive")
+    public["outcome_class"] = candidate.get("outcome_class", "success")
     for key in ("rank", "similarity"):
         if key in candidate:
             public[key] = candidate[key]

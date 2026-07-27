@@ -27,6 +27,10 @@ from tau3_retail_evolver.fast_loop.prompts import (
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.repository import MemoryRepository
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate, Retriever
+from tau3_retail_evolver.memory.outcomes import (
+    EpisodeMemoryPolicy,
+    classify_episode_memory,
+)
 from tau3_retail_evolver.memory.tier_contracts import (
     TIER_SCHEMA_VERSION,
     materialize_tier_memory,
@@ -146,6 +150,8 @@ _RESERVED_METADATA_KEYS = frozenset(
         "source_final_reward",
         "selected_memory_ids",
         "classification_rule",
+        "polarity",
+        "outcome_class",
     }
 )
 
@@ -439,98 +445,115 @@ def _run_lifecycle_episode(
         written_ids: tuple[str, ...] = ()
         if write_memory:
             assert repository is not None
-            write_prompt = build_write_prompt(
-                task_instruction=public_task_instruction,
-                policy=public_policy,
-                tools=public_tools,
-                observation=last_nonblank_observation,
-                trajectory=trajectory,
+            memory_policy = classify_episode_memory(
+                final_reward=final_reward,
                 terminal_evaluation=terminal_evaluation,
+                truncated=truncated or project_truncated,
             )
-            write_decision, write_audit = _generate_decision(
-                policy,
-                write_prompt,
-                WriteDecision,
-                validator=lambda decision: _validate_write_decision(
-                    decision,
-                    tools=public_tools,
-                    task_id=task_id,
-                    context=context,
-                    final_reward=final_reward,
-                    trajectory=trajectory,
-                ),
-                label="write",
-                invalid_fallback=_empty_write_decision,
-            )
-            response_count += 1
-            if write_audit["error"] is not None:
-                response_parse_error_count += 1
-            (
-                agent_prompt_tokens,
-                agent_completion_tokens,
-                token_usage_complete,
-            ) = _accumulate_token_usage(
-                agent_prompt_tokens,
-                agent_completion_tokens,
-                token_usage_complete,
-                write_audit,
-            )
-            accepted_memories, dropped_by_tier = _apply_write_quotas(
-                write_decision,
-                config,
-            )
-            proposals = [
-                _write_proposal(
-                    memory,
-                    task_id,
+            if not memory_policy.should_generate:
+                _emit_skipped_memory_write(
                     context,
-                    final_reward,
-                    selected_ids,
-                    tools=public_tools,
-                    trajectory=trajectory,
+                    task_id,
+                    memory_policy,
                 )
-                for memory in accepted_memories
-            ]
-            _emit(
-                context,
-                task_id,
-                "MemoryWriteProposed",
-                proposals=[proposal["evidence"] for proposal in proposals],
-                repair_used=write_audit["repaired_output"] is not None,
-                invalid_output_skipped=write_audit["fallback_used"],
-                sampling_params=write_audit["sampling_params"],
-                latency_s=write_audit["latency_s"],
-                prompt_tokens=write_audit["prompt_tokens"],
-                completion_tokens=write_audit["completion_tokens"],
-                dropped_by_tier=dropped_by_tier,
-            )
-            try:
-                written_ids, replayed_ids = _persist_proposals(repository, proposals)
-            except BaseException as error:
-                committed_ids = getattr(error, "_fast_loop_committed_ids", ())
-                replayed_ids = getattr(error, "_fast_loop_replayed_ids", ())
-                write_failure_emitted = True
-                try:
-                    _emit(
-                        context,
+            else:
+                write_prompt = build_write_prompt(
+                    task_instruction=public_task_instruction,
+                    policy=public_policy,
+                    tools=public_tools,
+                    observation=last_nonblank_observation,
+                    trajectory=trajectory,
+                    terminal_evaluation=terminal_evaluation,
+                    memory_outcome=memory_policy.prompt_payload(),
+                )
+                write_decision, write_audit = _generate_decision(
+                    policy,
+                    write_prompt,
+                    WriteDecision,
+                    validator=lambda decision: _validate_write_decision(
+                        decision,
+                        tools=public_tools,
+                        task_id=task_id,
+                        context=context,
+                        final_reward=final_reward,
+                        trajectory=trajectory,
+                        memory_policy=memory_policy,
+                    ),
+                    label="write",
+                    invalid_fallback=_empty_write_decision,
+                )
+                response_count += 1
+                if write_audit["error"] is not None:
+                    response_parse_error_count += 1
+                (
+                    agent_prompt_tokens,
+                    agent_completion_tokens,
+                    token_usage_complete,
+                ) = _accumulate_token_usage(
+                    agent_prompt_tokens,
+                    agent_completion_tokens,
+                    token_usage_complete,
+                    write_audit,
+                )
+                accepted_memories, dropped_by_tier = _apply_write_quotas(
+                    write_decision,
+                    config,
+                )
+                proposals = [
+                    _write_proposal(
+                        memory,
                         task_id,
-                        "MemoryWriteFailed",
-                        committed_memory_ids=list(committed_ids),
-                        replayed_memory_ids=list(replayed_ids),
-                        error=_sanitized_error(error),
+                        context,
+                        final_reward,
+                        selected_ids,
+                        tools=public_tools,
+                        trajectory=trajectory,
+                        memory_policy=memory_policy,
                     )
-                except Exception as evidence_error:
-                    error.add_note(
-                        f"Fast-loop write failure evidence also failed: {evidence_error}"
-                    )
-                raise
-            _emit(
-                context,
-                task_id,
-                "MemoryWriteCommitted",
-                written_memory_ids=list(written_ids),
-                replayed_memory_ids=list(replayed_ids),
-            )
+                    for memory in accepted_memories
+                ]
+                _emit(
+                    context,
+                    task_id,
+                    "MemoryWriteProposed",
+                    proposals=[proposal["evidence"] for proposal in proposals],
+                    repair_used=write_audit["repaired_output"] is not None,
+                    invalid_output_skipped=write_audit["fallback_used"],
+                    sampling_params=write_audit["sampling_params"],
+                    latency_s=write_audit["latency_s"],
+                    prompt_tokens=write_audit["prompt_tokens"],
+                    completion_tokens=write_audit["completion_tokens"],
+                    dropped_by_tier=dropped_by_tier,
+                    outcome_class=memory_policy.outcome_class.value,
+                    polarity=memory_policy.polarity.value,
+                )
+                try:
+                    written_ids, replayed_ids = _persist_proposals(repository, proposals)
+                except BaseException as error:
+                    committed_ids = getattr(error, "_fast_loop_committed_ids", ())
+                    replayed_ids = getattr(error, "_fast_loop_replayed_ids", ())
+                    write_failure_emitted = True
+                    try:
+                        _emit(
+                            context,
+                            task_id,
+                            "MemoryWriteFailed",
+                            committed_memory_ids=list(committed_ids),
+                            replayed_memory_ids=list(replayed_ids),
+                            error=_sanitized_error(error),
+                        )
+                    except Exception as evidence_error:
+                        error.add_note(
+                            f"Fast-loop write failure evidence also failed: {evidence_error}"
+                        )
+                    raise
+                _emit(
+                    context,
+                    task_id,
+                    "MemoryWriteCommitted",
+                    written_memory_ids=list(written_ids),
+                    replayed_memory_ids=list(replayed_ids),
+                )
         result = EpisodeResult(
             task_id=task_id,
             final_reward=final_reward,
@@ -768,6 +791,38 @@ def _terminal_json_mapping(
     return parsed
 
 
+def _emit_skipped_memory_write(
+    context: RunContext,
+    task_id: str,
+    memory_policy: EpisodeMemoryPolicy,
+) -> None:
+    if memory_policy.should_generate:
+        raise ValueError("generated Memory outcomes cannot use the skipped lifecycle")
+    _emit(
+        context,
+        task_id,
+        "MemoryWriteProposed",
+        proposals=[],
+        repair_used=False,
+        invalid_output_skipped=False,
+        sampling_params={},
+        latency_s=0.0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        dropped_by_tier={},
+        outcome_class=memory_policy.outcome_class.value,
+        polarity=None,
+        skipped_reason=memory_policy.skip_reason,
+    )
+    _emit(
+        context,
+        task_id,
+        "MemoryWriteCommitted",
+        written_memory_ids=[],
+        replayed_memory_ids=[],
+    )
+
+
 def _write_proposal(
     memory: Any,
     task_id: str,
@@ -777,7 +832,14 @@ def _write_proposal(
     *,
     tools: Sequence[Mapping[str, Any]],
     trajectory: Sequence[Mapping[str, Any]],
+    memory_policy: EpisodeMemoryPolicy,
 ) -> dict[str, Any]:
+    if not memory_policy.should_generate or memory_policy.polarity is None:
+        raise ValueError("Memory proposal requires an active outcome policy")
+    if memory.tier not in memory_policy.allowed_tiers:
+        raise ValueError(
+            f"{memory_policy.outcome_class.value} cannot write {memory.tier.value} Memory"
+        )
     _validate_write_metadata(memory.metadata)
     materialized = materialize_tier_memory(
         tier=memory.tier,
@@ -800,6 +862,8 @@ def _write_proposal(
         source_final_reward=final_reward,
         selected_memory_ids=list(selected_ids),
         classification_rule=materialized.classification_rule,
+        polarity=memory_policy.polarity.value,
+        outcome_class=memory_policy.outcome_class.value,
     )
     memory_id = stable_memory_id(materialized.tier, materialized.content)
     add_kwargs = {
@@ -837,7 +901,23 @@ def _validate_write_decision(
     context: RunContext,
     final_reward: float,
     trajectory: Sequence[Mapping[str, Any]],
+    memory_policy: EpisodeMemoryPolicy,
 ) -> WriteDecision:
+    if not memory_policy.should_generate:
+        raise ValueError("skipped outcomes cannot validate Memory writes")
+    disallowed = sorted(
+        {
+            memory.tier.value
+            for memory in decision.memories
+            if memory.tier not in memory_policy.allowed_tiers
+        }
+    )
+    if disallowed:
+        allowed = ", ".join(tier.value for tier in memory_policy.allowed_tiers)
+        raise ValueError(
+            f"{memory_policy.outcome_class.value} may write only {allowed}; "
+            f"disallowed tiers: {', '.join(disallowed)}"
+        )
     for memory in decision.memories:
         _validate_write_metadata(memory.metadata)
         materialize_tier_memory(

@@ -176,7 +176,7 @@ def _reset() -> ResetResult:
     )
 
 
-def _terminal_step(reward: float = 0.8) -> StepResult:
+def _terminal_step(reward: float = 1.0) -> StepResult:
     return StepResult(
         observation="Refund complete",
         reward=reward,
@@ -185,7 +185,9 @@ def _terminal_step(reward: float = 0.8) -> StepResult:
         truncated=False,
         info={
             "parse_error": None,
-            "reward_info": '{"score":0.8,"details":{"policy":1}}',
+            "reward_info": json.dumps(
+                {"score": reward, "details": {"policy": int(reward == 1.0)}}
+            ),
             "simulation_run": '{"id":"sim-1","status":"complete"}',
             "evaluation_criteria": {"hidden": True},
         },
@@ -386,8 +388,8 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
     assert environment.actions == ["lookup_order(order_id='123')"]
     assert events.events[3]["parsed_action"] == environment.actions[0]
     assert events.events[4]["public_info"] == {"parse_error": None}
-    assert result.final_reward == 0.8
-    assert result.terminal_evaluation == {"score": 0.8, "details": {"policy": 1}}
+    assert result.final_reward == 1.0
+    assert result.terminal_evaluation == {"score": 1.0, "details": {"policy": 1}}
     assert result.simulation_result == {"id": "sim-1", "status": "complete"}
     assert result.steps == 1
     assert result.selected_memory_ids == (candidate.id,)
@@ -411,8 +413,10 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
         "note": "learned",
         "source_run_id": "learn-001",
         "source_iteration": 3,
-        "source_final_reward": 0.8,
+        "source_final_reward": 1.0,
         "selected_memory_ids": [candidate.id],
+        "polarity": "positive",
+        "outcome_class": "success",
     }
     assert "attribution_score" not in repr(events.events)
     assert all("provenance-task-923" not in prompt.model_dump_json() for prompt in policy.prompts)
@@ -421,6 +425,112 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
     assert "Customer asks for a refund" in embeddings.embedded[-1]
     assert environment.reset_seed == 19
     assert environment.close_calls == 1
+
+
+def test_failed_episode_repairs_success_skill_into_caution_memories(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    invalid_failure_write = _write_output(
+        _skill_write("Treat transfer as successful task completion")
+    )
+    repaired_failure_write = _write_output(
+        _tip_write(
+            "Avoid treating transfer_to_human_agents as successful completion; "
+            "continue the supported workflow when tools can handle the request."
+        ),
+        _trajectory_write(
+            "The agent transferred a supported request before completing it.",
+            "The transfer was a failed outcome and must not be imitated.",
+        ),
+    )
+    policy = ScriptedLifecyclePolicy(
+        [
+            '{"memory_ids":[]}',
+            '{"action":"transfer_to_human_agents()"}',
+            invalid_failure_write,
+        ],
+        [repaired_failure_write],
+    )
+
+    result = _run(
+        repository=repository,
+        environment=FakeEnvironment(_reset(), [_terminal_step(0.0)]),
+        policy=policy,
+        events=events,
+    )
+
+    assert result.final_reward == 0.0
+    assert len(policy.repair_calls) == 1
+    assert len(result.written_memory_ids) == 2
+    written = [repository.get(memory_id) for memory_id in result.written_memory_ids]
+    assert {item.tier.value for item in written if item is not None} == {
+        "tip",
+        "trajectory",
+    }
+    assert all(
+        item.metadata["polarity"] == "caution"
+        and item.metadata["outcome_class"] == "task_failure"
+        for item in written
+        if item is not None
+    )
+    assert all(item.tier.value not in {"skill", "tool"} for item in written if item)
+    write_prompt = next(prompt for prompt in policy.prompts if prompt.kind == "write")
+    assert write_prompt.payload["memory_outcome"] == {
+        "final_reward": 0.0,
+        "outcome_class": "task_failure",
+        "polarity": "caution",
+        "allowed_tiers": ["tip", "trajectory"],
+        "guidance": (
+            "Extract only failure reflections: describe what to avoid and the "
+            "corrective behavior. Do not present failed behavior as a success strategy."
+        ),
+    }
+    proposed = next(
+        event for event in events.events if event["event_type"] == "MemoryWriteProposed"
+    )
+    assert proposed["outcome_class"] == "task_failure"
+    assert proposed["polarity"] == "caution"
+
+
+def test_missing_terminal_evaluation_skips_memory_generation(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    events = EventCollector()
+    terminal = StepResult(
+        observation="done",
+        reward=0.0,
+        done=True,
+        terminated=True,
+        truncated=False,
+        info={"reward_info": "{}", "simulation_run": "{}"},
+    )
+    policy = ScriptedLifecyclePolicy(
+        ['{"memory_ids":[]}', '{"action":"done"}']
+    )
+
+    result = _run(
+        repository=repository,
+        environment=FakeEnvironment(_reset(), [terminal]),
+        policy=policy,
+        events=events,
+    )
+
+    assert result.written_memory_ids == ()
+    assert [prompt.kind for prompt in policy.prompts] == ["selection", "action"]
+    proposed = next(
+        event for event in events.events if event["event_type"] == "MemoryWriteProposed"
+    )
+    committed = next(
+        event for event in events.events if event["event_type"] == "MemoryWriteCommitted"
+    )
+    assert proposed["proposals"] == []
+    assert proposed["outcome_class"] == "infra_failure"
+    assert proposed["skipped_reason"] == "missing_terminal_evaluation"
+    assert committed["written_memory_ids"] == []
+    assert repository.list() == []
 
 
 def test_selected_candidate_details_follow_teacher_preference_order(
@@ -464,6 +574,16 @@ def _skill_write(goal: str) -> dict[str, Any]:
                 {"order": 2, "instruction": "Apply the verified next action."},
             ],
             "success_condition": "The requested operation is completed.",
+        },
+    }
+
+
+def _trajectory_write(initial_state: str, lesson: str) -> dict[str, Any]:
+    return {
+        "tier": "trajectory",
+        "payload": {
+            "initial_state": initial_state,
+            "lesson": lesson,
         },
     }
 
@@ -599,11 +719,11 @@ def test_write_prompt_uses_latest_nonblank_observation_after_terminal_empty_step
     )
     compact_step = write_prompt.payload["trajectory"][0]
     assert compact_step["action"] == "finish"
-    assert compact_step["reward"] == 0.8
+    assert compact_step["reward"] == 1.0
     assert compact_step["done"] is True
     assert "observation" not in compact_step
     assert "next_observation" not in compact_step
-    assert result.final_reward == 0.8
+    assert result.final_reward == 1.0
 
 
 @pytest.mark.parametrize(
@@ -970,7 +1090,7 @@ def test_invalid_non_sensitive_write_after_repair_skips_memory_and_keeps_episode
         event for event in events.events if event["event_type"] == "MemoryWriteCommitted"
     )
     assert len(policy.repair_calls) == 1
-    assert result.final_reward == 0.8
+    assert result.final_reward == 1.0
     assert result.written_memory_ids == ()
     assert result.response_parse_error_count == 1
     assert proposed["proposals"] == []
