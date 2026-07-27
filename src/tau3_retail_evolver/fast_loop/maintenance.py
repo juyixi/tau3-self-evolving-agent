@@ -30,6 +30,14 @@ from tau3_retail_evolver.memory.operations import (
     MergeCommand,
 )
 from tau3_retail_evolver.memory.repository import MemoryRepository
+from tau3_retail_evolver.memory.tier_contracts import (
+    SkillPayload,
+    TipPayload,
+    ToolPayload,
+    TrajectoryPayload,
+    render_tier_payload,
+    validate_stored_tier_payload,
+)
 from tau3_retail_evolver.memory.types import MemoryTier
 from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
 
@@ -368,6 +376,7 @@ def _execute_round(
             requires_tip_reduction=requires_tip_reduction,
         )
         decision = _bind_command_round(decision, maintenance_round)
+        decision = _prepare_merge_commands(decision, repository)
         canonical_commands = [
             command.model_dump(mode="json") for command in decision.commands
         ]
@@ -466,6 +475,98 @@ def _bind_command_round(
         for command in decision.commands
     )
     return decision.model_copy(update={"commands": commands})
+
+
+def _prepare_merge_commands(
+    decision: MaintenanceDecision,
+    repository: MemoryRepository,
+) -> MaintenanceDecision:
+    merge_source_ids = {
+        memory_id
+        for command in decision.commands
+        if isinstance(command, MergeCommand)
+        for memory_id in command.source_ids
+    }
+    normalized: list[MemoryCommand] = []
+    for command in decision.commands:
+        if isinstance(command, DeleteCommand):
+            remaining = tuple(
+                memory_id
+                for memory_id in command.memory_ids
+                if memory_id not in merge_source_ids
+            )
+            if not remaining:
+                continue
+            command = command.model_copy(update={"memory_ids": remaining})
+        if isinstance(command, MergeCommand):
+            command = _materialize_v2_merge(command, repository)
+        normalized.append(command)
+    return decision.model_copy(update={"commands": tuple(normalized)})
+
+
+def _materialize_v2_merge(
+    command: MergeCommand,
+    repository: MemoryRepository,
+) -> MergeCommand:
+    sources = []
+    for memory_id in command.source_ids:
+        item = repository.get(memory_id)
+        if item is None:
+            raise KeyError(f"unknown memory: {memory_id}")
+        sources.append(item)
+    tiers = {source.tier for source in sources}
+    if len(tiers) != 1:
+        raise ValueError("merge sources must belong to the same tier")
+    schema_versions = {source.tier_schema_version for source in sources}
+    if schema_versions == {1}:
+        return command.model_copy(update={"payload": None})
+    if schema_versions != {2}:
+        raise ValueError("merge sources must use the same tier schema version")
+
+    representative = max(
+        sources,
+        key=lambda item: (
+            item.success_count,
+            item.usage_count,
+            item.updated_round,
+            item.version,
+            item.id,
+        ),
+    )
+    assert representative.payload is not None
+    payload = validate_stored_tier_payload(
+        representative.tier,
+        representative.payload,
+    )
+    if isinstance(payload, TipPayload):
+        payload = payload.model_copy(update={"guidance": command.content})
+    elif isinstance(payload, SkillPayload):
+        payload = payload.model_copy(update={"goal": command.content})
+    elif isinstance(payload, ToolPayload):
+        tool_names = {
+            validate_stored_tier_payload(source.tier, source.payload).tool_name
+            for source in sources
+            if source.payload is not None
+        }
+        if len(tool_names) != 1:
+            raise ValueError("tool merge sources must describe the same tool")
+        payload = payload.model_copy(update={"purpose": command.content})
+    elif isinstance(payload, TrajectoryPayload):
+        payload = payload.model_copy(update={"lesson": command.content})
+    else:
+        raise TypeError(f"unsupported V2 merge payload: {type(payload).__name__}")
+
+    rendered = render_tier_payload(representative.tier, payload)
+    return command.model_copy(
+        update={
+            "content": rendered,
+            "payload": payload.model_dump(mode="json"),
+            "metadata": {
+                **command.metadata,
+                "representative_memory_id": representative.id,
+            },
+        }
+    )
 
 
 def _validate_commands(

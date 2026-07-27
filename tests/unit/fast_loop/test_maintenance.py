@@ -22,6 +22,7 @@ from tau3_retail_evolver.fast_loop.runner import LifecycleResponse
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.operations import DeleteCommand
 from tau3_retail_evolver.memory.repository import MemoryRepository
+from tau3_retail_evolver.memory.tier_contracts import TipPayload, render_tier_payload
 from tau3_retail_evolver.memory.types import MemoryStatus, MemoryTier
 
 
@@ -445,6 +446,79 @@ def test_same_tier_merge_and_soft_delete_use_current_round(tmp_path: Path) -> No
     assert repository.get(merged.created_ids[0]).tier == MemoryTier.TIP
     assert deleted.updated_ids == (tool.id,)
     assert repository.get(tool.id).status == MemoryStatus.RETIRED
+
+
+def test_v2_merge_materializes_payload_and_drops_overlapping_delete(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    memories = []
+    for task_id, guidance in (
+        ("task-1", "Authenticate the user before reading account data."),
+        ("task-2", "Authenticate the user before changing an order."),
+    ):
+        payload = TipPayload(guidance=guidance)
+        memories.append(
+            repository.add(
+                tier=MemoryTier.TIP,
+                tier_schema_version=2,
+                payload=payload.model_dump(mode="json"),
+                content=render_tier_payload(MemoryTier.TIP, payload),
+                source_task_ids=(task_id,),
+                created_round=0,
+            )
+        )
+    memory_ids = [memory.id for memory in memories]
+    policy = ScriptedPolicy(
+        [
+            json.dumps(
+                {
+                    "commands": [
+                        {
+                            "operation": "delete",
+                            "memory_ids": memory_ids,
+                            "updated_round": 0,
+                            "reason": "replace with consolidated guidance",
+                        },
+                        {
+                            "operation": "merge",
+                            "source_ids": memory_ids,
+                            "content": "Authenticate before every account or order interaction.",
+                            "updated_round": 0,
+                        },
+                    ]
+                }
+            )
+        ]
+    )
+    events = EventCollector()
+
+    result = _run(
+        repository,
+        policy,
+        events,
+        completed_train_tasks=150,
+    )
+
+    assert len(result.commands) == 1
+    assert result.commands[0].operation == "merge"
+    assert result.commands[0].updated_round == 5
+    assert len(result.created_ids) == 1
+    merged = repository.get(result.created_ids[0])
+    assert merged is not None
+    assert merged.tier_schema_version == 2
+    assert merged.payload["guidance"] == (
+        "Authenticate before every account or order interaction."
+    )
+    assert all(
+        repository.get(memory.id).status == MemoryStatus.RETIRED
+        for memory in memories
+    )
+    proposed = next(
+        event for event in events.events if event["event_type"] == "MaintenanceProposed"
+    )
+    assert len(proposed["commands"]) == 1
+    assert proposed["commands"][0]["payload"] == merged.payload
 
 
 def test_nested_camelcase_attribution_triggers_clean_repair(

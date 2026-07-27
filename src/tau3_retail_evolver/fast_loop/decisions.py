@@ -124,6 +124,7 @@ class _StrictMergeCommand(_DecisionModel):
     source_ids: tuple[str, ...] = Field(min_length=2)
     content: str
     updated_round: int = Field(ge=0)
+    payload: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

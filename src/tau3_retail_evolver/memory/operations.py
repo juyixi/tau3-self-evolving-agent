@@ -33,6 +33,7 @@ class MergeCommand(_Command):
     source_ids: tuple[str, ...] = Field(min_length=2)
     content: str
     updated_round: int = Field(ge=0)
+    payload: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("source_ids")
@@ -55,6 +56,19 @@ class MergeCommand(_Command):
             json.dumps(value, allow_nan=False)
         except (TypeError, ValueError) as error:
             raise ValueError("merge metadata must be JSON serializable") from error
+        return value
+
+    @field_validator("payload")
+    @classmethod
+    def payload_must_be_json_safe(
+        cls, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        try:
+            json.dumps(value, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise ValueError("merge payload must be JSON serializable") from error
         return value
 
 
@@ -140,10 +154,16 @@ class MemoryOperations:
                 tiers = {source.tier for source in sources}
                 if len(tiers) != 1:
                     raise ValueError("merge sources must belong to the same tier")
-                if any(source.tier_schema_version == 2 for source in sources):
+                schema_versions = {source.tier_schema_version for source in sources}
+                if len(schema_versions) != 1:
                     raise ValueError(
-                        "V2 memory merge requires a typed tier payload"
+                        "merge sources must use the same tier schema version"
                     )
+                tier_schema_version = next(iter(schema_versions))
+                if tier_schema_version == 2 and command.payload is None:
+                    raise ValueError("V2 memory merge requires a typed tier payload")
+                if tier_schema_version == 1 and command.payload is not None:
+                    raise ValueError("legacy memory merge must not define a tier payload")
                 tier = sources[0].tier
                 target_id = stable_memory_id(tier, command.content)
                 if target_id in state:
@@ -164,6 +184,8 @@ class MemoryOperations:
                 merged = MemoryItem(
                     id=target_id,
                     tier=tier,
+                    tier_schema_version=tier_schema_version,
+                    payload=command.payload,
                     content=command.content,
                     retrieval_text=command.content,
                     metadata={**command.metadata, "merged_from": list(source_ids)},
@@ -235,6 +257,8 @@ def _is_replayed_merge(
     return (
         target.created_round == command.updated_round
         and target.updated_round >= command.updated_round
+        and target.tier_schema_version == sources[0].tier_schema_version
+        and target.payload == command.payload
         and all(target.metadata.get(key) == value for key, value in expected_metadata.items())
         and target.source_task_ids == expected_tasks
         and all(

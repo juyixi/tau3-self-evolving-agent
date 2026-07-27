@@ -160,6 +160,51 @@ def test_rejects_free_text_merge_for_v2_memories(tmp_path: Path) -> None:
     assert all(repository.get(memory.id).status == MemoryStatus.ACTIVE for memory in memories)
 
 
+def test_v2_merge_creates_typed_memory_and_retires_sources(tmp_path: Path) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    memories = []
+    for task_id, guidance in (
+        ("task-1", "Verify the order ID."),
+        ("task-2", "Confirm the requested operation."),
+    ):
+        payload = TipPayload(guidance=guidance)
+        memories.append(
+            repository.add(
+                tier=MemoryTier.TIP,
+                tier_schema_version=2,
+                payload=payload.model_dump(mode="json"),
+                content=render_tier_payload(MemoryTier.TIP, payload),
+                source_task_ids=(task_id,),
+                created_round=0,
+            )
+        )
+    merged_payload = TipPayload(
+        guidance="Verify the order and confirm the requested operation."
+    )
+
+    result = MemoryOperations(repository).apply_batch(
+        [
+            MergeCommand(
+                source_ids=tuple(memory.id for memory in memories),
+                content=render_tier_payload(MemoryTier.TIP, merged_payload),
+                payload=merged_payload.model_dump(mode="json"),
+                updated_round=1,
+            )
+        ]
+    )
+
+    assert len(result.created_ids) == 1
+    merged = repository.get(result.created_ids[0])
+    assert merged is not None
+    assert merged.tier_schema_version == 2
+    assert merged.payload == merged_payload.model_dump(mode="json")
+    assert merged.source_task_ids == ("task-1", "task-2")
+    assert all(
+        repository.get(memory.id).status == MemoryStatus.RETIRED
+        for memory in memories
+    )
+
+
 def test_delete_is_a_versioned_soft_delete_with_reason(tmp_path: Path) -> None:
     repository = MemoryRepository(tmp_path / "memory")
     first, _, _ = _seed(repository)
