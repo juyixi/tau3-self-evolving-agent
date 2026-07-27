@@ -66,7 +66,10 @@ _WRITE_SYSTEM = (
 )
 _MAINTENANCE_SYSTEM = (
     "Return exactly one strict JSON object matching MaintenanceDecision: "
-    '{"commands":[...]}. Use only the provided command schemas and diagnostics. '
+    '{"reviews":[...],"commands":[...]}. Review priority candidates first and give '
+    "each reviewed memory one disposition: keep, merge, or retire. Use merge or delete "
+    "commands when the maintenance context says a write action is required. Use only the "
+    'provided command schemas and diagnostics. '
     "Do not use external tools or include any other text."
 )
 _SYSTEM_INSTRUCTIONS = {

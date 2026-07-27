@@ -186,11 +186,17 @@ def test_rounds_execute_once_resume_and_survive_reopen(tmp_path: Path) -> None:
     assert (resumed.due, resumed.executed) == (True, False)
     assert (second.due, second.executed, second.maintenance_round) == (True, True, 2)
     assert _state_payload(reopened) == {
-        "schema_version": 1,
+        "schema_version": 2,
         "completed_rounds": [1, 2],
+        "review_cursor_by_tier": {
+            "trajectory": None,
+            "tip": None,
+            "skill": None,
+            "tool": None,
+        },
     }
     assert (root / "maintenance_state.json").read_bytes() == (
-        b'{"completed_rounds":[1,2],"schema_version":1}\n'
+        b'{"completed_rounds":[1,2],"review_cursor_by_tier":{"skill":null,"tip":null,"tool":null,"trajectory":null},"schema_version":2}\n'
     )
 
 
@@ -223,7 +229,7 @@ def test_schedule_inputs_are_validated(
 
 def test_maintenance_state_is_frozen_and_canonical() -> None:
     state = MaintenanceState(completed_rounds=(1, 3))
-    assert state.schema_version == 1
+    assert state.schema_version == 2
     with pytest.raises((AttributeError, TypeError)):
         state.completed_rounds = (1,)  # type: ignore[misc]
     for invalid in ((0,), (2, 1), (1, 1)):

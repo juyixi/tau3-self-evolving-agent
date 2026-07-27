@@ -44,12 +44,43 @@ class FastLoopConfig:
     retrieve_top_k: int = 50
     max_episode_steps: int = 40
     memory_enabled: bool = True
+    max_new_tips_per_episode: int = 2
+    max_new_skills_per_episode: int = 1
+    max_new_tools_per_episode: int = 1
+    max_new_trajectories_per_episode: int = 1
+    maintenance_tip_capacity: int = 240
+    maintenance_similarity_threshold: float = 0.92
+    maintenance_priority_pair_limit: int = 24
 
     def __post_init__(self) -> None:
         if type(self.memory_enabled) is not bool:
             raise ValueError("memory_enabled must be a bool")
         if self.retrieve_top_k < 1 or self.max_episode_steps < 1:
             raise ValueError("fast-loop limits must be positive")
+        if any(
+            type(limit) is not int or limit < 0
+            for limit in (
+                self.max_new_tips_per_episode,
+                self.max_new_skills_per_episode,
+                self.max_new_tools_per_episode,
+                self.max_new_trajectories_per_episode,
+            )
+        ):
+            raise ValueError("memory write quotas must be non-negative integers")
+        if self.maintenance_tip_capacity < 1:
+            raise ValueError("maintenance tip capacity must be positive")
+        if not -1.0 <= self.maintenance_similarity_threshold <= 1.0:
+            raise ValueError("maintenance similarity threshold must be between -1 and 1")
+        if self.maintenance_priority_pair_limit < 0:
+            raise ValueError("maintenance priority pair limit must be non-negative")
+
+    def write_quota_for(self, tier: str) -> int:
+        return {
+            "tip": self.max_new_tips_per_episode,
+            "skill": self.max_new_skills_per_episode,
+            "tool": self.max_new_tools_per_episode,
+            "trajectory": self.max_new_trajectories_per_episode,
+        }[tier]
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,6 +475,10 @@ def _run_lifecycle_episode(
                 token_usage_complete,
                 write_audit,
             )
+            accepted_memories, dropped_by_tier = _apply_write_quotas(
+                write_decision,
+                config,
+            )
             proposals = [
                 _write_proposal(
                     memory,
@@ -454,7 +489,7 @@ def _run_lifecycle_episode(
                     tools=public_tools,
                     trajectory=trajectory,
                 )
-                for memory in write_decision.memories
+                for memory in accepted_memories
             ]
             _emit(
                 context,
@@ -467,6 +502,7 @@ def _run_lifecycle_episode(
                 latency_s=write_audit["latency_s"],
                 prompt_tokens=write_audit["prompt_tokens"],
                 completion_tokens=write_audit["completion_tokens"],
+                dropped_by_tier=dropped_by_tier,
             )
             try:
                 written_ids, replayed_ids = _persist_proposals(repository, proposals)
@@ -816,6 +852,24 @@ def _validate_write_decision(
             trajectory=trajectory,
         )
     return decision
+
+
+def _apply_write_quotas(
+    decision: WriteDecision,
+    config: FastLoopConfig,
+) -> tuple[tuple[Any, ...], dict[str, int]]:
+    """Keep the model's stable proposal order while bounding memory growth."""
+    accepted: list[Any] = []
+    accepted_by_tier: dict[str, int] = {}
+    dropped_by_tier: dict[str, int] = {}
+    for memory in decision.memories:
+        tier = memory.tier.value
+        if accepted_by_tier.get(tier, 0) >= config.write_quota_for(tier):
+            dropped_by_tier[tier] = dropped_by_tier.get(tier, 0) + 1
+            continue
+        accepted_by_tier[tier] = accepted_by_tier.get(tier, 0) + 1
+        accepted.append(memory)
+    return tuple(accepted), dropped_by_tier
 
 
 def _empty_write_decision(error: str) -> WriteDecision:

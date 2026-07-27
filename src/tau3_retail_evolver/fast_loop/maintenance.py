@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 from typing import Any
 import unicodedata
@@ -34,7 +35,7 @@ from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
 
 
 _STATE_FILENAME = "maintenance_state.json"
-_STATE_SCHEMA_VERSION = 1
+_STATE_SCHEMA_VERSION = 2
 _LOCK_NAMESPACE = "fast-loop-maintenance"
 
 
@@ -42,6 +43,7 @@ _LOCK_NAMESPACE = "fast-loop-maintenance"
 class MaintenanceState:
     schema_version: int = _STATE_SCHEMA_VERSION
     completed_rounds: tuple[int, ...] = ()
+    review_cursor_by_tier: tuple[tuple[str, str | None], ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int or self.schema_version != _STATE_SCHEMA_VERSION:
@@ -53,6 +55,18 @@ class MaintenanceState:
             raise ValueError("maintenance state rounds must be positive integers")
         if self.completed_rounds != tuple(sorted(set(self.completed_rounds))):
             raise ValueError("maintenance state rounds must be sorted and unique")
+        expected = {tier.value for tier in MemoryTier}
+        cursor_keys = {tier for tier, _ in self.review_cursor_by_tier}
+        if cursor_keys and cursor_keys != expected:
+            raise ValueError("maintenance cursors must cover every tier")
+        if any(
+            tier not in expected or (cursor is not None and not cursor.strip())
+            for tier, cursor in self.review_cursor_by_tier
+        ):
+            raise ValueError("maintenance cursors must be valid tier/id pairs")
+
+    def cursor_for(self, tier: MemoryTier) -> str | None:
+        return dict(self.review_cursor_by_tier).get(tier.value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,10 +94,50 @@ def bounded_diagnostics(
             f"{MAX_DIAGNOSTIC_ITEMS_PER_TIER}"
         )
 
+    diagnostics, _ = _paged_diagnostics(
+        repository,
+        per_tier_limit=per_tier_limit,
+        cursors={},
+        similarity_threshold=1.0,
+        priority_pair_limit=0,
+    )
+    return diagnostics
+
+
+def _paged_diagnostics(
+    repository: MemoryRepository,
+    *,
+    per_tier_limit: int,
+    cursors: Mapping[str, str | None],
+    similarity_threshold: float,
+    priority_pair_limit: int,
+) -> tuple[dict[str, Any], dict[str, str | None]]:
+    if not -1.0 <= similarity_threshold <= 1.0:
+        raise ValueError("similarity_threshold must be between -1 and 1")
+    if type(priority_pair_limit) is not int or priority_pair_limit < 0:
+        raise ValueError("priority_pair_limit must be non-negative")
     diagnostics: dict[str, Any] = {}
+    next_cursors: dict[str, str | None] = {}
     with repository.read_transaction():
         for tier in MemoryTier:
-            items = repository.list(tier=tier)[:per_tier_limit]
+            items = repository.list(tier=tier)
+            page, next_cursor = _rotated_page(
+                items,
+                cursor=cursors.get(tier.value),
+                limit=per_tier_limit,
+            )
+            priority_ids = _priority_ids(
+                items,
+                threshold=similarity_threshold,
+                pair_limit=priority_pair_limit,
+            )
+            selected_by_id = {item.id: item for item in page}
+            for item in items:
+                if item.id in priority_ids:
+                    selected_by_id.setdefault(item.id, item)
+            ordered_ids = [memory_id for memory_id in priority_ids if memory_id in selected_by_id]
+            ordered_ids.extend(item.id for item in page if item.id not in priority_ids)
+            selected = [selected_by_id[memory_id] for memory_id in ordered_ids[:per_tier_limit]]
             diagnostics[tier.value] = {
                 "items": [
                     {
@@ -93,10 +147,54 @@ def bounded_diagnostics(
                         "version": item.version,
                         "status": item.status.value,
                     }
-                    for item in items
+                    for item in selected
                 ]
             }
-    return diagnostics
+            next_cursors[tier.value] = next_cursor
+    return diagnostics, next_cursors
+
+
+def _rotated_page(
+    items: list[Any], *, cursor: str | None, limit: int
+) -> tuple[list[Any], str | None]:
+    if not items:
+        return [], None
+    start = 0
+    if cursor is not None:
+        start = next((index + 1 for index, item in enumerate(items) if item.id == cursor), 0)
+        if start >= len(items):
+            start = 0
+    page = (items[start:] + items[:start])[:limit]
+    return page, page[-1].id
+
+
+def _priority_ids(
+    items: list[Any], *, threshold: float, pair_limit: int
+) -> list[str]:
+    pairs: list[tuple[float, str, str]] = []
+    if pair_limit == 0:
+        return []
+    for left_index, left in enumerate(items):
+        if left.embedding is None:
+            continue
+        for right in items[left_index + 1 :]:
+            if right.embedding is None:
+                continue
+            similarity = _cosine(left.embedding, right.embedding)
+            if similarity >= threshold:
+                pairs.append((similarity, left.id, right.id))
+    pairs.sort(key=lambda pair: (-pair[0], pair[1], pair[2]))
+    return list(dict.fromkeys(memory_id for _, left, right in pairs[:pair_limit] for memory_id in (left, right)))
+
+
+def _cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
+    if not left or len(left) != len(right):
+        return -1.0
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return -1.0
+    return sum(a * b for a, b in zip(left, right, strict=True)) / (left_norm * right_norm)
 
 
 def run_due_maintenance(
@@ -107,6 +205,9 @@ def run_due_maintenance(
     policy: FastLoopPolicy,
     context: RunContext,
     per_tier_limit: int = 100,
+    tip_capacity: int = 240,
+    similarity_threshold: float = 0.92,
+    priority_pair_limit: int = 24,
 ) -> MaintenanceResult:
     if type(completed_train_tasks) is not int or completed_train_tasks < 0:
         raise ValueError("completed_train_tasks must be a non-negative integer")
@@ -121,6 +222,9 @@ def run_due_maintenance(
         policy=policy,
         context=context,
         per_tier_limit=per_tier_limit,
+        tip_capacity=tip_capacity,
+        similarity_threshold=similarity_threshold,
+        priority_pair_limit=priority_pair_limit,
     )
 
 
@@ -157,6 +261,9 @@ def _run_due_maintenance(
     policy: FastLoopPolicy,
     context: RunContext,
     per_tier_limit: int,
+    tip_capacity: int = 240,
+    similarity_threshold: float = 0.92,
+    priority_pair_limit: int = 24,
 ) -> MaintenanceResult:
     if not isinstance(repository, MemoryRepository) or repository.is_read_only:
         raise TypeError("maintenance requires a mutable MemoryRepository")
@@ -189,6 +296,9 @@ def _run_due_maintenance(
             policy=policy,
             context=context,
             per_tier_limit=per_tier_limit,
+            tip_capacity=tip_capacity,
+            similarity_threshold=similarity_threshold,
+            priority_pair_limit=priority_pair_limit,
             state=state,
             state_path=state_path,
         )
@@ -203,18 +313,33 @@ def _execute_round(
     policy: FastLoopPolicy,
     context: RunContext,
     per_tier_limit: int,
+    tip_capacity: int,
+    similarity_threshold: float,
+    priority_pair_limit: int,
     state: MaintenanceState,
     state_path: Path,
 ) -> MaintenanceResult:
     task_key = f"maintenance-round-{maintenance_round}"
     try:
-        diagnostics = sanitize_artifact_data(
-            bounded_diagnostics(
-                repository,
-                per_tier_limit=per_tier_limit,
-            )
+        diagnostics, next_cursors = _paged_diagnostics(
+            repository,
+            per_tier_limit=per_tier_limit,
+            cursors={tier.value: state.cursor_for(tier) for tier in MemoryTier},
+            similarity_threshold=similarity_threshold,
+            priority_pair_limit=priority_pair_limit,
         )
-        prompt = build_maintenance_prompt(diagnostics=diagnostics)
+        diagnostics = sanitize_artifact_data(diagnostics)
+        active_tip_count = len(repository.list(tier=MemoryTier.TIP))
+        requires_tip_reduction = active_tip_count > tip_capacity
+        prompt = build_maintenance_prompt(
+            diagnostics=diagnostics,
+            maintenance_context={
+                "active_counts": {tier.value: len(repository.list(tier=tier)) for tier in MemoryTier},
+                "tip_capacity": tip_capacity,
+                "requires_tip_reduction": requires_tip_reduction,
+                "review_instruction": "Priority items appear first in each tier. Review at least one item.",
+            },
+        )
         public_diagnostics = prompt.payload["diagnostics"]
         _emit(
             context,
@@ -228,11 +353,19 @@ def _execute_round(
                 for tier, tier_diagnostics in public_diagnostics.items()
             },
             diagnostics=public_diagnostics,
+            review_cursor_by_tier={tier.value: state.cursor_for(tier) for tier in MemoryTier},
         )
         decision, repair_used = _generate_decision(
             policy,
             prompt,
             maintenance_round,
+            reviewed_ids={
+                item["id"]
+                for tier in public_diagnostics.values()
+                for item in tier["items"]
+            },
+            reviewed_tip_ids={item["id"] for item in public_diagnostics["tip"]["items"]},
+            requires_tip_reduction=requires_tip_reduction,
         )
         canonical_commands = [
             command.model_dump(mode="json") for command in decision.commands
@@ -243,6 +376,7 @@ def _execute_round(
             "MaintenanceProposed",
             maintenance_round=maintenance_round,
             commands=canonical_commands,
+            reviews=[review.model_dump(mode="json") for review in decision.reviews],
             repair_used=repair_used,
         )
         operation_result = MemoryOperations(repository).apply_batch(
@@ -251,7 +385,8 @@ def _execute_round(
         completed_state = MaintenanceState(
             completed_rounds=tuple(
                 sorted((*state.completed_rounds, maintenance_round))
-            )
+            ),
+            review_cursor_by_tier=tuple(sorted(next_cursors.items())),
         )
         write_bytes_atomic(state_path, _encode_state(completed_state))
         looked_up_ids = tuple(item.id for item in operation_result.looked_up)
@@ -264,6 +399,7 @@ def _execute_round(
             created_ids=list(operation_result.created_ids),
             updated_ids=list(operation_result.updated_ids),
             completed_rounds=list(completed_state.completed_rounds),
+            review_cursor_by_tier=dict(completed_state.review_cursor_by_tier),
         )
         return MaintenanceResult(
             due=True,
@@ -283,12 +419,17 @@ def _generate_decision(
     policy: FastLoopPolicy,
     prompt: Any,
     maintenance_round: int,
+    reviewed_ids: set[str],
+    reviewed_tip_ids: set[str],
+    requires_tip_reduction: bool,
 ) -> tuple[MaintenanceDecision, bool]:
     response = policy.generate(prompt)
     result = parse_decision(
         response.raw_output,
         MaintenanceDecision,
-        validator=lambda decision: _validate_commands(decision, maintenance_round),
+        validator=lambda decision: _validate_commands(
+            decision, maintenance_round, reviewed_ids, reviewed_tip_ids, requires_tip_reduction
+        ),
     )
     if result.decision is not None:
         return result.decision, False
@@ -301,7 +442,9 @@ def _generate_decision(
     repaired_result = parse_decision(
         repair.raw_output,
         MaintenanceDecision,
-        validator=lambda decision: _validate_commands(decision, maintenance_round),
+        validator=lambda decision: _validate_commands(
+            decision, maintenance_round, reviewed_ids, reviewed_tip_ids, requires_tip_reduction
+        ),
     )
     if repaired_result.decision is None:
         raise ValueError(
@@ -314,6 +457,9 @@ def _generate_decision(
 def _validate_commands(
     decision: MaintenanceDecision,
     maintenance_round: int,
+    reviewed_ids: set[str],
+    reviewed_tip_ids: set[str],
+    requires_tip_reduction: bool,
 ) -> None:
     has_lookup = any(isinstance(command, LookupCommand) for command in decision.commands)
     has_write = any(not isinstance(command, LookupCommand) for command in decision.commands)
@@ -328,6 +474,20 @@ def _validate_commands(
             )
         if isinstance(command, MergeCommand):
             _reject_forbidden_metadata(command.metadata)
+    reviewed = [memory_id for review in decision.reviews for memory_id in review.memory_ids]
+    if any(memory_id not in reviewed_ids for memory_id in reviewed):
+        raise ValueError("maintenance reviews may only reference provided diagnostics")
+    if len(set(reviewed)) != len(reviewed):
+        raise ValueError("maintenance reviews must not repeat memory IDs")
+    reducing_tip_command = any(
+        isinstance(command, MergeCommand) and set(command.source_ids).issubset(reviewed_tip_ids)
+        or isinstance(command, DeleteCommand) and set(command.memory_ids).issubset(reviewed_tip_ids)
+        for command in decision.commands
+    )
+    if requires_tip_reduction and not reducing_tip_command:
+        raise ValueError("tip capacity requires at least one merge or delete command")
+    if requires_tip_reduction and not decision.reviews:
+        raise ValueError("tip capacity requires explicit keep, merge, or retire reviews")
 
 
 def _reject_forbidden_metadata(value: Any) -> None:
@@ -358,19 +518,30 @@ def _load_state(path: Path, current_round: int) -> MaintenanceState:
         return MaintenanceState()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or set(payload) != {
-            "schema_version",
-            "completed_rounds",
-        }:
-            raise ValueError("state must contain exactly the canonical fields")
+        if not isinstance(payload, dict):
+            raise ValueError("state must be an object")
         if type(payload["schema_version"]) is not int:
             raise ValueError("schema_version must be an integer")
         rounds = payload["completed_rounds"]
         if not isinstance(rounds, list):
             raise ValueError("completed_rounds must be a list")
+        if payload["schema_version"] == 1 and set(payload) == {
+            "schema_version",
+            "completed_rounds",
+        }:
+            cursors: tuple[tuple[str, str | None], ...] = ()
+        elif payload["schema_version"] == _STATE_SCHEMA_VERSION and set(payload) == {
+            "schema_version",
+            "completed_rounds",
+            "review_cursor_by_tier",
+        } and isinstance(payload["review_cursor_by_tier"], dict):
+            cursors = tuple(sorted(payload["review_cursor_by_tier"].items()))
+        else:
+            raise ValueError("state fields do not match a supported schema")
         state = MaintenanceState(
-            schema_version=payload["schema_version"],
+            schema_version=_STATE_SCHEMA_VERSION,
             completed_rounds=tuple(rounds),
+            review_cursor_by_tier=cursors,
         )
         if any(round_number > current_round for round_number in state.completed_rounds):
             raise ValueError("maintenance state contains future completed rounds")
@@ -383,6 +554,7 @@ def _encode_state(state: MaintenanceState) -> bytes:
     payload = {
         "schema_version": state.schema_version,
         "completed_rounds": list(state.completed_rounds),
+        "review_cursor_by_tier": dict(state.review_cursor_by_tier),
     }
     return (
         json.dumps(

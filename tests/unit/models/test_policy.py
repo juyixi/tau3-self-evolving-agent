@@ -97,7 +97,10 @@ WRITE_SYSTEM = (
 )
 MAINTENANCE_SYSTEM = (
     "Return exactly one strict JSON object matching MaintenanceDecision: "
-    '{"commands":[...]}. Use only the provided command schemas and diagnostics. '
+    '{"reviews":[...],"commands":[...]}. Review priority candidates first and give '
+    "each reviewed memory one disposition: keep, merge, or retire. Use merge or delete "
+    "commands when the maintenance context says a write action is required. Use only the "
+    'provided command schemas and diagnostics. '
     "Do not use external tools or include any other text."
 )
 
@@ -357,7 +360,7 @@ def test_default_parser_rejects_multiple_structured_tool_calls() -> None:
     (
         ("selection", SELECTION_SYSTEM, '{"memory_ids":["memory-1"]}'),
         ("write", WRITE_SYSTEM, '{"memories":[]}'),
-        ("maintenance", MAINTENANCE_SYSTEM, '{"commands":[]}'),
+        ("maintenance", MAINTENANCE_SYSTEM, '{"reviews":[],"commands":[]}'),
     ),
 )
 def test_fast_loop_non_action_requests_use_exact_public_json_and_no_tools(

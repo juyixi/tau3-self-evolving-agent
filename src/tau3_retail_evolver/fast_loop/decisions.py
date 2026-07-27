@@ -143,6 +143,7 @@ _STRICT_COMMAND_ADAPTER = TypeAdapter(_StrictMemoryCommand)
 
 class MaintenanceDecision(_DecisionModel):
     commands: tuple[Annotated[MemoryCommand, Field(discriminator="operation")], ...]
+    reviews: tuple["MaintenanceReview", ...] = ()
 
     @model_validator(mode="before")
     @classmethod
@@ -162,6 +163,26 @@ class MaintenanceDecision(_DecisionModel):
             strict_command = _STRICT_COMMAND_ADAPTER.validate_json(encoded)
             commands.append(strict_command.model_dump(mode="python"))
         return {**value, "commands": tuple(commands)}
+
+
+class MaintenanceReview(_DecisionModel):
+    """An auditable disposition for a memory inspected during maintenance."""
+
+    memory_ids: tuple[str, ...] = Field(min_length=1)
+    disposition: Literal["keep", "merge", "retire"]
+    reason: str = Field(min_length=1, max_length=1_000)
+
+    @field_validator("memory_ids")
+    @classmethod
+    def review_ids_must_be_unique_and_nonblank(
+        cls, value: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        canonical = tuple(memory_id.strip() for memory_id in value)
+        if any(not memory_id for memory_id in canonical):
+            raise ValueError("review memory IDs must not be blank")
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("review memory IDs must be unique")
+        return canonical
 
 
 Decision = SelectionDecision | ActionDecision | WriteDecision | MaintenanceDecision

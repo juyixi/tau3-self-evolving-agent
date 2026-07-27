@@ -188,7 +188,11 @@ def build_write_prompt(
     )
 
 
-def build_maintenance_prompt(*, diagnostics: Mapping[str, Any]) -> LifecyclePrompt:
+def build_maintenance_prompt(
+    *,
+    diagnostics: Mapping[str, Any],
+    maintenance_context: Mapping[str, Any] | None = None,
+) -> LifecyclePrompt:
     normalized_diagnostics = _json_copy(diagnostics, "diagnostics")
     _reject_forbidden_fields(normalized_diagnostics, "diagnostics")
     try:
@@ -199,7 +203,12 @@ def build_maintenance_prompt(*, diagnostics: Mapping[str, Any]) -> LifecycleProm
         raise ValueError(f"invalid maintenance diagnostics: {error}") from error
     return LifecyclePrompt(
         kind="maintenance",
-        payload={"diagnostics": validated_diagnostics.model_dump(mode="json")},
+        payload={
+            "diagnostics": validated_diagnostics.model_dump(mode="json"),
+            "maintenance_context": _json_copy(
+                maintenance_context or {}, "maintenance context"
+            ),
+        },
         command_schemas=maintenance_command_schemas(),
     )
 
