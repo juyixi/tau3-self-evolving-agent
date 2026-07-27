@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 from pathlib import Path
-import re
 from types import MappingProxyType
 from typing import Any
 
@@ -15,9 +14,9 @@ from tau3_retail_evolver.eval.guard import (
     reject_evaluation_artifact_for_training,
 )
 from tau3_retail_evolver.io.jsonl import iter_jsonl_objects
+from tau3_retail_evolver.slow_loop.task_grouping import is_supported_retail_task_group
 
 
-_TASK_GROUP = re.compile(r"^retail-actions-v1:[0-9a-f]{64}$")
 _FAILURE_EVENTS = frozenset(
     {"EpisodeFailed", "MemoryWriteFailed", "MaintenanceFailed", "MemoryDisabled"}
 )
@@ -266,7 +265,7 @@ def _validate_events(
         if task_id not in events_by_task:
             raise ValueError(f"source event references undeclared task ID: {run_id}")
         task_group = event.get("task_group")
-        if not isinstance(task_group, str) or not _TASK_GROUP.fullmatch(task_group):
+        if not is_supported_retail_task_group(task_group):
             raise ValueError(f"source event task group is invalid: {run_id}")
         if event_type in {"EpisodeStarted", "TaskFailed"}:
             first_episode_order.append(task_id)

@@ -43,7 +43,7 @@ def _episode(*, task_id: str, selected: bool, reward: float) -> EpisodeEvidence:
         source_event_sha256="e" * 64,
         iteration=0,
         task_id=task_id,
-        task_group="retail-actions-v1:" + "a" * 64,
+        task_group="retail-v2",
         model_revision="model-a",
         adapter_revision="adapter-a",
         tau2_commit="c" * 40,

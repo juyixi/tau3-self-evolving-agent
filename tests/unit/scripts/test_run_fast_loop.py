@@ -737,7 +737,7 @@ def test_creates_learning_artifacts_in_dependency_order_without_credential_leaka
         for context, task_id in zip(episode_contexts, captured_tasks, strict=True)
     ] == [f"retail-actions-v1:{'1' * 64}", f"retail-actions-v1:{'2' * 64}"]
     assert all(
-        context.default_task_group == "retail-actions-v1:maintenance"
+        context.default_task_group == "retail-v2:maintenance"
         for context in episode_contexts
     )
     maintenance_contexts = captured["maintenance_contexts"]

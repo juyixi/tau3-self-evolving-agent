@@ -40,7 +40,10 @@ from tau3_retail_evolver.models.openai_compatible import (
     OpenAICompatibleHttpClient,
 )
 from tau3_retail_evolver.runs.manifest import create_manifest
-from tau3_retail_evolver.slow_loop.task_grouping import RetailTaskGroups
+from tau3_retail_evolver.slow_loop.task_grouping import (
+    MAINTENANCE_TASK_GROUP,
+    RetailTaskGroups,
+)
 
 
 MODEL_SERVING_CONTRACT = {
@@ -223,7 +226,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         temperature=config.rollout.temperature,
         top_p=config.rollout.top_p,
-        default_task_group="retail-actions-v1:maintenance",
+        default_task_group=MAINTENANCE_TASK_GROUP,
     )
     results, maintenance_rounds, failures = _run_requested_tasks(
         task_ids=task_ids,

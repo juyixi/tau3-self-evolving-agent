@@ -18,6 +18,7 @@ from tau3_retail_evolver.memory.tier_contracts import (
 from tau3_retail_evolver.memory.types import stable_memory_id, MemoryTier
 from tau3_retail_evolver.fast_loop.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
 from tau3_retail_evolver.slow_loop.evidence import build_evidence
+from tau3_retail_evolver.slow_loop.task_grouping import RETAIL_TASK_GROUP
 from tau3_retail_evolver.slow_loop.source_runs import SourceRunSet, load_source_runs
 
 
@@ -294,7 +295,7 @@ def test_build_evidence_reconstructs_episode_from_frozen_snapshot(
 
     episode = ledger.episodes[0]
     assert episode.task_id == "1"
-    assert episode.task_group == GROUP
+    assert episode.task_group == RETAIL_TASK_GROUP
     assert [candidate.memory_id for candidate in episode.candidates] == [
         ids["tip"],
         ids["tool"],

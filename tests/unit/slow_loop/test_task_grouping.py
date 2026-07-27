@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from tau3_retail_evolver.slow_loop.task_grouping import RetailTaskGroups
+from tau3_retail_evolver.slow_loop.task_grouping import (
+    RETAIL_TASK_GROUP,
+    RetailTaskGroups,
+    canonicalize_retail_task_group,
+)
 
 
 def _write_tasks(tmp_path: Path, tasks: list[dict[str, object]]) -> Path:
@@ -24,7 +28,7 @@ def _task(task_id: str, actions: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
-def test_group_signature_uses_only_unique_sorted_mutating_action_names(
+def test_group_signature_is_shared_by_all_retail_tasks(
     tmp_path: Path,
 ) -> None:
     path = _write_tasks(
@@ -59,29 +63,18 @@ def test_group_signature_uses_only_unique_sorted_mutating_action_names(
 
     groups = RetailTaskGroups.from_file(path, task_ids=("7", "8"))
 
-    expected = (
-        "retail-actions-v1:"
-        "98d1978041aa4796c5464cfbc0b07ace74a2967b88a0934b6a039fcf1a688395"
-    )
-    assert groups.signature_for("7") == expected
-    assert groups.signature_for("8") == expected
+    assert groups.signature_for("7") == RETAIL_TASK_GROUP
+    assert groups.signature_for("8") == RETAIL_TASK_GROUP
     assert groups.task_ids == ("7", "8")
     assert "private" not in repr(groups)
 
 
-@pytest.mark.parametrize(
-    "actions",
-    [
-        [{"name": "new_unclassified_action"}],
-        [{"arguments": {}}],
-        "not-a-list",
-    ],
-)
-def test_malformed_or_unknown_actions_fail_closed(tmp_path: Path, actions: object) -> None:
-    path = _write_tasks(tmp_path, [_task("7", actions)])  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="action|actions"):
-        RetailTaskGroups.from_file(path, task_ids=("7",))
+def test_legacy_action_signature_is_normalized_to_domain_group() -> None:
+    assert canonicalize_retail_task_group(
+        "retail-actions-v1:" + "a" * 64
+    ) == RETAIL_TASK_GROUP
+    with pytest.raises(ValueError, match="unsupported Retail task group"):
+        canonicalize_retail_task_group("airline-v2")
 
 
 def test_requested_task_must_exist(tmp_path: Path) -> None:
