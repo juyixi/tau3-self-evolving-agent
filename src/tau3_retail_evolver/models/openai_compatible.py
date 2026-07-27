@@ -179,7 +179,11 @@ class OpenAICompatibleHttpClient:
         except Exception:
             raise RuntimeError("OpenAI-compatible endpoint request failed") from None
         if not 200 <= status < 300:
-            raise RuntimeError(f"OpenAI-compatible endpoint returned HTTP {status}")
+            detail = _http_error_detail(response_body)
+            message = f"OpenAI-compatible endpoint returned HTTP {status}"
+            if detail:
+                message = f"{message}: {detail}"
+            raise RuntimeError(message)
         try:
             response = json.loads(response_body)
         except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -525,6 +529,12 @@ def _tool_names(tools: Sequence[Mapping[str, Any]]) -> set[str]:
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _http_error_detail(response_body: bytes, *, limit: int = 1_024) -> str:
+    if not response_body:
+        return ""
+    return response_body.decode("utf-8", errors="replace").strip()[:limit]
 
 
 def _stdlib_transport(

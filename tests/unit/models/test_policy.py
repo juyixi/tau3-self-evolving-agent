@@ -917,6 +917,23 @@ def test_http_client_includes_nonempty_tool_schemas() -> None:
     assert json.loads(requests[0])["tools"] == [tool]
 
 
+def test_http_client_includes_truncated_error_body_for_non_success_status() -> None:
+    client = OpenAICompatibleHttpClient(
+        base_url="https://qwen.example/v1",
+        model="Qwen/Qwen3.5-9B",
+        api_key="test-api-key",
+        transport=lambda _url, _headers, _body: (400, b"invalid request"),
+    )
+
+    with pytest.raises(RuntimeError, match="HTTP 400: invalid request"):
+        client.create_chat_completion(
+            messages=[],
+            tools=[],
+            temperature=1.0,
+            top_p=0.95,
+        )
+
+
 def test_http_client_default_transport_forwards_request_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
