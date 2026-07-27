@@ -486,24 +486,47 @@ def _prepare_merge_commands(
     decision: MaintenanceDecision,
     repository: MemoryRepository,
 ) -> MaintenanceDecision:
+    dispositions = {
+        memory_id: review.disposition
+        for review in decision.reviews
+        for memory_id in review.memory_ids
+    }
+    filtered_merges: dict[int, MergeCommand] = {}
+    for index, command in enumerate(decision.commands):
+        if not isinstance(command, MergeCommand):
+            continue
+        source_ids = tuple(
+            memory_id
+            for memory_id in command.source_ids
+            if dispositions.get(memory_id) in {None, "merge"}
+        )
+        if len(source_ids) < 2:
+            continue
+        filtered_merges[index] = command.model_copy(update={"source_ids": source_ids})
     merge_source_ids = {
         memory_id
-        for command in decision.commands
-        if isinstance(command, MergeCommand)
+        for command in filtered_merges.values()
         for memory_id in command.source_ids
     }
+    seen_delete_ids: set[str] = set()
     normalized: list[MemoryCommand] = []
-    for command in decision.commands:
+    for index, command in enumerate(decision.commands):
         if isinstance(command, DeleteCommand):
             remaining = tuple(
                 memory_id
                 for memory_id in command.memory_ids
                 if memory_id not in merge_source_ids
+                and memory_id not in seen_delete_ids
+                and dispositions.get(memory_id) in {None, "retire"}
             )
             if not remaining:
                 continue
             command = command.model_copy(update={"memory_ids": remaining})
+            seen_delete_ids.update(remaining)
         if isinstance(command, MergeCommand):
+            command = filtered_merges.get(index)
+            if command is None:
+                continue
             command = _materialize_v2_merge(command, repository)
         normalized.append(command)
     return decision.model_copy(update={"commands": tuple(normalized)})

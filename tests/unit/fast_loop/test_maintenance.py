@@ -521,6 +521,64 @@ def test_v2_merge_materializes_payload_and_drops_overlapping_delete(
     assert proposed["commands"][0]["payload"] == merged.payload
 
 
+def test_delete_commands_are_deduplicated_and_cannot_override_keep_review(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    kept, retired, _ = _seed(repository)
+    policy = ScriptedPolicy(
+        [
+            json.dumps(
+                {
+                    "reviews": [
+                        {
+                            "memory_ids": [kept.id],
+                            "disposition": "keep",
+                            "reason": "Still useful.",
+                        },
+                        {
+                            "memory_ids": [retired.id],
+                            "disposition": "retire",
+                            "reason": "Redundant.",
+                        },
+                    ],
+                    "commands": [
+                        {
+                            "operation": "delete",
+                            "memory_ids": [retired.id],
+                            "reason": "Redundant.",
+                        },
+                        {
+                            "operation": "delete",
+                            "memory_ids": [kept.id, retired.id],
+                            "reason": "Duplicate command.",
+                        },
+                    ],
+                }
+            )
+        ]
+    )
+    events = EventCollector()
+
+    result = _run(repository, policy, events)
+
+    assert len(result.commands) == 1
+    assert result.commands[0].memory_ids == (retired.id,)
+    assert repository.get(kept.id).status == MemoryStatus.ACTIVE
+    assert repository.get(retired.id).status == MemoryStatus.RETIRED
+    proposed = next(
+        event for event in events.events if event["event_type"] == "MaintenanceProposed"
+    )
+    assert proposed["commands"] == [
+        {
+            "operation": "delete",
+            "memory_ids": [retired.id],
+            "updated_round": 1,
+            "reason": "Redundant.",
+        }
+    ]
+
+
 def test_nested_camelcase_attribution_triggers_clean_repair(
     tmp_path: Path,
 ) -> None:
