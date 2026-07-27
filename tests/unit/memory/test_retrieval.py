@@ -149,6 +149,42 @@ def test_retrieval_recomputes_stale_embeddings_and_breaks_ties_deterministically
     assert provider.batches == [[first.retrieval_text, second.retrieval_text]]
 
 
+def test_tiered_mmr_reserves_tier_coverage_and_diversifies_tips(tmp_path: Path) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    first_tip = repository.add(
+        tier="tip", content="First tip", source_task_ids=("task-1",), created_round=0
+    )
+    near_duplicate_tip = repository.add(
+        tier="tip", content="Near duplicate", source_task_ids=("task-2",), created_round=0
+    )
+    diverse_tip = repository.add(
+        tier="tip", content="Diverse tip", source_task_ids=("task-3",), created_round=0
+    )
+    skill = repository.add(
+        tier="skill", content="Order skill", source_task_ids=("task-4",), created_round=0
+    )
+    provider = FakeEmbeddingProvider(
+        {
+            "query": (1.0, 0.0),
+            first_tip.retrieval_text: (1.0, 0.0),
+            near_duplicate_tip.retrieval_text: (0.99, 0.1),
+            diverse_tip.retrieval_text: (0.8, 0.6),
+            skill.retrieval_text: (0.9, 0.4),
+        }
+    )
+
+    candidates = Retriever(provider).retrieve(
+        "query",
+        repository,
+        top_k=3,
+        tier_quotas={"tip": 2, "skill": 1, "tool": 0, "trajectory": 0},
+        mmr_lambdas={"tip": 0.3, "skill": 0.8},
+    )
+
+    assert [candidate.memory_id for candidate in candidates] == [skill.id, first_tip.id, diverse_tip.id]
+    assert [candidate.rank for candidate in candidates] == [1, 2, 3]
+
+
 def test_retrieval_appends_complete_candidate_evidence(tmp_path: Path) -> None:
     repository = MemoryRepository(tmp_path / "memory")
     item = repository.add(

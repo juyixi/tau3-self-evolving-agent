@@ -60,13 +60,27 @@ class MemoryConfig(_ConfigModel):
     teacher_memory_cap: int = 20
     score_threshold: float = 0.01
     maintenance_period: int = 30
-    maintenance_tip_capacity: int = Field(default=240, ge=1)
+    maintenance_tip_capacity: int = Field(default=200, ge=1)
     maintenance_similarity_threshold: float = Field(default=0.92, ge=-1.0, le=1.0)
     maintenance_priority_pair_limit: int = Field(default=24, ge=0, le=50)
     max_new_tips_per_episode: int = Field(default=2, ge=0)
     max_new_skills_per_episode: int = Field(default=1, ge=0)
     max_new_tools_per_episode: int = Field(default=1, ge=0)
     max_new_trajectories_per_episode: int = Field(default=1, ge=0)
+    retrieval_mmr_lambda_tip: float = Field(default=0.65, ge=0.0, le=1.0)
+    retrieval_mmr_lambda_skill: float = Field(default=0.80, ge=0.0, le=1.0)
+    retrieval_mmr_lambda_tool: float = Field(default=0.85, ge=0.0, le=1.0)
+    retrieval_mmr_lambda_trajectory: float = Field(default=0.75, ge=0.0, le=1.0)
+    retrieval_global_mmr_lambda: float = Field(default=0.75, ge=0.0, le=1.0)
+    retrieval_quota_tip: int = Field(default=18, ge=0)
+    retrieval_quota_skill: int = Field(default=18, ge=0)
+    retrieval_quota_tool: int = Field(default=6, ge=0)
+    retrieval_quota_trajectory: int = Field(default=4, ge=0)
+    selection_max_total: int = Field(default=20, ge=1)
+    selection_max_tip: int = Field(default=7, ge=0)
+    selection_max_skill: int = Field(default=8, ge=0)
+    selection_max_tool: int = Field(default=3, ge=0)
+    selection_max_trajectory: int = Field(default=2, ge=0)
     embedding_provider: Literal["local"] = "local"
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
     embedding_device: str = "cuda"

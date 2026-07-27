@@ -30,7 +30,7 @@ memory:
   teacher_memory_cap: 20
   score_threshold: 0.01
   maintenance_period: 30
-  maintenance_tip_capacity: 240
+  maintenance_tip_capacity: 200
   maintenance_similarity_threshold: 0.92
   maintenance_priority_pair_limit: 24
   max_new_tips_per_episode: 2

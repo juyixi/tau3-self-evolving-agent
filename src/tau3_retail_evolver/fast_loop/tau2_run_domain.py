@@ -33,6 +33,7 @@ from tau3_retail_evolver.fast_loop.runner import (
     _query_hash,
     _retrieval_query,
     _validate_write_decision,
+    _validate_selection_limits,
     _write_proposal,
 )
 from tau3_retail_evolver.memory.outcomes import classify_episode_memory
@@ -313,6 +314,9 @@ def _make_agent_factory(
                             query,
                             repository,
                             top_k=config.retrieve_top_k,
+                            tier_quotas=config.retrieval_tier_quotas(),
+                            mmr_lambdas=config.retrieval_mmr_lambdas(),
+                            global_mmr_lambda=config.retrieval_global_mmr_lambda,
                         )
                     selection_prompt = build_selection_prompt(
                         task_instruction=public_context["task_instruction"],
@@ -326,6 +330,9 @@ def _make_agent_factory(
                         selection_prompt,
                         SelectionDecision,
                         candidate_ids=[candidate.memory_id for candidate in candidates],
+                        validator=lambda decision: _validate_selection_limits(
+                            decision, candidates, config
+                        ),
                         label="selection",
                     )
                     candidates_by_id = {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 import math
 from typing import Any
@@ -42,6 +43,9 @@ class Retriever:
         repository: MemoryRepository,
         *,
         top_k: int = 50,
+        tier_quotas: Mapping[str, int] | None = None,
+        mmr_lambdas: Mapping[str, float] | None = None,
+        global_mmr_lambda: float = 0.75,
         event_context: dict[str, Any] | None = None,
     ) -> list[MemoryCandidate]:
         with repository.read_transaction():
@@ -49,6 +53,9 @@ class Retriever:
                 query,
                 repository,
                 top_k=top_k,
+                tier_quotas=tier_quotas,
+                mmr_lambdas=mmr_lambdas,
+                global_mmr_lambda=global_mmr_lambda,
                 event_context=event_context,
             )
 
@@ -58,6 +65,9 @@ class Retriever:
         repository: MemoryRepository,
         *,
         top_k: int,
+        tier_quotas: Mapping[str, int] | None,
+        mmr_lambdas: Mapping[str, float] | None,
+        global_mmr_lambda: float,
         event_context: dict[str, Any] | None,
     ) -> list[MemoryCandidate]:
         provider = self.provider
@@ -125,7 +135,17 @@ class Retriever:
                 for item in items
             ),
             key=lambda pair: (-pair[0], pair[1].id),
-        )[:top_k]
+        )
+        if tier_quotas is not None:
+            ranked = _tiered_mmr_rank(
+                ranked,
+                top_k=top_k,
+                tier_quotas=tier_quotas,
+                mmr_lambdas=mmr_lambdas or {},
+                global_mmr_lambda=global_mmr_lambda,
+            )
+        else:
+            ranked = ranked[:top_k]
         candidates = [
             MemoryCandidate(
                 memory_id=item.id,
@@ -175,6 +195,107 @@ def _is_valid_embedding(embedding: tuple[float, ...], dimension: int) -> bool:
     except ValueError:
         return False
     return True
+
+
+_TIER_SELECTION_ORDER = (
+    MemoryTier.SKILL,
+    MemoryTier.TIP,
+    MemoryTier.TOOL,
+    MemoryTier.TRAJECTORY,
+)
+
+
+def _tiered_mmr_rank(
+    ranked: list[tuple[float, MemoryItem]],
+    *,
+    top_k: int,
+    tier_quotas: Mapping[str, int],
+    mmr_lambdas: Mapping[str, float],
+    global_mmr_lambda: float,
+) -> list[tuple[float, MemoryItem]]:
+    if not 0.0 <= global_mmr_lambda <= 1.0:
+        raise ValueError("global_mmr_lambda must be between 0 and 1")
+    quotas = _scaled_tier_quotas(tier_quotas, top_k)
+    for tier in MemoryTier:
+        if tier.value in mmr_lambdas and not 0.0 <= mmr_lambdas[tier.value] <= 1.0:
+            raise ValueError(f"MMR lambda for {tier.value} must be between 0 and 1")
+
+    selected: list[tuple[float, MemoryItem]] = []
+    selected_ids: set[str] = set()
+    for tier in _TIER_SELECTION_ORDER:
+        tier_ranked = [pair for pair in ranked if pair[1].tier == tier]
+        picks = _mmr_select(
+            tier_ranked,
+            count=quotas[tier.value],
+            selected_items=(),
+            relevance_weight=mmr_lambdas.get(tier.value, 0.75),
+        )
+        selected.extend(picks)
+        selected_ids.update(item.id for _, item in picks)
+
+    remaining = [pair for pair in ranked if pair[1].id not in selected_ids]
+    selected.extend(
+        _mmr_select(
+            remaining,
+            count=top_k - len(selected),
+            selected_items=tuple(item for _, item in selected),
+            relevance_weight=global_mmr_lambda,
+        )
+    )
+    return selected
+
+
+def _scaled_tier_quotas(tier_quotas: Mapping[str, int], top_k: int) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for tier in MemoryTier:
+        value = tier_quotas.get(tier.value, 0)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"tier quota for {tier.value} must be a non-negative integer")
+        values[tier.value] = value
+    total = sum(values.values())
+    if total <= top_k:
+        return values
+    scaled = {tier: values[tier] * top_k / total for tier in values}
+    floors = {tier: int(scaled[tier]) for tier in values}
+    remaining = top_k - sum(floors.values())
+    order = sorted(
+        values,
+        key=lambda tier: (-(scaled[tier] - floors[tier]), tier),
+    )
+    for tier in order[:remaining]:
+        floors[tier] += 1
+    return floors
+
+
+def _mmr_select(
+    ranked: list[tuple[float, MemoryItem]],
+    *,
+    count: int,
+    selected_items: tuple[MemoryItem, ...],
+    relevance_weight: float,
+) -> list[tuple[float, MemoryItem]]:
+    if count <= 0 or not ranked:
+        return []
+    available = list(ranked)
+    chosen: list[tuple[float, MemoryItem]] = []
+    comparison = list(selected_items)
+    while available and len(chosen) < count:
+        def score(pair: tuple[float, MemoryItem]) -> tuple[float, float, str]:
+            relevance, item = pair
+            redundancy = max(
+                (_cosine(item.embedding or (), other.embedding or ()) for other in comparison),
+                default=0.0,
+            )
+            return (relevance_weight * relevance - (1.0 - relevance_weight) * redundancy, relevance, item.id)
+
+        best = sorted(
+            available,
+            key=lambda pair: (-score(pair)[0], -score(pair)[1], score(pair)[2]),
+        )[0]
+        chosen.append(best)
+        comparison.append(best[1])
+        available.remove(best)
+    return chosen
 
 
 def _assert_provider_identity(
