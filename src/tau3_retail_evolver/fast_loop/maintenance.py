@@ -205,7 +205,7 @@ def run_due_maintenance(
     policy: FastLoopPolicy,
     context: RunContext,
     per_tier_limit: int = 100,
-    tip_capacity: int = 240,
+    tip_capacity: int = 200,
     similarity_threshold: float = 0.92,
     priority_pair_limit: int = 24,
 ) -> MaintenanceResult:
@@ -236,7 +236,7 @@ def run_evaluation_maintenance(
     policy: FastLoopPolicy,
     context: RunContext,
     per_tier_limit: int = 100,
-    tip_capacity: int = 240,
+    tip_capacity: int = 200,
     similarity_threshold: float = 0.92,
     priority_pair_limit: int = 24,
 ) -> MaintenanceResult:
@@ -267,7 +267,7 @@ def _run_due_maintenance(
     policy: FastLoopPolicy,
     context: RunContext,
     per_tier_limit: int,
-    tip_capacity: int = 240,
+    tip_capacity: int = 200,
     similarity_threshold: float = 0.92,
     priority_pair_limit: int = 24,
 ) -> MaintenanceResult:

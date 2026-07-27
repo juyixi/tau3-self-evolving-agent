@@ -52,7 +52,7 @@ class FastLoopConfig:
     max_new_skills_per_episode: int = 1
     max_new_tools_per_episode: int = 1
     max_new_trajectories_per_episode: int = 1
-    maintenance_tip_capacity: int = 240
+    maintenance_tip_capacity: int = 200
     maintenance_similarity_threshold: float = 0.92
     maintenance_priority_pair_limit: int = 24
 

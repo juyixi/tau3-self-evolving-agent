@@ -11,7 +11,7 @@ an auditable LLM review.
   maintenance policy sees likely merge or retirement candidates first.
 - The policy returns `reviews` with `keep`, `merge`, or `retire` dispositions,
   alongside executable lookup, merge, or delete commands.
-- When active Tips exceed the configured capacity (default: 240), a review and a
+- When active Tips exceed the configured capacity (default: 200), a review and a
   merge/delete command over presented Tips are mandatory. An empty maintenance
   decision is rejected and repaired once.
 
