@@ -123,7 +123,7 @@ class _StrictMergeCommand(_DecisionModel):
     operation: Literal["merge"] = "merge"
     source_ids: tuple[str, ...] = Field(min_length=2)
     content: str
-    updated_round: int = Field(ge=0)
+    updated_round: int = Field(default=0, ge=0)
     payload: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -131,7 +131,7 @@ class _StrictMergeCommand(_DecisionModel):
 class _StrictDeleteCommand(_DecisionModel):
     operation: Literal["delete"] = "delete"
     memory_ids: tuple[str, ...] = Field(min_length=1)
-    updated_round: int = Field(ge=0)
+    updated_round: int = Field(default=0, ge=0)
     reason: str
 
 

@@ -32,6 +32,7 @@ class OpenAICompatibleClient(Protocol):
         temperature: float,
         top_p: float,
         response_format: Mapping[str, Any] | None = None,
+        request_generation_settings: Mapping[str, Any] | None = None,
     ) -> object: ...
 
 
@@ -73,12 +74,25 @@ _WRITE_SYSTEM = (
     "Do not use tools, Markdown fences, or include any other text."
 )
 _MAINTENANCE_SYSTEM = (
-    "Return exactly one strict JSON object matching MaintenanceDecision: "
-    '{"reviews":[...],"commands":[...]}. Review priority candidates first and give '
-    "each reviewed memory one disposition: keep, merge, or retire. Use merge or delete "
-    "commands when the maintenance context says a write action is required. Use only the "
-    'provided command schemas and diagnostics. '
-    "Do not use external tools or include any other text."
+    "You are the Memory maintenance controller. Return exactly one strict JSON object "
+    'matching MaintenanceDecision: {"reviews":[...],"commands":[...]}. '
+    "Apply these rules: "
+    "1. Review priority candidates first. Every reviewed Memory ID appears exactly once "
+    "with disposition keep, merge, or retire. "
+    "2. Use keep when evidence is insufficient. Do not change a useful distinct Memory. "
+    "3. Merge only redundant Memories from the same tier. Put all merged IDs in one merge "
+    "command and mark those reviews as merge. Never also delete a merge source. "
+    "4. Retire only clearly obsolete, incorrect, or redundant Memories. Mark deleted IDs "
+    "as retire and provide a concrete reason. "
+    "5. Commands may reference only IDs present in diagnostics. Do not repeat an ID across "
+    "commands. Do not mix lookup commands with merge or delete commands. "
+    "6. The runtime owns updated_round and typed payload fields; omit them. Return only "
+    "semantic merge content or delete reasons. "
+    "7. When requires_tip_reduction is true, reduce redundant tips toward tip_capacity. "
+    'Otherwise commands may be empty. Use {"reviews":[],"commands":[]} only when there '
+    "is genuinely nothing safe to review. "
+    "Use only the supplied diagnostics and command schemas. Do not call tools, use Markdown, "
+    "or include any text outside the JSON object."
 )
 _SYSTEM_INSTRUCTIONS = {
     "selection": _SELECTION_SYSTEM,
@@ -154,13 +168,29 @@ class OpenAICompatibleHttpClient:
         temperature: float,
         top_p: float,
         response_format: Mapping[str, Any] | None = None,
+        request_generation_settings: Mapping[str, Any] | None = None,
     ) -> object:
+        request_settings = dict(request_generation_settings or {})
+        reserved = {
+            "model",
+            "messages",
+            "tools",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "response_format",
+        }
+        if reserved.intersection(request_settings):
+            raise ValueError(
+                "request generation settings must not override chat completion fields"
+            )
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": list(messages),
             "temperature": temperature,
             "top_p": top_p,
             **self._generation_settings,
+            **request_settings,
         }
         if tools:
             payload["tools"] = list(tools)
@@ -301,20 +331,25 @@ class OpenAICompatibleFastLoopPolicy:
         tools = prompt.payload["tools"] if prompt.kind == "action" else []
         started_at = self._clock()
         try:
-            completion = self._client.create_chat_completion(
-                messages=[
+            request: dict[str, Any] = {
+                "messages": [
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": user_content},
                 ],
-                tools=tools,
-                temperature=self._temperature,
-                top_p=self._top_p,
-                response_format=(
+                "tools": tools,
+                "temperature": self._temperature,
+                "top_p": self._top_p,
+                "response_format": (
                     _decision_response_format(prompt.kind)
                     if prompt.kind != "action"
                     else None
                 ),
-            )
+            }
+            if prompt.kind == "maintenance":
+                request["request_generation_settings"] = {
+                    "chat_template_kwargs": {"enable_thinking": False}
+                }
+            completion = self._client.create_chat_completion(**request)
         except Exception:
             raise RuntimeError("OpenAI-compatible fast-loop policy request failed") from None
         latency_s = max(0.0, self._clock() - started_at)

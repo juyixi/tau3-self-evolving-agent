@@ -339,13 +339,18 @@ def _execute_round(
         diagnostics = sanitize_artifact_data(diagnostics)
         active_tip_count = len(repository.list(tier=MemoryTier.TIP))
         requires_tip_reduction = active_tip_count > tip_capacity
+        required_tip_reduction_count = max(0, active_tip_count - tip_capacity)
         prompt = build_maintenance_prompt(
             diagnostics=diagnostics,
             maintenance_context={
                 "active_counts": {tier.value: len(repository.list(tier=tier)) for tier in MemoryTier},
                 "tip_capacity": tip_capacity,
                 "requires_tip_reduction": requires_tip_reduction,
-                "review_instruction": "Priority items appear first in each tier. Review at least one item.",
+                "required_tip_reduction_count": required_tip_reduction_count,
+                "review_instruction": (
+                    "Priority items appear first in each tier. Review at least one item "
+                    "unless no safe disposition can be made."
+                ),
             },
         )
         public_diagnostics = prompt.payload["diagnostics"]

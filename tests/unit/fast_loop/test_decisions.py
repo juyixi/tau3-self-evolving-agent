@@ -195,6 +195,31 @@ def test_maintenance_decision_parses_json_review_arrays() -> None:
     assert result.decision.reviews[0].memory_ids == ("memory-1",)
 
 
+def test_maintenance_runtime_fields_may_be_omitted_by_model() -> None:
+    result = parse_decision(
+        json.dumps(
+            {
+                "commands": [
+                    {
+                        "operation": "merge",
+                        "source_ids": ["memory-1", "memory-2"],
+                        "content": "Consolidated guidance.",
+                    },
+                    {
+                        "operation": "delete",
+                        "memory_ids": ["memory-3"],
+                        "reason": "Obsolete.",
+                    },
+                ]
+            }
+        ),
+        MaintenanceDecision,
+    )
+
+    assert result.decision is not None
+    assert all(command.updated_round == 0 for command in result.decision.commands)
+
+
 @pytest.mark.parametrize("updated_round", ("3", 3.0, True))
 def test_maintenance_parse_rejects_coerced_updated_round_scalars(updated_round: object) -> None:
     result = parse_decision(
