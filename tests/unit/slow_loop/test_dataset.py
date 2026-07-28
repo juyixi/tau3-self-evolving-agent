@@ -22,6 +22,7 @@ from tau3_retail_evolver.slow_loop.dataset import (
 from tau3_retail_evolver.slow_loop.evidence import (
     EpisodeEvidence,
     EvidenceLedger,
+    MaintenanceEvidence,
     MemoryCandidateEvidence,
     TrajectoryStepEvidence,
 )
@@ -214,6 +215,57 @@ def test_dataset_build_refuses_existing_build_id(
 
     with pytest.raises(FileExistsError, match="refusing to overwrite"):
         build_opd_dataset(request)
+
+
+def test_auditor_accepts_declared_intermediate_maintenance_snapshot() -> None:
+    episode = _episode(task_id="1", selected=True, reward=1.0)
+    maintenance = MaintenanceEvidence(
+        maintenance_id="run-a:maintenance:1",
+        run_id="run-a",
+        source_event_start=9,
+        source_event_end=11,
+        source_event_sha256="m" * 64,
+        iteration=0,
+        maintenance_round=1,
+        trigger_task_index=1,
+        period=1,
+        memory_snapshot_id="snapshot-maintenance",
+        prior_episode_ids=(episode.episode_id,),
+        public_repository=(),
+        repository_state=(),
+        commands=(),
+        looked_up_ids=(),
+        created_ids=(),
+        updated_ids=(),
+    )
+    manifest = {
+        "policy_lineage": {
+            "iteration": 0,
+            "model_revision": "model-a",
+            "adapter_revision": "adapter-a",
+            "tau2_commit": "c" * 40,
+        },
+        "official_split": {"sha256": OFFICIAL_SPLIT_SHA256},
+        "source_runs": [{"run_id": "run-a"}],
+        "memory": {
+            "snapshot_chain": ["snapshot-a", "snapshot-b"],
+            "maintenance_snapshot_ids": ["snapshot-maintenance"],
+        },
+    }
+    errors: list[AuditError] = []
+
+    audit_module._audit_evidence(
+        (
+            episode.model_dump(mode="json"),
+            maintenance.model_dump(mode="json"),
+        ),
+        manifest=manifest,
+        train_ids={"1"},
+        source_task_ids={"1"},
+        errors=errors,
+    )
+
+    assert errors == []
 
 
 def test_dataset_build_does_not_publish_when_internal_audit_fails(

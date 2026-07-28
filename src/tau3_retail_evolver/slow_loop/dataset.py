@@ -313,6 +313,11 @@ def _build_manifest(
         "memory": {
             "agent_id": ledger.memory_agent_id,
             "snapshot_chain": list(materialized.snapshot_chain),
+            "maintenance_snapshot_ids": list(
+                dict.fromkeys(
+                    item.memory_snapshot_id for item in ledger.maintenance
+                )
+            ),
         },
         "revisions": {
             "task_grouping": GROUPING_REVISION,

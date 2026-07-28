@@ -472,11 +472,45 @@ def _audit_evidence(
     }
     if {episode.run_id for episode in episodes.values()} != source_run_ids:
         _error(errors, "evidence_lineage_mismatch", "evidence run set differs from source runs")
-    snapshot_ids = set(
-        manifest.get("memory", {}).get("snapshot_chain", [])
-        if isinstance(manifest.get("memory"), dict)
-        else []
+    memory = manifest.get("memory")
+    memory = memory if isinstance(memory, dict) else {}
+    snapshot_chain = memory.get("snapshot_chain", [])
+    snapshot_ids = set(snapshot_chain if isinstance(snapshot_chain, list) else [])
+    expected_maintenance_snapshot_ids = list(
+        dict.fromkeys(item.memory_snapshot_id for item in maintenance.values())
     )
+    raw_maintenance_snapshot_ids = memory.get("maintenance_snapshot_ids")
+    if raw_maintenance_snapshot_ids is None:
+        maintenance_snapshot_ids: list[str] = []
+        if not set(expected_maintenance_snapshot_ids) <= snapshot_ids:
+            _error(
+                errors,
+                "evidence_lineage_mismatch",
+                "maintenance snapshots are missing from the manifest",
+            )
+    elif (
+        not isinstance(raw_maintenance_snapshot_ids, list)
+        or not all(
+            isinstance(snapshot_id, str) and snapshot_id
+            for snapshot_id in raw_maintenance_snapshot_ids
+        )
+        or len(raw_maintenance_snapshot_ids) != len(set(raw_maintenance_snapshot_ids))
+    ):
+        maintenance_snapshot_ids = []
+        _error(
+            errors,
+            "source_lineage_invalid",
+            "maintenance snapshot lineage is invalid",
+        )
+    else:
+        maintenance_snapshot_ids = raw_maintenance_snapshot_ids
+        if maintenance_snapshot_ids != expected_maintenance_snapshot_ids:
+            _error(
+                errors,
+                "evidence_lineage_mismatch",
+                "maintenance snapshot lineage differs from evidence",
+            )
+    snapshot_ids.update(maintenance_snapshot_ids)
     for item in maintenance.values():
         if not set(item.prior_episode_ids) <= episodes.keys():
             _error(errors, "evidence_lineage_mismatch", item.maintenance_id)
