@@ -44,6 +44,7 @@ def test_parser_defaults_to_full_single_trial_test_evaluation() -> None:
     assert args.num_trials == 1
     assert args.seeds is None
     assert args.official_base_reproduction is False
+    assert args.served_model_name is None
 
 
 def test_seed_resolution_uses_config_seed_or_exact_explicit_set() -> None:
@@ -265,6 +266,8 @@ def test_main_writes_manifest_events_contract_and_report(
             "1",
             "--qwen-base-url",
             "http://qwen.invalid/v1",
+            "--served-model-name",
+            "opd-act",
             "--model-revision",
             "qwen-sha",
         ]
@@ -283,9 +286,12 @@ def test_main_writes_manifest_events_contract_and_report(
     assert manifest["rollout_options"]["protocol"] == "no_memory"
     assert manifest["rollout_options"]["num_trials"] == 1
     assert manifest["rollout_options"]["seeds"] == [42]
+    assert manifest["model_serving_contract"]["served_model_name"] == "opd-act"
     assert report["summary"]["episode_count"] == 2
     assert report["summary"]["success_rate"] == 1.0
     assert report["provenance"]["protocol"] == "no_memory"
+    assert report["provenance"]["base_model"] == "Qwen/Qwen3.5-9B"
+    assert captured["client"]["model"] == "opd-act"
     assert captured["task_ids"] == ("75", "76")
     assert captured["seeds"] == (42,)
     assert captured["retriever_factory"] is None

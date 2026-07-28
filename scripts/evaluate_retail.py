@@ -82,6 +82,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--project-root", type=Path)
     parser.add_argument("--iteration", type=int, default=0)
     parser.add_argument("--qwen-base-url")
+    parser.add_argument("--served-model-name")
     parser.add_argument("--model-revision", required=True)
     parser.add_argument("--adapter-revision")
     parser.add_argument("--checkpoint", type=Path)
@@ -103,8 +104,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileExistsError(f"refusing to reuse existing evaluation run: {run_path}")
 
     config = load_config(args.config)
+    served_model_name = (
+        args.served_model_name or config.model.base_model
+    ).strip()
     model_serving_contract = {
         **MODEL_SERVING_CONTRACT,
+        "served_model_name": served_model_name,
         "temperature": config.rollout.temperature,
         "top_p": config.rollout.top_p,
     }
@@ -153,7 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     client = OpenAICompatibleHttpClient(
         base_url=base_url,
-        model=config.model.base_model,
+        model=served_model_name,
         api_key=os.environ.get("QWEN_API_KEY") or "EMPTY",
         max_tokens=MODEL_SERVING_CONTRACT["max_tokens"],
         request_timeout_s=MODEL_SERVING_CONTRACT["request_timeout_s"],
@@ -305,6 +310,8 @@ def _validate_early_arguments(args: argparse.Namespace) -> None:
         raise ValueError("model revision must not be blank")
     if args.adapter_revision is not None and not args.adapter_revision.strip():
         raise ValueError("adapter revision must not be blank")
+    if args.served_model_name is not None and not args.served_model_name.strip():
+        raise ValueError("served model name must not be blank")
     if (args.adapter_revision is None) != (args.checkpoint is None):
         raise ValueError(
             "adapter-revision and checkpoint must be provided together"
