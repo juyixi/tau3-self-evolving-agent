@@ -21,6 +21,8 @@ from tau3_retail_evolver.slow_loop.attribution import MemoryScore, compute_memor
 from tau3_retail_evolver.slow_loop.audit import audit_dataset
 from tau3_retail_evolver.slow_loop.evidence import EvidenceLedger, build_evidence
 from tau3_retail_evolver.slow_loop.examples import (
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
     OPDExample,
     build_action_examples,
     build_maintenance_examples,
@@ -34,7 +36,7 @@ from tau3_retail_evolver.slow_loop.task_grouping import (
 )
 
 
-DATASET_SCHEMA_VERSION = 1
+DATASET_SCHEMA_VERSION = OPD_DATASET_SCHEMA_VERSION
 ATTRIBUTION_REVISION = "opd-evolver-paper-eq11-eq12-v1"
 _SAFE_BUILD_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _KINDS = ("sel", "act", "write", "maint")
@@ -323,6 +325,7 @@ def _build_manifest(
             "task_grouping": GROUPING_REVISION,
             "attribution": ATTRIBUTION_REVISION,
         },
+        "sample_unit_contract": _json_copy(OPD_SAMPLE_UNIT_CONTRACT),
         "resolved_config": _json_copy(materialized.resolved_config),
         "source_runs": _json_copy(materialized.source_runs),
         "source_context": {
@@ -365,25 +368,14 @@ def _skip_reasons(materialized: _MaterializedDataset) -> dict[str, int]:
             score.status == "insufficient_evidence" for score in materialized.scores
         ),
         "no_scored_candidate": no_scored_candidate,
-        "no_successful_same_group_trajectory": _no_successful_group_count(materialized),
+        "act_not_successful_or_empty_trajectory": sum(
+            episode.final_reward != 1.0 or not episode.trajectory
+            for episode in materialized.ledger.episodes
+        ),
         "no_qualified_selected_memory": no_qualified_selected,
         "no_future_write_evidence": no_future_write,
         "no_committed_maintenance": int(not materialized.ledger.maintenance),
     }
-
-
-def _no_successful_group_count(materialized: _MaterializedDataset) -> int:
-    successful_groups = {
-        episode.task_group
-        for episode in materialized.ledger.episodes
-        if episode.final_reward == 1.0
-    }
-    return sum(
-        episode.task_group not in successful_groups
-        for episode in materialized.ledger.episodes
-    )
-
-
 def _write_jsonl(path: Path, rows: Sequence[Any]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as destination:

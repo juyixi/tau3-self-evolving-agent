@@ -28,6 +28,24 @@ from tau3_retail_evolver.slow_loop.leakage import (
 
 ExampleKind = Literal["sel", "act", "write", "maint"]
 
+OPD_DATASET_SCHEMA_VERSION = 2
+OPD_SAMPLE_UNIT_CONTRACT = {
+    "revision": "opd-evolver-paper-eq13-task-level-v1",
+    "units": {
+        "sel": "task",
+        "act": "task",
+        "write": "task",
+        "maint": "maintenance_round",
+    },
+    "eligibility": {
+        "sel": "task_with_scored_retrieval_candidates",
+        "act": "successful_task_with_nonempty_trajectory",
+        "write": "task_with_attributed_committed_new_memory",
+        "maint": "committed_maintenance_round",
+    },
+    "act_target": "complete_task_solution_sequence",
+}
+
 ONLINE_SAMPLING_CONTRACT = {
     "mode": "online",
     "student_completion_source": "stage6_current_policy_generation",
@@ -41,7 +59,7 @@ ONLINE_SAMPLING_CONTRACT = {
 class OPDExample(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     example_id: str
     kind: ExampleKind
     public_input: dict[str, Any]
@@ -131,6 +149,8 @@ def build_action_examples(
     cap = _positive_int(teacher_memory_cap, "teacher_memory_cap")
     examples: list[OPDExample] = []
     for episode in ledger.episodes:
+        if episode.final_reward != 1.0 or not episode.trajectory:
+            continue
         candidate_by_id = {
             candidate.memory_id: candidate for candidate in episode.candidates
         }
@@ -148,11 +168,6 @@ def build_action_examples(
             key=lambda pair: (-float(pair[0].value), pair[1].rank, pair[0].memory_id)
         )
         valuable = valuable[:cap]
-        if not valuable:
-            continue
-        successful = _successful_trajectory(episode, ledger.episodes)
-        if successful is None:
-            continue
         privileged = {
             "valuable_selected_memories": [
                 {
@@ -167,44 +182,33 @@ def build_action_examples(
                 for score, candidate in valuable
             ],
             "successful_trajectory": {
-                "episode_id": successful.episode_id,
-                "task_group": successful.task_group,
-                "final_reward": successful.final_reward,
+                "episode_id": episode.episode_id,
+                "task_group": episode.task_group,
+                "final_reward": episode.final_reward,
                 "trajectory": [
-                    step.model_dump(mode="json") for step in successful.trajectory
+                    step.model_dump(mode="json") for step in episode.trajectory
                 ],
             },
         }
-        for turn, step in enumerate(episode.trajectory):
-            history = [
-                previous.model_dump(mode="json")
-                for previous in episode.trajectory[:turn]
-            ]
-            public_input = {
-                "policy": _json_copy(episode.policy),
-                "tools": [_json_copy(tool) for tool in episode.tools],
-                "history": history,
-                "observation": _json_copy(step.observation),
-            }
-            provenance = {
-                **_episode_provenance(episode),
-                "turn": turn,
-                "successful_trajectory_episode_id": successful.episode_id,
-            }
-            examples.append(
-                _make_example(
-                    "act",
-                    public_input,
-                    privileged,
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {"action": {"type": "string", "minLength": 1}},
-                        "required": ["action"],
-                    },
-                    provenance,
-                )
+        public_input = {
+            "policy": _json_copy(episode.policy),
+            "tools": [_json_copy(tool) for tool in episode.tools],
+            "initial_observation": _json_copy(episode.initial_observation),
+        }
+        provenance = {
+            **_episode_provenance(episode),
+            "successful_trajectory_episode_id": episode.episode_id,
+            "source_trajectory_step_count": len(episode.trajectory),
+        }
+        examples.append(
+            _make_example(
+                "act",
+                public_input,
+                privileged,
+                _action_response_schema(),
+                provenance,
             )
+        )
     return tuple(examples)
 
 
@@ -369,6 +373,7 @@ def build_maintenance_examples(
             "trigger_task_index": maintenance.trigger_task_index,
             "memory_snapshot_id": maintenance.memory_snapshot_id,
             "source_event_sha256": maintenance.source_event_sha256,
+            "sample_unit": "maintenance_round",
         }
         examples.append(
             _make_example(
@@ -392,6 +397,9 @@ def audit_example_boundaries(example: OPDExample) -> None:
         audit_artifact_payload(payload)
     if example.sampling_contract != ONLINE_SAMPLING_CONTRACT:
         raise ValueError("missing online sampling contract")
+    expected_unit = OPD_SAMPLE_UNIT_CONTRACT["units"][example.kind]
+    if example.provenance.get("sample_unit") != expected_unit:
+        raise ValueError(f"{example.kind} example sample unit must be {expected_unit}")
     if example.kind == "sel":
         public_ids = {
             row["memory_id"] for row in example.public_input.get("candidates", [])
@@ -401,6 +409,24 @@ def audit_example_boundaries(example: OPDExample) -> None:
         if public_ids != score_ids or any("content" in row for row in score_rows):
             raise ValueError("selection public/privileged candidate boundary mismatch")
     if example.kind == "act":
+        if "turn" in example.provenance:
+            raise ValueError("action example must be task-level, not turn-level")
+        if example.response_schema != _action_response_schema():
+            raise ValueError("action example must emit one task-level solution sequence")
+        trajectory = example.privileged_hindsight.get("successful_trajectory")
+        if not isinstance(trajectory, dict):
+            raise ValueError("action example is missing successful trajectory hindsight")
+        steps = trajectory.get("trajectory")
+        if (
+            trajectory.get("final_reward") != 1.0
+            or not isinstance(steps, list)
+            or not steps
+            or example.provenance.get("source_trajectory_step_count") != len(steps)
+            or example.provenance.get("successful_trajectory_episode_id")
+            != example.provenance.get("episode_id")
+            or trajectory.get("episode_id") != example.provenance.get("episode_id")
+        ):
+            raise ValueError("action example must use its own complete successful trajectory")
         public_text = _canonical_json(example.public_input)
         for row in example.privileged_hindsight.get(
             "valuable_selected_memories", []
@@ -468,10 +494,12 @@ def _episode_provenance(episode: EpisodeEvidence) -> dict[str, Any]:
         "iteration": episode.iteration,
         "task_id": episode.task_id,
         "task_group": episode.task_group,
+        "seed": episode.seed,
         "model_revision": episode.model_revision,
         "adapter_revision": episode.adapter_revision,
         "memory_snapshot_id": episode.memory_snapshot_id,
         "source_event_sha256": episode.source_event_sha256,
+        "sample_unit": "task",
     }
 
 
@@ -486,27 +514,27 @@ def _candidate_public(candidate: MemoryCandidateEvidence) -> dict[str, Any]:
     }
 
 
-def _successful_trajectory(
-    current: EpisodeEvidence,
-    episodes: Sequence[EpisodeEvidence],
-) -> EpisodeEvidence | None:
-    if current.final_reward == 1.0:
-        return current
-    candidates = [
-        episode
-        for episode in episodes
-        if episode.task_group == current.task_group and episode.final_reward == 1.0
-    ]
-    if not candidates:
-        return None
-    return min(
-        candidates,
-        key=lambda episode: (
-            -episode.final_reward,
-            len(episode.trajectory),
-            episode.episode_id,
-        ),
-    )
+def _action_response_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "solution": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "turn": {"type": "integer", "minimum": 0},
+                        "action": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["turn", "action"],
+                },
+            }
+        },
+        "required": ["solution"],
+    }
 
 
 def _maintenance_diagnostics(

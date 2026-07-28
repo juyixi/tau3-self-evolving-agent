@@ -338,15 +338,20 @@ z_act = x_t
 h_act = (S_plus_t, tau_plus_t)
 ```
 
-按每个 action turn 生成：
+每个成功 task 最多生成一条：
 
-- public：任务、公开 policy/tools、截至当前 turn 的公开 observation/action history。
+- public：任务、公开 policy/tools 和初始公开 observation。
 - public 明确移除全部 Memory ID、content 和 Memory placeholder。
-- privileged：本轮 selected 且 `V >= score_threshold` 的 Memory，以及同 task group 的成功 trajectory。
+- privileged：本轮 selected 且 `V >= score_threshold` 的 Memory，以及本 task 的完整成功 trajectory。
 - 合格 Memory 最多 `teacher_memory_cap=20` 条，按 `V` 降序、retrieval rank 升序和 Memory ID 排序。
-- 没有合格 Memory 或同组成功 trajectory 时跳过。
+- response schema：一个完整 task solution sequence，而不是单步 action。
+- `R_t != 1.0` 或 trajectory 为空时跳过；没有正价值 selected Memory 不影响成功 trajectory 成为 `act` 样本。
 
-Tau2 成功 trajectory 使用官方 episode reward 判定 `R_t == 1.0`。优先使用当前成功 episode；当前 episode 不成功时，从同组 episode 按 final reward 降序、step count 升序、episode ID 升序确定性选择。该 trajectory 必须来自本次 build 的 train evidence，不能来自 test 或 golden actions。
+Tau2 成功 trajectory 使用官方 episode reward 判定 `R_t == 1.0`。一条 `act`
+样本只使用自身 task 的完整 trajectory；禁止将一个 task 的公开输入与同组另一个
+task 的成功 trajectory 拼接，也禁止按 trajectory step 扩成多条样本。该
+trajectory 必须来自本次 build 的 train evidence，不能来自 test 或 golden
+actions。
 
 ## Writing View
 
@@ -454,7 +459,11 @@ Manifest 使用 canonical JSON，创建后不可覆盖。
 8. maintenance 样本对应成功 commit。
 9. public/privileged 隔离、credential policy 和 test leakage 检查通过。
 10. 每个 example 声明 online sampling contract。
-11. 所有 artifact 行数和 SHA256 与 manifest 一致。
+11. `sel/act/write` 的逻辑键为 `(kind, seed, task_id)`，每个键最多一条；`maint`
+    按 `(iteration, maintenance_round)` 唯一。
+12. `act` 恰好覆盖全部具有非空 trajectory 的成功 episode，并且每条只引用自身
+    完整 trajectory。
+13. 所有 artifact 行数和 SHA256 与 manifest 一致。
 
 ## 失败策略
 
@@ -472,7 +481,7 @@ Manifest 使用 canonical JSON，创建后不可覆盖。
 
 - `insufficient_selected_control`
 - `no_scored_candidate`
-- `no_successful_same_group_trajectory`
+- `act_not_successful_or_empty_trajectory`
 - `no_qualified_selected_memory`
 - `no_future_write_evidence`
 - `no_committed_maintenance`
@@ -504,4 +513,7 @@ Stage 5 完成必须满足：
 - 全部 Stage 4/Stage 5 自动化测试通过。
 - 设计中没有从 test artifact 返回训练路径。
 
-真实五任务 Memory-enabled schema-2 run 已于 2026-07-23 补跑完成，并成功构建和独立审计 evidence，进入 Stage 6 的真实数据硬门槛已经通过。该小样本产生 4 条 `sel` 和 1 条 `write`，未产生 `act`，也未达到 `Q=30` maintenance 边界；真实 30 任务四类样本覆盖仍属于扩大训练前的后续验证，不回退本次已通过的 Stage 5 最小 gate。
+真实五任务 Memory-enabled run 已于 2026-07-23 补跑完成，并成功构建和独立审计
+evidence，进入 Stage 6 的真实数据硬门槛已经通过。旧 schema-1 builder 曾按 action
+turn 扩样并要求正价值 selected Memory，该产物不得继续用于训练；schema-2 会从
+同一份历史 evidence 按本节 task-level 契约重新构建，无需重跑 Fast Loop。

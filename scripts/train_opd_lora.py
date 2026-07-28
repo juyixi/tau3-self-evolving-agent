@@ -18,6 +18,10 @@ from tau3_retail_evolver.models.lora import (
 )
 from tau3_retail_evolver.pipeline.sampling import OPD_KINDS
 from tau3_retail_evolver.slow_loop.audit import AuditReport, audit_dataset
+from tau3_retail_evolver.slow_loop.examples import (
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +116,12 @@ def _run_preflight(args: argparse.Namespace) -> _Preflight:
     report = audit_dataset(args.dataset_dir)
     _require_passing_audit(report)
     dataset_manifest = _read_json_object(dataset_dir / "dataset_manifest.json")
+    if dataset_manifest.get("dataset_schema_version") != OPD_DATASET_SCHEMA_VERSION:
+        raise ValueError(
+            f"OPD dataset schema version must be {OPD_DATASET_SCHEMA_VERSION}"
+        )
+    if dataset_manifest.get("sample_unit_contract") != OPD_SAMPLE_UNIT_CONTRACT:
+        raise ValueError("OPD dataset sample-unit contract is invalid")
     lineage = dataset_manifest.get("policy_lineage")
     if not isinstance(lineage, Mapping):
         raise ValueError("dataset policy_lineage is missing")

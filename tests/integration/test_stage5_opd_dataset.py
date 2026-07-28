@@ -17,6 +17,10 @@ from tau3_retail_evolver.memory.types import MemoryTier
 from tau3_retail_evolver.slow_loop import dataset as dataset_module
 from tau3_retail_evolver.slow_loop.audit import audit_dataset
 from tau3_retail_evolver.slow_loop.dataset import DatasetBuildRequest, build_opd_dataset
+from tau3_retail_evolver.slow_loop.examples import (
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
+)
 from tau3_retail_evolver.slow_loop.task_grouping import RetailTaskGroups
 
 
@@ -83,6 +87,9 @@ def test_repeated_task_passes_build_and_audit_four_opd_views(
     ][-1]
     assert manifest["counts"]["evidence_episodes"] == 30
     assert manifest["counts"]["evidence_maintenance"] == 1
+    assert manifest["counts"]["act"] == 29
+    assert manifest["dataset_schema_version"] == OPD_DATASET_SCHEMA_VERSION
+    assert manifest["sample_unit_contract"] == OPD_SAMPLE_UNIT_CONTRACT
 
     source_events = source_runs[0] / "rollouts" / "events.jsonl"
     source_events.write_text(
@@ -210,10 +217,7 @@ def _write_two_continuous_runs(
         episode_specs.append(spec)
 
     run_a_specs = episode_specs[:15]
-    run_b_specs = [
-        {**spec, "task_id": task_ids[index]}
-        for index, spec in enumerate(episode_specs[15:])
-    ]
+    run_b_specs = episode_specs[15:]
     run_a = _write_run(
         project,
         run_id="run-a",

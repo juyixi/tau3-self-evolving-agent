@@ -26,15 +26,20 @@ Student LoRA 接收 forward KL 梯度。
 每个 epoch 对某一 kind 的全部独立样本做一次确定性 shuffle，每条样本恰好出现
 一次。三个 epoch 仅表示对同一 kind 的自然数据遍历三次。
 
-Stage 8 Iteration 0 数据量为：
+数据集使用以下不可混淆的样本单位：
 
-| kind | 每 epoch 独立样本 | 3 epochs 训练曝光 |
-| --- | ---: | ---: |
-| `sel` | 198 | 594 |
-| `act` | 1586 | 4758 |
-| `write` | 50 | 150 |
-| `maint` | 7 | 21 |
-| 合计 | 1841 | 5523 |
+| kind | 样本单位 | 纳入条件 |
+| --- | --- | --- |
+| `sel` | 一个 task | 存在候选 Memory，且至少一个候选有足够 attribution 证据 |
+| `act` | 一个成功 task | `reward=1` 且存在非空完整 trajectory |
+| `write` | 一个 task | 存在通过 future attribution 审计的 committed new Memory |
+| `maint` | 一个 maintenance round | 对应一次成功的 `MaintenanceCommitted` |
+
+`act` 的一条样本包含整个 task 的 action solution sequence，不能按 trajectory step
+拆成多条样本。每个 epoch 的自然样本数必须直接读取 schema-2
+`dataset_manifest.json`，三个 epoch 的训练曝光数等于自然样本数乘以 3。任何使用
+最大类别补齐、按 action step 扩样，或沿用旧 schema-1 固定计数的训练都必须在
+preflight 阶段拒绝。
 
 `memory_scores.jsonl` 是 attribution 证据，不作为第五类训练样本，也不计入上述
 训练曝光数。

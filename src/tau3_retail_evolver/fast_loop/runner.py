@@ -277,6 +277,7 @@ def _run_lifecycle_episode(
             context,
             task_id,
             "EpisodeStarted",
+            task_instruction=public_task_instruction,
             observation=public_observation,
             policy=public_policy,
             tools=public_tools,

@@ -45,17 +45,23 @@ def _candidate(memory_id: str, tier: str, rank: int) -> MemoryCandidateEvidence:
     )
 
 
-def _step(action: str, reward: float) -> TrajectoryStepEvidence:
+def _step(
+    action: str,
+    reward: float,
+    *,
+    turn: int = 0,
+    done: bool = True,
+) -> TrajectoryStepEvidence:
     return TrajectoryStepEvidence(
-        turn=0,
-        observation="Customer asks for help.",
+        turn=turn,
+        observation=f"Observation {turn}.",
         action=action,
-        next_observation="Request handled.",
+        next_observation=f"Observation {turn + 1}.",
         reward=reward,
-        done=True,
-        terminated=True,
+        done=done,
+        terminated=done,
         truncated=False,
-        public_info={"status": "done"},
+        public_info={"status": "done" if done else "continue"},
     )
 
 
@@ -69,6 +75,7 @@ def _episode(
     proposals: tuple[WriteProposalEvidence, ...] = (),
     committed_new_ids: tuple[str, ...] = (),
     replayed_ids: tuple[str, ...] = (),
+    trajectory: tuple[TrajectoryStepEvidence, ...] | None = None,
 ) -> EpisodeEvidence:
     return EpisodeEvidence(
         episode_id=episode_id,
@@ -93,7 +100,7 @@ def _episode(
         retriever_revision="embedding-a",
         candidates=candidates,
         selected_memory_ids=selected_ids,
-        trajectory=(_step("lookup_order(order_id='1')", reward),),
+        trajectory=trajectory or (_step("lookup_order(order_id='1')", reward),),
         terminal_evaluation={},
         simulation_result={},
         final_reward=reward,
@@ -174,7 +181,16 @@ def _selection_action_fixture():
         candidates=(mem_a, mem_b),
         selected_ids=("mem-a",),
     )
-    success = _episode("success", reward=1.0)
+    success = _episode(
+        "success",
+        reward=1.0,
+        candidates=(mem_a, mem_b),
+        selected_ids=("mem-a",),
+        trajectory=(
+            _step("Ask the customer to authenticate.", 0.0, turn=0, done=False),
+            _step("lookup_order(order_id='1')", 1.0, turn=1),
+        ),
+    )
     scores = (
         _score(
             "mem-a", tier="tip", value=0.8, source_episode_ids=("failed", "success")
@@ -205,20 +221,24 @@ def test_selection_example_keeps_all_candidate_scores_and_online_contract() -> N
     )
     assert example.privileged_hindsight["candidate_scores"][0]["gamma"] == 0.5
     assert example.sampling_contract["mode"] == "online"
+    assert example.provenance["sample_unit"] == "task"
     assert "student_output" not in type(example).model_fields
     audit_example_boundaries(example)
 
 
-def test_action_example_removes_memory_and_uses_same_group_success() -> None:
+def test_action_example_is_one_task_level_sample_for_its_own_successful_trajectory() -> None:
     ledger, scores = _selection_action_fixture()
 
-    example = build_action_examples(
+    examples = build_action_examples(
         ledger,
         scores,
         score_threshold=0.01,
         teacher_memory_cap=20,
-    )[0]
+    )
 
+    assert len(examples) == 1
+    example = examples[0]
+    assert example.schema_version == 2
     public_text = json.dumps(example.public_input)
     assert "mem-a" not in public_text
     assert "Public guidance" not in public_text
@@ -229,6 +249,12 @@ def test_action_example_removes_memory_and_uses_same_group_success() -> None:
         example.provenance["task_group"]
     )
     assert example.privileged_hindsight["successful_trajectory"]["episode_id"] == "success"
+    assert len(example.privileged_hindsight["successful_trajectory"]["trajectory"]) == 2
+    assert example.provenance["episode_id"] == "success"
+    assert example.provenance["sample_unit"] == "task"
+    assert example.provenance["source_trajectory_step_count"] == 2
+    assert "turn" not in example.provenance
+    assert "solution" in example.response_schema["properties"]
     audit_example_boundaries(example)
 
 
@@ -292,6 +318,7 @@ def test_writing_example_uses_only_future_scored_committed_memories() -> None:
     assert rows[0]["payload"] == proposal_payload.model_dump(mode="json")
     assert "creator" not in rows[0]["source_episode_ids"]
     assert "mem-replay" not in json.dumps(example.privileged_hindsight)
+    assert example.provenance["sample_unit"] == "task"
     audit_example_boundaries(example)
 
 
@@ -374,6 +401,7 @@ def test_maintenance_example_keeps_usage_and_redundancy_privileged() -> None:
     assert len(example.privileged_hindsight["memory_diagnostics"]) <= 2
     assert example.privileged_hindsight["redundancy_pairs"][0]["left_memory_id"] == "mem-a"
     assert example.privileged_hindsight["redundancy_pairs"][0]["right_memory_id"] == "mem-b"
+    assert example.provenance["sample_unit"] == "maintenance_round"
     audit_example_boundaries(example)
 
 

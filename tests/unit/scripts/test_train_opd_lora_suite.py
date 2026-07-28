@@ -7,11 +7,15 @@ from typing import Any, Sequence
 
 from scripts import train_opd_lora_suite
 from tau3_retail_evolver.slow_loop.audit import AuditReport
+from tau3_retail_evolver.slow_loop.examples import (
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "default.yaml"
-COUNTS = {"sel": 198, "act": 1586, "write": 50, "maint": 7}
+COUNTS = {"sel": 198, "act": 96, "write": 50, "maint": 7}
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -24,6 +28,8 @@ def _write_dataset(root: Path) -> None:
         root / "dataset_manifest.json",
         {
             "dataset_build_id": "dataset-a",
+            "dataset_schema_version": OPD_DATASET_SCHEMA_VERSION,
+            "sample_unit_contract": OPD_SAMPLE_UNIT_CONTRACT,
             "policy_lineage": {
                 "model_revision": "model-a",
                 "adapter_revision": "zero-impact-init-v1",
@@ -88,14 +94,14 @@ def test_dry_run_reports_natural_four_lora_counts(
     ) == 0
 
     summary = json.loads(capsys.readouterr().out)
-    assert summary["training_order"] == ["maint", "write", "sel", "act"]
-    assert summary["total_examples"] == 5523
+    assert summary["training_order"] == ["maint", "write", "act", "sel"]
+    assert summary["total_examples"] == 1053
     assert {
         kind: summary["kinds"][kind]["total_examples"]
         for kind in COUNTS
     } == {
         "sel": 594,
-        "act": 4758,
+        "act": 288,
         "write": 150,
         "maint": 21,
     }
@@ -163,7 +169,7 @@ def test_suite_trains_four_independent_outputs(
 
     assert train_opd_lora_suite.main(_argv(dataset, output)) == 0
 
-    assert calls == ["maint", "write", "sel", "act"]
+    assert calls == ["maint", "write", "act", "sel"]
     suite = json.loads((output / "suite_manifest.json").read_text(encoding="utf-8"))
     assert suite["status"] == "complete"
     assert suite["adapter_bundle_revision"].startswith("opd-four-lora-")
@@ -173,7 +179,7 @@ def test_suite_trains_four_independent_outputs(
     )
     assert bundle["schema_version"] == 2
     assert bundle["status"] == "complete"
-    assert bundle["completed_examples"] == 5523
+    assert bundle["completed_examples"] == 1053
     assert set(bundle["adapter_checkpoints"]) == set(COUNTS)
     assert all(
         [

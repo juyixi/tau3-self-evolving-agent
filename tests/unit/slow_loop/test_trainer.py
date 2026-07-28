@@ -15,7 +15,11 @@ from torch import nn
 
 from tau3_retail_evolver.config import RolloutConfig, TrainingConfig
 from tau3_retail_evolver.slow_loop.alignment import render_public_prompt
-from tau3_retail_evolver.slow_loop.examples import OPDExample
+from tau3_retail_evolver.slow_loop.examples import (
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
+    OPDExample,
+)
 from tau3_retail_evolver.slow_loop.opd_step import OPDStepResult
 from tau3_retail_evolver.slow_loop import trainer as trainer_module
 from tau3_retail_evolver.slow_loop.trainer import OPDTrainer, TrainingRequest
@@ -231,8 +235,9 @@ def _write_dataset(
     (root / "dataset_manifest.json").write_text(
         json.dumps(
             {
-                "dataset_schema_version": 1,
+                "dataset_schema_version": OPD_DATASET_SCHEMA_VERSION,
                 "dataset_build_id": "dataset-a",
+                "sample_unit_contract": OPD_SAMPLE_UNIT_CONTRACT,
                 "policy_lineage": {
                     "model_revision": model_revision,
                     "adapter_revision": adapter_revision,

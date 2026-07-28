@@ -24,7 +24,11 @@ from tau3_retail_evolver.slow_loop.alignment import (
     build_aligned_batch,
     render_public_prompt,
 )
-from tau3_retail_evolver.slow_loop.examples import OPDExample
+from tau3_retail_evolver.slow_loop.examples import (
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
+    OPDExample,
+)
 from tau3_retail_evolver.slow_loop.opd_step import shared_policy_opd_step
 
 
@@ -97,6 +101,7 @@ class OPDTrainer:
         dataset_dir = Path(request.dataset_dir).resolve()
         output_dir = Path(request.output_dir).resolve()
         dataset_manifest = _read_json_object(dataset_dir / "dataset_manifest.json")
+        _validate_dataset_contract(dataset_manifest)
         source_lineage = _validate_source_lineage(dataset_manifest, request)
         if request.resume_from is None:
             _seed_training_rng(self.training_config.seed)
@@ -390,6 +395,18 @@ def _load_examples(dataset_dir: Path) -> dict[str, tuple[OPDExample, ...]]:
             raise ValueError(f"dataset kind mismatch in {path}")
         examples[kind] = rows
     return examples
+
+
+def _validate_dataset_contract(manifest: Mapping[str, Any]) -> None:
+    if manifest.get("dataset_schema_version") != OPD_DATASET_SCHEMA_VERSION:
+        raise ValueError(
+            f"OPD dataset schema version must be {OPD_DATASET_SCHEMA_VERSION}"
+        )
+    if manifest.get("sample_unit_contract") != OPD_SAMPLE_UNIT_CONTRACT:
+        raise ValueError(
+            "OPD dataset must use task-level sel/act/write and "
+            "maintenance-round maint samples"
+        )
 
 
 def _require_latest_published_checkpoint(checkpoint: Path) -> None:

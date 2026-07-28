@@ -23,6 +23,8 @@ from tau3_retail_evolver.slow_loop.evidence import (
 )
 from tau3_retail_evolver.slow_loop.examples import (
     ONLINE_SAMPLING_CONTRACT,
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
     OPDExample,
     audit_example_boundaries,
     build_action_examples,
@@ -74,8 +76,18 @@ def audit_dataset(path: Path, *, project_root: Path | None = None) -> AuditRepor
     if not isinstance(build_id, str) or not build_id:
         _error(errors, "manifest_invalid", "dataset_build_id is missing")
         build_id = None
-    if manifest.get("dataset_schema_version") != 1:
-        _error(errors, "manifest_invalid", "dataset schema version must be 1")
+    if manifest.get("dataset_schema_version") != OPD_DATASET_SCHEMA_VERSION:
+        _error(
+            errors,
+            "manifest_invalid",
+            f"dataset schema version must be {OPD_DATASET_SCHEMA_VERSION}",
+        )
+    if manifest.get("sample_unit_contract") != OPD_SAMPLE_UNIT_CONTRACT:
+        _error(
+            errors,
+            "sample_unit_contract_invalid",
+            "dataset must use task-level sel/act/write and maintenance-round maint samples",
+        )
 
     official = manifest.get("official_split")
     train_ids: set[str] = set()
@@ -628,6 +640,7 @@ def _audit_examples(
     errors: list[AuditError],
 ) -> None:
     seen: set[str] = set()
+    logical_keys: set[tuple[Any, ...]] = set()
     parsed_by_kind: dict[str, list[OPDExample]] = {
         kind: [] for kind in ("sel", "act", "write", "maint")
     }
@@ -667,7 +680,41 @@ def _audit_examples(
                 _error(errors, "example_provenance_invalid", example.example_id, relative)
             if maintenance_id is not None and maintenance_id not in maintenance:
                 _error(errors, "example_provenance_invalid", example.example_id, relative)
+            logical_key = _example_logical_key(
+                example,
+                episodes=episodes,
+                maintenance=maintenance,
+                errors=errors,
+                artifact=relative,
+            )
+            if logical_key is not None:
+                if logical_key in logical_keys:
+                    _error(
+                        errors,
+                        "duplicate_logical_sample",
+                        repr(logical_key),
+                        relative,
+                    )
+                logical_keys.add(logical_key)
             _audit_example_memory_refs(example, scores, errors, relative)
+
+    expected_act_episodes = {
+        episode.episode_id
+        for episode in episodes.values()
+        if episode.final_reward == 1.0 and episode.trajectory
+    }
+    actual_act_episodes = {
+        example.provenance.get("episode_id")
+        for example in parsed_by_kind["act"]
+        if isinstance(example.provenance.get("episode_id"), str)
+    }
+    if actual_act_episodes != expected_act_episodes:
+        _error(
+            errors,
+            "task_level_sample_coverage",
+            "act dataset must contain exactly one sample per successful episode",
+            "datasets/act.jsonl",
+        )
 
     _audit_recomputed_examples(
         parsed_by_kind,
@@ -677,6 +724,73 @@ def _audit_examples(
         manifest=manifest,
         errors=errors,
     )
+
+
+def _example_logical_key(
+    example: OPDExample,
+    *,
+    episodes: dict[str, EpisodeEvidence],
+    maintenance: dict[str, MaintenanceEvidence],
+    errors: list[AuditError],
+    artifact: str,
+) -> tuple[Any, ...] | None:
+    provenance = example.provenance
+    expected_unit = OPD_SAMPLE_UNIT_CONTRACT["units"][example.kind]
+    if provenance.get("sample_unit") != expected_unit:
+        _error(
+            errors,
+            "sample_unit_contract_invalid",
+            f"{example.example_id} must use sample_unit={expected_unit}",
+            artifact,
+        )
+        return None
+    if example.kind == "maint":
+        maintenance_id = provenance.get("maintenance_id")
+        item = maintenance.get(maintenance_id)
+        if item is None:
+            return None
+        if (
+            provenance.get("iteration") != item.iteration
+            or provenance.get("maintenance_round") != item.maintenance_round
+        ):
+            _error(
+                errors,
+                "example_provenance_invalid",
+                example.example_id,
+                artifact,
+            )
+            return None
+        return ("maint", item.iteration, item.maintenance_round)
+
+    episode_id = provenance.get("episode_id")
+    episode = episodes.get(episode_id)
+    if episode is None:
+        return None
+    if (
+        provenance.get("seed") != episode.seed
+        or provenance.get("task_id") != episode.task_id
+        or provenance.get("task_group") != episode.task_group
+    ):
+        _error(
+            errors,
+            "example_provenance_invalid",
+            example.example_id,
+            artifact,
+        )
+        return None
+    if example.kind == "act" and (
+        episode.final_reward != 1.0
+        or not episode.trajectory
+        or provenance.get("successful_trajectory_episode_id") != episode.episode_id
+        or provenance.get("source_trajectory_step_count") != len(episode.trajectory)
+    ):
+        _error(
+            errors,
+            "act_sample_not_task_level",
+            example.example_id,
+            artifact,
+        )
+    return (example.kind, episode.seed, episode.task_id)
 
 
 def _audit_recomputed_examples(

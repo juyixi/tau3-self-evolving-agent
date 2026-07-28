@@ -20,7 +20,11 @@ pytestmark = [
 
 
 def _write_one_example_dataset(root: Path, model_revision: str) -> None:
-    from tau3_retail_evolver.slow_loop.examples import OPDExample
+    from tau3_retail_evolver.slow_loop.examples import (
+        OPD_DATASET_SCHEMA_VERSION,
+        OPD_SAMPLE_UNIT_CONTRACT,
+        OPDExample,
+    )
 
     datasets = root / "datasets"
     datasets.mkdir(parents=True)
@@ -44,8 +48,9 @@ def _write_one_example_dataset(root: Path, model_revision: str) -> None:
         )
         paths[kind] = path
     manifest = {
-        "dataset_schema_version": 1,
+        "dataset_schema_version": OPD_DATASET_SCHEMA_VERSION,
         "dataset_build_id": "gpu-smoke-dataset",
+        "sample_unit_contract": OPD_SAMPLE_UNIT_CONTRACT,
         "policy_lineage": {
             "model_revision": model_revision,
             "adapter_revision": "gpu-smoke-parent",

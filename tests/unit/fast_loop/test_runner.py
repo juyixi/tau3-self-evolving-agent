@@ -360,6 +360,9 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
         "MemoryWriteProposed",
         "MemoryWriteCommitted",
     ]
+    assert events.events[0]["task_instruction"] == (
+        "Help the customer complete a refund"
+    )
     candidates = events.events[1]["candidates"]
     selected = events.events[2]["selected"]
     assert {item["memory_id"] for item in selected} <= {

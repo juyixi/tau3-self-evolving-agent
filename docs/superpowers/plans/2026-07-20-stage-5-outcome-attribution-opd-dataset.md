@@ -698,7 +698,7 @@ Expected: import failure for `slow_loop.examples`.
 ```python
 class OPDExample(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     example_id: str
     kind: Literal["sel", "act", "write", "maint"]
     public_input: dict[str, Any]
@@ -708,7 +708,14 @@ class OPDExample(BaseModel):
     provenance: dict[str, Any]
 ```
 
-Use canonical hashes for example IDs. Build `sel` per episode, `act` per turn, `write` per episode with future-qualified committed writes, and `maint` per committed round. Choose successful trajectories by current-success preference, then reward descending, steps ascending, and episode ID. Compute redundancy only for same-revision, same-dimension embeddings; select deterministic high/low value, high-usage, and redundancy endpoint buckets under the cap.
+Use canonical hashes for example IDs. Build `sel` at most once per task, `act`
+exactly once per successful task with a nonempty complete trajectory, `write` at
+most once per task with future-qualified committed writes, and `maint` once per
+committed round. The schema-2 correction explicitly forbids expanding an `act`
+trajectory into per-turn samples or pairing a task with another task's successful
+trajectory. Compute redundancy only for same-revision, same-dimension embeddings;
+select deterministic high/low value, high-usage, and redundancy endpoint buckets
+under the cap.
 
 - [x] **Step 8: Run leakage, example, attribution, and config tests**
 

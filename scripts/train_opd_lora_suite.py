@@ -16,6 +16,10 @@ import uuid
 from tau3_retail_evolver.config import load_config
 from tau3_retail_evolver.pipeline.sampling import OPD_KINDS
 from tau3_retail_evolver.slow_loop.audit import audit_dataset
+from tau3_retail_evolver.slow_loop.examples import (
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
+)
 
 
 _SCHEMA_VERSION = 1
@@ -41,6 +45,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     dataset_dir = Path(args.dataset_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
     dataset_manifest = _read_json(dataset_dir / "dataset_manifest.json")
+    if dataset_manifest.get("dataset_schema_version") != OPD_DATASET_SCHEMA_VERSION:
+        raise ValueError(
+            f"OPD dataset schema version must be {OPD_DATASET_SCHEMA_VERSION}"
+        )
+    if dataset_manifest.get("sample_unit_contract") != OPD_SAMPLE_UNIT_CONTRACT:
+        raise ValueError(
+            "four-LoRA training requires task-level sel/act/write datasets"
+        )
     audit = audit_dataset(dataset_dir)
     if not audit.passed:
         detail = ", ".join(f"{item.code}: {item.message}" for item in audit.errors)
@@ -70,6 +82,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "schema_version": _SCHEMA_VERSION,
         "status": "in_progress",
         "dataset_build_id": dataset_manifest.get("dataset_build_id"),
+        "dataset_schema_version": OPD_DATASET_SCHEMA_VERSION,
+        "sample_unit_contract": OPD_SAMPLE_UNIT_CONTRACT,
         "source_lineage": expected_lineage,
         "num_train_epochs": config.training.num_train_epochs,
         "training_order": list(order),
@@ -155,6 +169,8 @@ def _load_or_initialize_suite(
     for field in (
         "schema_version",
         "dataset_build_id",
+        "dataset_schema_version",
+        "sample_unit_contract",
         "source_lineage",
         "num_train_epochs",
         "training_order",
@@ -307,6 +323,8 @@ def _publish_bundle_manifest(
         "schema_version": 2,
         "status": "complete",
         "dataset_build_id": suite.get("dataset_build_id"),
+        "dataset_schema_version": suite.get("dataset_schema_version"),
+        "sample_unit_contract": suite.get("sample_unit_contract"),
         "source_lineage": suite.get("source_lineage"),
         "adapter_revision": bundle_revision,
         "adapter_bundle_revision": bundle_revision,

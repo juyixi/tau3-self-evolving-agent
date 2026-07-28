@@ -27,6 +27,8 @@ from tau3_retail_evolver.slow_loop.evidence import (
     TrajectoryStepEvidence,
 )
 from tau3_retail_evolver.slow_loop.examples import (
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
     build_action_examples,
     build_maintenance_examples,
     build_selection_examples,
@@ -200,6 +202,9 @@ def test_dataset_build_writes_canonical_files_and_manifest_hashes(
         for kind in ("sel", "act", "write", "maint")
     )
     manifest = json.loads((root / "dataset_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["dataset_schema_version"] == OPD_DATASET_SCHEMA_VERSION
+    assert manifest["sample_unit_contract"] == OPD_SAMPLE_UNIT_CONTRACT
+    assert manifest["counts"]["act"] == 1
     for relative_path, artifact in manifest["artifacts"].items():
         assert _sha256(root / relative_path) == artifact["sha256"]
         assert len((root / relative_path).read_text(encoding="utf-8").splitlines()) == artifact["line_count"]

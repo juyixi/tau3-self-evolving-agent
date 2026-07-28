@@ -12,6 +12,10 @@ import pytest
 
 from scripts import train_opd_lora
 from tau3_retail_evolver.slow_loop.audit import AuditError, AuditReport
+from tau3_retail_evolver.slow_loop.examples import (
+    OPD_DATASET_SCHEMA_VERSION,
+    OPD_SAMPLE_UNIT_CONTRACT,
+)
 from tau3_retail_evolver.slow_loop.trainer import TrainingRequest
 
 
@@ -52,7 +56,8 @@ def _write_dataset_manifest(
         json.dumps(
             {
                 "dataset_build_id": "dataset-a",
-                "dataset_schema_version": 1,
+                "dataset_schema_version": OPD_DATASET_SCHEMA_VERSION,
+                "sample_unit_contract": OPD_SAMPLE_UNIT_CONTRACT,
                 "policy_lineage": {
                     "model_revision": model_revision,
                     "adapter_revision": adapter_revision,
