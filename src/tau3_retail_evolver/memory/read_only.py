@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -22,9 +23,11 @@ class ReadOnlyMemoryRepository:
         self.root = snapshot_path
         self.memory_snapshot_id = self._verify_snapshot(snapshot_path)
         self._repository = MemoryRepository(snapshot_path)
+        self._items = tuple(self._repository.list(status=None))
+        self._items_by_id = {item.id: item for item in self._items}
 
     def get(self, memory_id: str) -> MemoryItem | None:
-        return self._repository.get(memory_id)
+        return self._items_by_id.get(memory_id)
 
     def list(
         self,
@@ -32,10 +35,16 @@ class ReadOnlyMemoryRepository:
         tier: MemoryTier | str | None = None,
         status: MemoryStatus | None = MemoryStatus.ACTIVE,
     ) -> list[MemoryItem]:
-        return self._repository.list(tier=tier, status=status)
+        memory_tier = MemoryTier(tier) if tier is not None else None
+        return [
+            item
+            for item in self._items
+            if (memory_tier is None or item.tier == memory_tier)
+            and (status is None or item.status == status)
+        ]
 
     def read_transaction(self):
-        return self._repository.read_transaction()
+        return nullcontext()
 
     def add(self, **_kwargs: Any) -> None:
         self._deny_write()
