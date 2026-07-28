@@ -23,7 +23,13 @@ def test_canonicalizer_deduplicates_fragments_and_preserves_failed_task_markers(
         seed=42,
         task_ids=["1", "2"],
         events=[
-            *_episode("run-a", seed=42, task_id="1", snapshot="s0", reward=1.0),
+            *_episode_with_duplicate_safe_replay(
+                "run-a",
+                seed=42,
+                task_id="1",
+                snapshot="s0",
+                reward=1.0,
+            ),
             *_failed_episode("run-a", seed=42, task_id="2", snapshot="s0"),
         ],
         manifest_snapshot="s0",
@@ -105,6 +111,16 @@ def test_canonicalizer_deduplicates_fragments_and_preserves_failed_task_markers(
     }
     assert result.index["validation"]["logical_keys_unique"] is True
     assert result.index["validation"]["test_leakage_detected"] is False
+    assert result.index["normalization"][
+        "duplicate_memory_write_group_count"
+    ] == 1
+    assert result.index["normalization"]["removed_proposal_count"] == 1
+    normalization = result.index["normalization"]["entries"][0]
+    assert normalization["memory_id"] == "mem_tip_duplicate"
+    assert normalization["differing_non_identity_fields"] == [
+        "metadata",
+        "retrieval_text",
+    ]
     assert [path.name for path in result.source_run_paths] == [
         "run-a",
         "run-a-retry",
@@ -140,6 +156,25 @@ def test_canonicalizer_deduplicates_fragments_and_preserves_failed_task_markers(
     assert maintenance_started["completed_train_tasks"] == 2
     assert maintenance_started["period"] == 2
     assert maintenance_started["run_id"] == "run-a-retry"
+
+    run_a_events = _read_jsonl(
+        result.root / "run-a" / "rollouts" / "events.jsonl"
+    )
+    proposed = next(
+        event
+        for event in run_a_events
+        if event["event_type"] == "MemoryWriteProposed"
+    )
+    committed = next(
+        event
+        for event in run_a_events
+        if event["event_type"] == "MemoryWriteCommitted"
+    )
+    assert [item["memory_id"] for item in proposed["proposals"]] == [
+        "mem_tip_duplicate"
+    ]
+    assert committed["written_memory_ids"] == ["mem_tip_duplicate"]
+    assert committed["replayed_memory_ids"] == []
 
     failed_event = _read_jsonl(
         result.root / "run-b" / "rollouts" / "events.jsonl"
@@ -261,6 +296,50 @@ def _failed_episode(
             "error": "tokenizer unavailable",
         },
     ]
+
+
+def _episode_with_duplicate_safe_replay(
+    run_id: str,
+    *,
+    seed: int,
+    task_id: str,
+    snapshot: str,
+    reward: float,
+) -> list[dict[str, Any]]:
+    events = _episode(
+        run_id,
+        seed=seed,
+        task_id=task_id,
+        snapshot=snapshot,
+        reward=reward,
+    )
+    identity = {
+        "memory_id": "mem_tip_duplicate",
+        "tier": "tip",
+        "tier_schema_version": 1,
+        "payload": {"rule": "authenticate before account changes"},
+        "content": "Authenticate before account changes.",
+        "source_task_ids": [task_id],
+        "created_round": 0,
+    }
+    events[-2]["proposals"] = [
+        {
+            **identity,
+            "retrieval_text": "authentication rule",
+            "metadata": {"source": "first"},
+        },
+        {
+            **identity,
+            "retrieval_text": "account authentication",
+            "metadata": {"source": "duplicate"},
+        },
+    ]
+    events[-1]["written_memory_ids"] = [
+        "mem_tip_duplicate",
+        "mem_tip_duplicate",
+    ]
+    events[-1]["replayed_memory_ids"] = ["mem_tip_duplicate"]
+    return events
 
 
 def _task_failed(

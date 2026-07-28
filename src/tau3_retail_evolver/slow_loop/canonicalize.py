@@ -35,6 +35,15 @@ _MAINTENANCE_LIFECYCLE = (
     "MaintenanceProposed",
     "MaintenanceCommitted",
 )
+_SAFE_REPLAY_FIELDS = (
+    "memory_id",
+    "tier",
+    "tier_schema_version",
+    "payload",
+    "content",
+    "source_task_ids",
+    "created_round",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -868,11 +877,12 @@ def _write_canonical_runs(
         for local_index, candidate in enumerate(plan.selected, start=1):
             start_line = len(events) + 1
             if candidate.outcome == "complete":
-                block = [_json_copy(event) for event in candidate.rows]
+                block, event_normalizations = _normalize_episode(candidate)
                 final_reward = float(block[-3]["final_reward"])
                 terminal_type = "EpisodeFinished"
             else:
                 block = [_failure_marker(candidate)]
+                event_normalizations = ()
                 final_reward = 0.0
                 terminal_type = "TaskFailed"
             events.extend(block)
@@ -900,6 +910,7 @@ def _write_canonical_runs(
                     "canonical_event_end": end_line,
                     "canonical_event_sha256": _event_block_hash(block),
                     "reason": candidate.reason,
+                    "event_normalizations": _json_copy(event_normalizations),
                 }
             )
             for maintenance in plan.maintenance_after.get(local_index, ()):
@@ -1004,6 +1015,116 @@ def _write_canonical_runs(
     return tuple(run_rows), tuple(provenance)
 
 
+def _normalize_episode(
+    candidate: _TaskCandidate,
+) -> tuple[list[dict[str, Any]], tuple[dict[str, Any], ...]]:
+    events = [_json_copy(event) for event in candidate.rows]
+    proposed = events[-2]
+    committed = events[-1]
+    proposals = proposed.get("proposals")
+    written_ids = committed.get("written_memory_ids")
+    replayed_ids = committed.get("replayed_memory_ids")
+    if (
+        not isinstance(proposals, list)
+        or not isinstance(written_ids, list)
+        or not isinstance(replayed_ids, list)
+        or not all(isinstance(item, dict) for item in proposals)
+    ):
+        return events, ()
+
+    proposal_ids = [item.get("memory_id") for item in proposals]
+    if not all(isinstance(memory_id, str) and memory_id for memory_id in proposal_ids):
+        return events, ()
+    if not all(isinstance(memory_id, str) and memory_id for memory_id in written_ids):
+        return events, ()
+    if not all(isinstance(memory_id, str) and memory_id for memory_id in replayed_ids):
+        return events, ()
+    if written_ids != proposal_ids:
+        raise ValueError(
+            f"source write proposal/commit mismatch for task {candidate.task_id}"
+        )
+
+    proposal_counts: dict[str, int] = defaultdict(int)
+    replay_counts: dict[str, int] = defaultdict(int)
+    for memory_id in proposal_ids:
+        proposal_counts[memory_id] += 1
+    for memory_id in replayed_ids:
+        replay_counts[memory_id] += 1
+    if not set(replay_counts) <= set(proposal_counts):
+        raise ValueError(
+            f"source replay references an unknown proposal for task {candidate.task_id}"
+        )
+
+    retained: dict[str, dict[str, Any]] = {}
+    normalized_proposals: list[dict[str, Any]] = []
+    dropped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for proposal in proposals:
+        memory_id = proposal["memory_id"]
+        first = retained.get(memory_id)
+        if first is None:
+            retained[memory_id] = proposal
+            normalized_proposals.append(proposal)
+            continue
+        if any(first.get(field) != proposal.get(field) for field in _SAFE_REPLAY_FIELDS):
+            raise ValueError(
+                f"conflicting duplicate write proposal for task "
+                f"{candidate.task_id}: {memory_id}"
+            )
+        dropped[memory_id].append(proposal)
+
+    if not dropped:
+        return events, ()
+
+    normalized_replayed: list[str] = []
+    normalizations: list[dict[str, Any]] = []
+    for proposal in normalized_proposals:
+        memory_id = proposal["memory_id"]
+        source_count = proposal_counts[memory_id]
+        replay_count = replay_counts.get(memory_id, 0)
+        if replay_count == source_count:
+            normalized_replayed.append(memory_id)
+        elif replay_count != source_count - 1:
+            raise ValueError(
+                f"ambiguous duplicate replay history for task "
+                f"{candidate.task_id}: {memory_id}"
+            )
+        if memory_id not in dropped:
+            continue
+        variants = dropped[memory_id]
+        differing_fields = sorted(
+            {
+                field
+                for variant in variants
+                for field in set(proposal) | set(variant)
+                if proposal.get(field) != variant.get(field)
+            }
+        )
+        normalizations.append(
+            {
+                "policy": "runtime_safe_replay_keep_first",
+                "memory_id": memory_id,
+                "source_proposal_count": source_count,
+                "canonical_proposal_count": 1,
+                "source_replayed_count": replay_count,
+                "canonical_replayed_count": int(replay_count == source_count),
+                "retained_proposal_sha256": _event_block_hash((proposal,)),
+                "dropped_proposal_sha256": [
+                    _event_block_hash((variant,)) for variant in variants
+                ],
+                "differing_non_identity_fields": differing_fields,
+                "source_proposal_event_line": candidate.end_line - 1,
+                "source_commit_event_line": candidate.end_line,
+            }
+        )
+
+    proposed["proposals"] = normalized_proposals
+    committed["written_memory_ids"] = [
+        proposal["memory_id"] for proposal in normalized_proposals
+    ]
+    committed["replayed_memory_ids"] = normalized_replayed
+    return events, tuple(normalizations)
+
+
 def _failure_marker(candidate: _TaskCandidate) -> dict[str, Any]:
     source_event = candidate.rows[-1]
     snapshot_id = _candidate_snapshot(candidate)
@@ -1077,6 +1198,11 @@ def _build_index(
         count > 1
         for count in _logical_candidate_counts(candidate_rows).values()
     )
+    normalizations = [
+        normalization
+        for row in provenance
+        for normalization in row.get("event_normalizations", ())
+    ]
     source_rows = [
         {
             "run_id": source.run_id,
@@ -1105,6 +1231,7 @@ def _build_index(
             "duplicate_policy": "first_complete_by_declared_source_priority",
             "failed_tasks_are_training_examples": False,
             "maintenance_policy": "first_complete_by_round",
+            "duplicate_memory_write_policy": "runtime_safe_replay_keep_first",
             "canonical_task_group": RETAIL_TASK_GROUP,
         },
         "expected": {
@@ -1134,6 +1261,14 @@ def _build_index(
         "task_candidates": _json_copy(candidate_rows),
         "maintenance_candidates": _json_copy(maintenance_rows),
         "provenance": _json_copy(provenance),
+        "normalization": {
+            "duplicate_memory_write_group_count": len(normalizations),
+            "removed_proposal_count": sum(
+                normalization["source_proposal_count"] - 1
+                for normalization in normalizations
+            ),
+            "entries": _json_copy(normalizations),
+        },
         "validation": {
             "source_split": "train",
             "test_leakage_detected": False,
