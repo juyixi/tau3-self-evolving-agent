@@ -45,6 +45,19 @@ def test_action_public_input_rejects_memory_even_under_alias(
 
 
 @pytest.mark.parametrize(
+    "text",
+    [
+        "The pet bed uses memory foam.",
+        "Based on the memories and policy guidance, confirm before writing.",
+    ],
+)
+def test_action_public_input_allows_business_or_conversation_memory_words(
+    text: str,
+) -> None:
+    audit_public_input("act", {"history": [{"next_observation": text}]})
+
+
+@pytest.mark.parametrize(
     "value",
     [
         "history/evaluations/run-a",

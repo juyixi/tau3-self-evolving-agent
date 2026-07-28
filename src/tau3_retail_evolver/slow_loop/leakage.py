@@ -61,8 +61,9 @@ _PRIVILEGED_KEY_MARKERS = (
     "redundancy",
 )
 
-_ACTION_MEMORY_VALUE = re.compile(
-    r"(?:^|[^a-z0-9])(?:memory|memories|mem[-_][a-z0-9]+)(?:$|[^a-z0-9])",
+_ACTION_MEMORY_ID_VALUE = re.compile(
+    r"(?:^|[^a-z0-9])mem[-_](?:trajectory|tip|skill|tool)[-_][a-z0-9]{6,}"
+    r"(?:$|[^a-z0-9])",
     re.IGNORECASE,
 )
 
@@ -137,7 +138,11 @@ def _walk_public(kind: ExampleKind, value: Any, *, path: str) -> None:
             _walk_public(kind, nested, path=f"{path}[{index}]")
         return
     _walk_artifact(value, path=path)
-    if kind == "act" and isinstance(value, str) and _ACTION_MEMORY_VALUE.search(value):
+    if (
+        kind == "act"
+        and isinstance(value, str)
+        and _ACTION_MEMORY_ID_VALUE.search(value)
+    ):
         raise ValueError(f"action public input contains memory at {path}")
 
 
