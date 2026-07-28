@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -128,6 +130,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             completed = _completed_kind(kind_output, kind=kind)
             if completed is None:
                 raise RuntimeError(f"{kind} LoRA training did not publish completion")
+        _prune_completed_kind_checkpoints(kind_output)
+        completed["retained_checkpoints"] = 1
         suite["kinds"][kind] = completed
         _write_json_atomic(suite_path, suite)
 
@@ -207,6 +211,25 @@ def _latest_checkpoint(output_dir: Path) -> Path | None:
     if not published:
         return None
     return max(published, key=lambda path: int(path.name.removeprefix("step-")))
+
+
+def _prune_completed_kind_checkpoints(output_dir: Path) -> None:
+    manifest = _read_json(output_dir / "training_manifest.json")
+    if manifest.get("status") != "complete":
+        raise ValueError("checkpoint pruning requires completed child training")
+    relative = manifest.get("latest_checkpoint")
+    if not isinstance(relative, str) or not relative:
+        raise ValueError("completed child training has no latest checkpoint")
+    latest = (output_dir / relative).resolve()
+    checkpoints = output_dir / "checkpoints"
+    for child in checkpoints.iterdir():
+        if (
+            child.resolve() != latest
+            and child.is_dir()
+            and re.fullmatch(r"step-\d{8}", child.name)
+            and (child / "checkpoint_manifest.json").is_file()
+        ):
+            shutil.rmtree(child)
 
 
 def _kind_count(manifest: Mapping[str, Any], kind: str) -> int:

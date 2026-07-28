@@ -61,8 +61,9 @@ Stage 8 Iteration 0 数据量为：
 ```
 
 每个子目录独立记录 `opd_kind`、自然调度 fingerprint、generation、forward KL、
-optimizer、RNG 和最近两个完整 checkpoint。中断恢复只能从同一 kind 的最新完整
-checkpoint 继续，不能使用旧的四类混合 checkpoint。
+optimizer 和 RNG。正在训练的能力保留最近两个完整 checkpoint 供中断恢复；该能力
+训练完成后只保留最终 checkpoint，避免四组 optimizer 状态耗尽 AutoDL 训练盘。
+恢复只能从同一 kind 的最新完整 checkpoint 继续，不能使用旧的四类混合 checkpoint。
 
 标准入口为：
 

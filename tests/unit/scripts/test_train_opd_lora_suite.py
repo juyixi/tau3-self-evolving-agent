@@ -121,6 +121,13 @@ def test_suite_trains_four_independent_outputs(
         calls.append(kind)
         kind_output = Path(_value(command, "--output-dir"))
         checkpoint = kind_output / "checkpoints" / "step-00000001"
+        _write_json(
+            kind_output
+            / "checkpoints"
+            / "step-00000000"
+            / "checkpoint_manifest.json",
+            {"status": "checkpoint"},
+        )
         adapter = checkpoint / "adapter"
         _write_json(adapter / "adapter_config.json", {"r": 32})
         (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
@@ -168,3 +175,12 @@ def test_suite_trains_four_independent_outputs(
     assert bundle["status"] == "complete"
     assert bundle["completed_examples"] == 5523
     assert set(bundle["adapter_checkpoints"]) == set(COUNTS)
+    assert all(
+        [
+            child.name
+            for child in (output / kind / "checkpoints").iterdir()
+            if child.is_dir()
+        ]
+        == ["step-00000001"]
+        for kind in COUNTS
+    )
