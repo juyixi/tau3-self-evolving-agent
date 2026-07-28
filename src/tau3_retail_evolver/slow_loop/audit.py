@@ -470,7 +470,11 @@ def _audit_evidence(
         for source in manifest.get("source_runs", [])
         if isinstance(source, dict)
     }
-    if {episode.run_id for episode in episodes.values()} != source_run_ids:
+    evidence_run_ids = {
+        *(episode.run_id for episode in episodes.values()),
+        *(item.run_id for item in maintenance.values()),
+    }
+    if not evidence_run_ids <= source_run_ids:
         _error(errors, "evidence_lineage_mismatch", "evidence run set differs from source runs")
     memory = manifest.get("memory")
     memory = memory if isinstance(memory, dict) else {}

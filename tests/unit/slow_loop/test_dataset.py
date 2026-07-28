@@ -221,7 +221,7 @@ def test_auditor_accepts_declared_intermediate_maintenance_snapshot() -> None:
     episode = _episode(task_id="1", selected=True, reward=1.0)
     maintenance = MaintenanceEvidence(
         maintenance_id="run-a:maintenance:1",
-        run_id="run-a",
+        run_id="run-maintenance",
         source_event_start=9,
         source_event_end=11,
         source_event_sha256="m" * 64,
@@ -246,7 +246,11 @@ def test_auditor_accepts_declared_intermediate_maintenance_snapshot() -> None:
             "tau2_commit": "c" * 40,
         },
         "official_split": {"sha256": OFFICIAL_SPLIT_SHA256},
-        "source_runs": [{"run_id": "run-a"}],
+        "source_runs": [
+            {"run_id": "run-a"},
+            {"run_id": "run-maintenance"},
+            {"run_id": "run-failures-only"},
+        ],
         "memory": {
             "snapshot_chain": ["snapshot-a", "snapshot-b"],
             "maintenance_snapshot_ids": ["snapshot-maintenance"],
