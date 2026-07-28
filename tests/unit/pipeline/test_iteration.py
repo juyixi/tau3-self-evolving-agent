@@ -145,6 +145,63 @@ class FakeExecutor:
         )
 
 
+class FourLoraFakeExecutor(FakeExecutor):
+    def train(self, request: IterationRequest, record: dict[str, Any]) -> StageResult:
+        self._enter("train")
+        root = request.iteration_dir / "artifacts" / "training"
+        checkpoints: dict[str, str] = {}
+        revisions: dict[str, str] = {}
+        for kind in ("sel", "act", "write", "maint"):
+            checkpoint = root / kind / "checkpoints" / "step-00000001"
+            adapter = checkpoint / "adapter"
+            adapter.mkdir(parents=True, exist_ok=True)
+            _write_json(adapter / "adapter_config.json", {"r": 32, "lora_alpha": 64})
+            (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+            revision = f"opd-{kind}-step-00000001"
+            relative = checkpoint.relative_to(root).as_posix()
+            checkpoints[kind] = relative
+            revisions[kind] = revision
+            _write_json(
+                checkpoint / "checkpoint_manifest.json",
+                {
+                    "adapter_path": "adapter",
+                    "adapter_revision": revision,
+                    "dataset_build_id": f"{request.iteration_id}-dataset",
+                    "opd_kind": kind,
+                    "source_lineage": {
+                        "model_revision": request.model_revision,
+                        "adapter_revision": request.adapter_revision,
+                    },
+                    "status": "checkpoint",
+                },
+            )
+        bundle_revision = "opd-four-lora-test"
+        _write_json(
+            root / "training_manifest.json",
+            {
+                "schema_version": 2,
+                "adapter_revision": bundle_revision,
+                "adapter_bundle_revision": bundle_revision,
+                "adapter_checkpoints": checkpoints,
+                "adapter_revisions": revisions,
+                "dataset_build_id": f"{request.iteration_id}-dataset",
+                "source_lineage": {
+                    "model_revision": request.model_revision,
+                    "adapter_revision": request.adapter_revision,
+                },
+                "status": "complete",
+            },
+        )
+        return StageResult(
+            artifacts={"training": root},
+            metadata={
+                "adapter_checkpoints": checkpoints,
+                "child_adapter_revision": bundle_revision,
+                "latest_checkpoint": str(root),
+            },
+        )
+
+
 def _request(tmp_path: Path, **changes: Any) -> IterationRequest:
     snapshots = tmp_path / "history" / "snapshots"
     _write_snapshot(snapshots, "memory-0")
@@ -216,6 +273,17 @@ def test_iteration_runs_stages_in_order_and_promotes_complete_lineage(tmp_path: 
         for stage in record["stages"].values()
         for artifact in stage["artifacts"].values()
     )
+
+
+def test_iteration_promotes_four_lora_bundle(tmp_path: Path) -> None:
+    result = run_iteration(_request(tmp_path), FourLoraFakeExecutor())
+
+    assert result.state is IterationState.PROMOTED
+    child = result.promotion_manifest["child"]
+    assert child["adapter_revision"] == "opd-four-lora-test"
+    assert Path(child["checkpoint"]).name == "training"
+    assert set(child["adapter_checkpoints"]) == {"sel", "act", "write", "maint"}
+    assert all(Path(path).is_dir() for path in child["adapter_checkpoints"].values())
 
 
 def test_iteration_can_pause_after_dataset_and_resume_for_single_gpu_training(

@@ -85,6 +85,39 @@ def balanced_kind_schedule(
     )
 
 
+def natural_kind_schedule(
+    kind_count: int,
+    *,
+    kind: str,
+    num_epochs: int,
+    seed: int,
+) -> tuple[KindSample, ...]:
+    """Visit each example of one OPD kind exactly once per epoch."""
+    if kind not in OPD_KINDS:
+        raise ValueError(f"unknown OPD kind: {kind}")
+    if type(kind_count) is not int or kind_count < 0:
+        raise ValueError("kind count must be a non-negative integer")
+    if num_epochs < 1:
+        raise ValueError("num_epochs must be positive")
+    if type(seed) is not int:
+        raise ValueError("seed must be an integer")
+
+    schedule: list[KindSample] = []
+    for epoch in range(num_epochs):
+        indexes = list(range(kind_count))
+        random.Random(f"{seed}:{epoch}:{kind}:opd-natural-v1").shuffle(indexes)
+        schedule.extend(
+            KindSample(
+                epoch=epoch,
+                round_index=round_index,
+                kind=kind,
+                index=index,
+            )
+            for round_index, index in enumerate(indexes)
+        )
+    return tuple(schedule)
+
+
 def assert_train_only_artifacts(
     root: Path,
     *,

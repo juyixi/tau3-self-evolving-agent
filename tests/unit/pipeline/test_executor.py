@@ -55,32 +55,43 @@ class FakeCommandRunner:
             return {"dataset_build_id": "dataset", "dataset_dir": str(root)}
         if module == "scripts.audit_opd_dataset":
             return {"passed": True, "errors": []}
-        if module == "scripts.train_opd_lora":
+        if module == "scripts.train_opd_lora_suite":
             root = Path(_value(command, "--output-dir"))
-            checkpoint = root / "checkpoints" / "step-00000001"
-            adapter = checkpoint / "adapter"
-            adapter.mkdir(parents=True, exist_ok=True)
-            _write_json(adapter / "adapter_config.json", {"r": 32})
-            (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
-            _write_json(
-                checkpoint / "checkpoint_manifest.json",
-                {
-                    "adapter_path": "adapter",
-                    "adapter_revision": "adapter-b",
-                    "dataset_build_id": "dataset",
-                    "source_lineage": {
-                        "model_revision": "model-a",
-                        "adapter_revision": "adapter-a",
+            checkpoints = {}
+            revisions = {}
+            for kind in ("sel", "act", "write", "maint"):
+                checkpoint = root / kind / "checkpoints" / "step-00000001"
+                adapter = checkpoint / "adapter"
+                adapter.mkdir(parents=True, exist_ok=True)
+                _write_json(adapter / "adapter_config.json", {"r": 32})
+                (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+                revision = f"adapter-{kind}"
+                relative = checkpoint.relative_to(root).as_posix()
+                checkpoints[kind] = relative
+                revisions[kind] = revision
+                _write_json(
+                    checkpoint / "checkpoint_manifest.json",
+                    {
+                        "adapter_path": "adapter",
+                        "adapter_revision": revision,
+                        "dataset_build_id": "dataset",
+                        "opd_kind": kind,
+                        "source_lineage": {
+                            "model_revision": "model-a",
+                            "adapter_revision": "adapter-a",
+                        },
+                        "status": "checkpoint",
                     },
-                    "status": "checkpoint",
-                },
-            )
+                )
             _write_json(
                 root / "training_manifest.json",
                 {
-                    "adapter_revision": "adapter-b",
+                    "schema_version": 2,
+                    "adapter_revision": "adapter-bundle",
+                    "adapter_bundle_revision": "adapter-bundle",
+                    "adapter_checkpoints": checkpoints,
+                    "adapter_revisions": revisions,
                     "dataset_build_id": "dataset",
-                    "latest_checkpoint": "checkpoints/step-00000001",
                     "source_lineage": {
                         "model_revision": "model-a",
                         "adapter_revision": "adapter-a",
@@ -88,7 +99,7 @@ class FakeCommandRunner:
                     "status": "complete",
                 },
             )
-            return {"latest_checkpoint": str(checkpoint), "status": "complete"}
+            return {"adapter_bundle_revision": "adapter-bundle", "status": "complete"}
         raise AssertionError(f"unexpected module: {module}")
 
 
@@ -143,7 +154,7 @@ def test_command_executor_maps_each_stage_to_existing_cli(tmp_path: Path) -> Non
         "scripts.run_fast_loop",
         "scripts.build_opd_dataset",
         "scripts.audit_opd_dataset",
-        "scripts.train_opd_lora",
+        "scripts.train_opd_lora_suite",
     ]
     rollout_command = runner.commands[0]
     assert [
@@ -155,7 +166,13 @@ def test_command_executor_maps_each_stage_to_existing_cli(tmp_path: Path) -> Non
     assert rollout_again.metadata == rollout.metadata
     assert dataset.metadata["dataset_build_id"] == "dataset"
     assert audit.metadata["passed"] is True
-    assert training.metadata["child_adapter_revision"] == "adapter-b"
+    assert training.metadata["child_adapter_revision"] == "adapter-bundle"
+    assert set(training.metadata["adapter_checkpoints"]) == {
+        "sel",
+        "act",
+        "write",
+        "maint",
+    }
 
 
 def test_rollout_failure_and_retry_restore_input_memory_snapshot(

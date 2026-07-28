@@ -18,7 +18,7 @@ from torch import Tensor, nn
 from tau3_retail_evolver.config import RolloutConfig, TrainingConfig
 from tau3_retail_evolver.io.jsonl import JsonlWriter, iter_jsonl_objects
 from tau3_retail_evolver.models.lora import save_adapter_checkpoint
-from tau3_retail_evolver.pipeline.sampling import balanced_kind_schedule
+from tau3_retail_evolver.pipeline.sampling import OPD_KINDS, natural_kind_schedule
 from tau3_retail_evolver.slow_loop.alignment import (
     AlignedOPDBatch,
     build_aligned_batch,
@@ -28,7 +28,7 @@ from tau3_retail_evolver.slow_loop.examples import OPDExample
 from tau3_retail_evolver.slow_loop.opd_step import shared_policy_opd_step
 
 
-_KINDS = ("sel", "act", "write", "maint")
+_KINDS = OPD_KINDS
 _MANIFEST_SCHEMA_VERSION = 1
 _MAX_PUBLISHED_CHECKPOINTS = 2
 CheckpointSaver = Callable[[Any, Path], Path]
@@ -41,6 +41,7 @@ class TrainingRequest:
     output_dir: Path
     model_revision: str
     adapter_revision: str | None
+    kind: str
     resume_from: Path | None = None
     loaded_adapter_path: Path | None = None
 
@@ -62,7 +63,7 @@ class _ScheduledExample:
 
 
 class OPDTrainer:
-    """Train the current shared LoRA policy from an online Stage 5 OPD dataset."""
+    """Train one capability LoRA with a shared teacher/student policy."""
 
     def __init__(
         self,
@@ -91,6 +92,7 @@ class OPDTrainer:
         _validate_revision(request.model_revision, "model_revision")
         if request.adapter_revision is not None:
             _validate_revision(request.adapter_revision, "adapter_revision")
+        _validate_kind(request.kind)
 
         dataset_dir = Path(request.dataset_dir).resolve()
         output_dir = Path(request.output_dir).resolve()
@@ -99,10 +101,13 @@ class OPDTrainer:
         if request.resume_from is None:
             _seed_training_rng(self.training_config.seed)
         schedule = _build_schedule(
-            _load_examples(dataset_dir), self.training_config.num_train_epochs
+            _load_examples(dataset_dir),
+            self.training_config.num_train_epochs,
+            kind=request.kind,
+            seed=self.training_config.seed,
         )
         if not schedule:
-            raise ValueError("Stage 5 dataset contains no OPD examples")
+            raise ValueError(f"Stage 5 dataset contains no {request.kind} OPD examples")
         schedule_fingerprint = _schedule_fingerprint(schedule, dataset_manifest)
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -268,6 +273,8 @@ class OPDTrainer:
             raise ValueError("resume dataset lineage mismatch")
         if manifest.get("source_lineage") != source_lineage:
             raise ValueError("resume source lineage mismatch")
+        if manifest.get("opd_kind") != request.kind:
+            raise ValueError("resume OPD kind mismatch")
         if manifest.get("trainer_start") != _trainer_start(request):
             raise ValueError("resume trainer lineage mismatch")
         if manifest.get("training_config") != self.training_config.model_dump(mode="json"):
@@ -323,9 +330,12 @@ class OPDTrainer:
             _save_rng_state(temporary / "rng_state.pt")
             manifest = {
                 "adapter_path": adapter_relative_path.as_posix(),
-                "adapter_revision": f"opd-step-{optimizer_steps:08d}",
+                "adapter_revision": (
+                    f"opd-{request.kind}-step-{optimizer_steps:08d}"
+                ),
                 "completed_examples": completed_examples,
                 "dataset_build_id": dataset_manifest.get("dataset_build_id"),
+                "opd_kind": request.kind,
                 "optimizer_steps": optimizer_steps,
                 "rollout_config": self.rollout_config.model_dump(mode="json"),
                 "schedule_fingerprint": schedule_fingerprint,
@@ -398,20 +408,27 @@ def _require_latest_published_checkpoint(checkpoint: Path) -> None:
 
 
 def _build_schedule(
-    examples: Mapping[str, Sequence[OPDExample]], num_epochs: int
+    examples: Mapping[str, Sequence[OPDExample]],
+    num_epochs: int,
+    *,
+    kind: str,
+    seed: int,
 ) -> tuple[_ScheduledExample, ...]:
-    balanced = balanced_kind_schedule(
-        {kind: len(examples.get(kind, ())) for kind in _KINDS},
+    _validate_kind(kind)
+    selected = examples.get(kind, ())
+    natural = natural_kind_schedule(
+        len(selected),
+        kind=kind,
         num_epochs=num_epochs,
-        kind_order=_KINDS,
+        seed=seed,
     )
     return tuple(
         _ScheduledExample(
             sequence_index=sequence_index,
             epoch=sample.epoch,
-            example=examples[sample.kind][sample.index],
+            example=selected[sample.index],
         )
-        for sequence_index, sample in enumerate(balanced)
+        for sequence_index, sample in enumerate(natural)
     )
 
 
@@ -563,6 +580,7 @@ def _trainer_start(request: TrainingRequest) -> dict[str, Any]:
     return {
         "adapter_revision": request.adapter_revision,
         "model_revision": request.model_revision,
+        "opd_kind": request.kind,
     }
 
 
@@ -586,6 +604,11 @@ def _validate_loaded_adapter_path(
 def _validate_revision(value: str, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must not be empty")
+
+
+def _validate_kind(kind: str) -> None:
+    if kind not in _KINDS:
+        raise ValueError(f"OPD kind must be one of {', '.join(_KINDS)}")
 
 
 def _require_fresh_output(output_dir: Path) -> None:

@@ -1,5 +1,10 @@
 # Stage 7 迭代式 Fast/Slow Loop 实施计划
 
+> **2026-07-28 修订：** 原有单 LoRA 和四类均衡采样结论已废止。现行 Slow Loop
+> 使用四套独立 LoRA，并让每类样本按自然数量各训练一次/epoch；详见
+> [四能力 LoRA OPSD 训练设计](../../four-lora-opd-training.md)。旧 checklist
+> 仅作为阶段实施历史。
+
 **目标：** 将既有 Fast Loop、Outcome-Calibrated Attribution、OPD 数据审计和共享策略 LoRA 训练组合为可恢复、train-only、具备完整父子 lineage 的 iteration。
 
 **真实实验边界：** 本阶段完成代码、CLI 和合成双 iteration 验证；真实五任务 Memory-enabled build/audit 与独立 Qwen3.5-9B 单步 GPU update 已于 2026-07-23 通过，完整真实 iteration 仍延期到 Stage 8 验收实验。

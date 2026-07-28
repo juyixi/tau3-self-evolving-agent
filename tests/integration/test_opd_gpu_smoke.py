@@ -142,6 +142,7 @@ def test_cached_qwen35_trains_one_example_with_adapter_only_update(tmp_path: Pat
             output_dir=output_dir,
             model_revision=model_revision,
             adapter_revision="gpu-smoke-parent",
+            kind="sel",
         )
     )
 

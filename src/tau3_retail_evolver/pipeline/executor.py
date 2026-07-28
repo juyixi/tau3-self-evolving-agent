@@ -140,13 +140,10 @@ class CommandIterationExecutor:
     ) -> StageResult:
         dataset_dir = request.iteration_dir / "artifacts" / "dataset" / "slow_loop"
         output_dir = request.iteration_dir / "artifacts" / "training"
-        resume = _latest_checkpoint(output_dir)
-        if output_dir.exists() and resume is None:
-            shutil.rmtree(output_dir)
         command = [
             sys.executable,
             "-m",
-            "scripts.train_opd_lora",
+            "scripts.train_opd_lora_suite",
             "--config",
             str(request.config_path),
             "--dataset-dir",
@@ -158,19 +155,17 @@ class CommandIterationExecutor:
             "--adapter-revision",
             request.adapter_revision,
         ]
-        if resume is not None:
-            command.extend(("--resume-from", str(resume)))
         self.command_runner(command, cwd=request.project_root)
         manifest = _read_json(output_dir / "training_manifest.json")
-        relative_checkpoint = manifest.get("latest_checkpoint")
-        if not isinstance(relative_checkpoint, str) or not relative_checkpoint:
-            raise ValueError("training manifest latest_checkpoint is missing")
-        checkpoint = (output_dir / relative_checkpoint).resolve()
+        bundle_revision = manifest.get("adapter_bundle_revision")
+        if not isinstance(bundle_revision, str) or not bundle_revision:
+            raise ValueError("training manifest adapter bundle revision is missing")
         return StageResult(
             artifacts={"training": output_dir},
             metadata={
-                "child_adapter_revision": manifest.get("adapter_revision"),
-                "latest_checkpoint": str(checkpoint),
+                "adapter_checkpoints": manifest.get("adapter_checkpoints"),
+                "child_adapter_revision": bundle_revision,
+                "latest_checkpoint": str(output_dir.resolve()),
             },
         )
 
@@ -233,22 +228,6 @@ def _restore_input_memory_snapshot(request: IterationRequest) -> None:
         restored = MemoryRepository(memory_root).snapshot()
     if restored.memory_snapshot_id != request.input_memory_snapshot_id:
         raise ValueError("restored Memory snapshot does not match iteration")
-
-
-def _latest_checkpoint(output_dir: Path) -> Path | None:
-    checkpoints = output_dir / "checkpoints"
-    if not checkpoints.is_dir():
-        return None
-    candidates = [
-        child.resolve()
-        for child in checkpoints.iterdir()
-        if child.is_dir()
-        and child.name.startswith("step-")
-        and (child / "checkpoint_manifest.json").is_file()
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda path: path.name)
 
 
 def _rollout_stage_result(root: Path) -> StageResult:

@@ -57,6 +57,12 @@ def _write_dataset_manifest(
                     "model_revision": model_revision,
                     "adapter_revision": adapter_revision,
                 },
+                "artifacts": {
+                    "datasets/sel.jsonl": {
+                        "line_count": 4,
+                        "sha256": "a" * 64,
+                    }
+                },
             }
         )
         + "\n",
@@ -85,6 +91,8 @@ def _argv(dataset_dir: Path, output_dir: Path, *extra: str) -> list[str]:
         "model-commit-a",
         "--adapter-revision",
         "adapter-a",
+        "--kind",
+        "sel",
         *extra,
     ]
 
@@ -162,6 +170,8 @@ def test_dry_run_audits_lineage_resolves_settings_and_prints_canonical_json_with
         "dataset_build_id": "dataset-a",
         "dataset_dir": str(dataset_dir.resolve()),
         "dry_run": True,
+        "examples_per_epoch": 4,
+        "kind": "sel",
         "model_id": "Qwen/Qwen3.5-9B",
         "model_revision": "model-commit-a",
         "output_dir": str(output_dir.resolve()),
@@ -185,6 +195,7 @@ def test_dry_run_audits_lineage_resolves_settings_and_prints_canonical_json_with
             "seed": 42,
             "target_modules": "all-linear",
         },
+        "total_examples": 4,
     }
     assert raw_summary == json.dumps(
         summary,
@@ -361,6 +372,7 @@ def _write_resume_checkpoint(
         "adapter_path": adapter_path,
         "completed_examples": step * 2,
         "dataset_build_id": "dataset-a",
+        "opd_kind": "sel",
         "optimizer_steps": step,
         "rollout_config": {
             "temperature": 1.0,
@@ -378,6 +390,7 @@ def _write_resume_checkpoint(
         "trainer_start": {
             "model_revision": "model-commit-a",
             "adapter_revision": "adapter-a",
+            "opd_kind": "sel",
         },
         "training_config": {
             "seed": 42,

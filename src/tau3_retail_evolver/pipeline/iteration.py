@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from tau3_retail_evolver.memory.json_store import write_bytes_atomic
 from tau3_retail_evolver.memory.locking import reentrant_process_lock
-from tau3_retail_evolver.pipeline.sampling import assert_train_only_artifacts
+from tau3_retail_evolver.pipeline.sampling import OPD_KINDS, assert_train_only_artifacts
 from tau3_retail_evolver.pipeline.state import (
     IterationState,
     IterationStateStore,
@@ -340,6 +340,14 @@ def _validate_training_result(
     }
     if manifest.get("source_lineage") != expected_source:
         raise ValueError("training source lineage does not match iteration")
+    if manifest.get("schema_version") == 2:
+        return _validate_four_lora_training_result(
+            training_root=training_root,
+            manifest=manifest,
+            expected_source=expected_source,
+            dataset_build_id=dataset_build_id,
+            result=result,
+        )
     relative_checkpoint = manifest.get("latest_checkpoint")
     if not isinstance(relative_checkpoint, str) or not relative_checkpoint:
         raise ValueError("training latest checkpoint is missing")
@@ -388,6 +396,94 @@ def _validate_training_result(
     }
 
 
+def _validate_four_lora_training_result(
+    *,
+    training_root: Path,
+    manifest: Mapping[str, Any],
+    expected_source: Mapping[str, str],
+    dataset_build_id: str,
+    result: StageResult,
+) -> dict[str, Any]:
+    bundle_revision = manifest.get("adapter_bundle_revision")
+    if (
+        not isinstance(bundle_revision, str)
+        or not bundle_revision
+        or manifest.get("adapter_revision") != bundle_revision
+    ):
+        raise ValueError("four-LoRA bundle revision is invalid")
+    raw_checkpoints = manifest.get("adapter_checkpoints")
+    raw_revisions = manifest.get("adapter_revisions")
+    if (
+        not isinstance(raw_checkpoints, Mapping)
+        or set(raw_checkpoints) != set(OPD_KINDS)
+        or not isinstance(raw_revisions, Mapping)
+        or set(raw_revisions) != set(OPD_KINDS)
+    ):
+        raise ValueError("four-LoRA bundle must contain exactly four adapters")
+
+    checkpoints: dict[str, str] = {}
+    for kind in OPD_KINDS:
+        relative = raw_checkpoints[kind]
+        revision = raw_revisions[kind]
+        if not isinstance(relative, str) or not relative:
+            raise ValueError(f"{kind} LoRA checkpoint path is invalid")
+        if not isinstance(revision, str) or not revision:
+            raise ValueError(f"{kind} LoRA revision is invalid")
+        checkpoint = (training_root / relative).resolve()
+        try:
+            checkpoint.relative_to(training_root)
+        except ValueError as error:
+            raise ValueError(f"{kind} LoRA checkpoint escapes training output") from error
+        checkpoint_manifest = _read_json(checkpoint / "checkpoint_manifest.json")
+        if checkpoint_manifest.get("status") != "checkpoint":
+            raise ValueError(f"{kind} LoRA checkpoint is not published")
+        if checkpoint_manifest.get("dataset_build_id") != dataset_build_id:
+            raise ValueError(f"{kind} LoRA dataset lineage does not match iteration")
+        if checkpoint_manifest.get("source_lineage") != expected_source:
+            raise ValueError(f"{kind} LoRA source lineage does not match iteration")
+        if checkpoint_manifest.get("opd_kind") != kind:
+            raise ValueError(f"{kind} LoRA checkpoint kind mismatch")
+        if checkpoint_manifest.get("adapter_revision") != revision:
+            raise ValueError(f"{kind} LoRA checkpoint revision mismatch")
+        adapter_relative = checkpoint_manifest.get("adapter_path")
+        if not isinstance(adapter_relative, str) or not adapter_relative:
+            raise ValueError(f"{kind} LoRA adapter path is missing")
+        adapter = (checkpoint / adapter_relative).resolve()
+        try:
+            adapter.relative_to(checkpoint)
+        except ValueError as error:
+            raise ValueError(f"{kind} LoRA adapter path escapes checkpoint") from error
+        if not (adapter / "adapter_config.json").is_file():
+            raise ValueError(f"{kind} LoRA adapter config is missing")
+        weights = (
+            adapter / "adapter_model.safetensors",
+            adapter / "adapter_model.bin",
+        )
+        if sum(path.is_file() for path in weights) != 1:
+            raise ValueError(
+                f"{kind} LoRA checkpoint must contain exactly one adapter weight file"
+            )
+        checkpoints[kind] = str(checkpoint)
+
+    metadata_checkpoint = result.metadata.get("latest_checkpoint")
+    if (
+        not isinstance(metadata_checkpoint, str)
+        or Path(metadata_checkpoint).resolve() != training_root
+    ):
+        raise ValueError("training stage bundle checkpoint metadata does not match manifest")
+    if result.metadata.get("child_adapter_revision") != bundle_revision:
+        raise ValueError("training stage bundle revision does not match manifest")
+    metadata_adapters = result.metadata.get("adapter_checkpoints")
+    if metadata_adapters != raw_checkpoints:
+        raise ValueError("training stage adapter checkpoint metadata does not match manifest")
+    return {
+        "adapter_checkpoints": checkpoints,
+        "child_adapter_revision": bundle_revision,
+        "dataset_build_id": dataset_build_id,
+        "latest_checkpoint": str(training_root),
+    }
+
+
 def _publish_promotion(
     request: IterationRequest,
     record: Mapping[str, Any],
@@ -398,6 +494,13 @@ def _publish_promotion(
     if request.parent_iteration_dir is not None:
         parent = _read_json(Path(request.parent_iteration_dir) / "promotion_manifest.json")
         parent_iteration_id = parent["iteration_id"]
+    child = {
+        "model_revision": request.model_revision,
+        "checkpoint": training["latest_checkpoint"],
+        "adapter_revision": training["child_adapter_revision"],
+    }
+    if "adapter_checkpoints" in training:
+        child["adapter_checkpoints"] = training["adapter_checkpoints"]
     promotion = {
         "schema_version": 1,
         "status": "promoted",
@@ -416,11 +519,7 @@ def _publish_promotion(
             ),
             "adapter_revision": request.adapter_revision,
         },
-        "child": {
-            "model_revision": request.model_revision,
-            "checkpoint": training["latest_checkpoint"],
-            "adapter_revision": training["child_adapter_revision"],
-        },
+        "child": child,
         "memory": {
             "input_snapshot_id": request.input_memory_snapshot_id,
             "output_snapshot_id": rollout["output_memory_snapshot_id"],

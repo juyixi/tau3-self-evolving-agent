@@ -1,6 +1,6 @@
 # Tau3 Retail Self-Evolving Agent
 
-面向 Tau3 Retail 任务的工程实现：接入官方 Tau2 Retail 环境，通过四层 Memory、Fast Loop 和共享 Qwen3.5-9B LoRA 的 On-Policy Distillation（OPD）构建可持续积累经验的 Agent。
+面向 Tau3 Retail 任务的工程实现：接入官方 Tau2 Retail 环境，通过四层 Memory、Fast Loop 和 Qwen3.5-9B 上四套能力 LoRA 的 On-Policy Distillation（OPD）构建可持续积累经验的 Agent。
 
 ## 系统架构
 
@@ -134,9 +134,9 @@ V(m)      = alpha_tier(m) * gamma(m) * A_hat(m)
 
 递归 leakage guard 禁止 attribution/value、golden evaluator 条件、test 数据路径和凭证进入 public input。Fast Loop 的历史响应只作为 provenance，不是固定标签；学生 completion 必须在 Slow Loop 训练时由当前策略现场生成。
 
-### 共享策略 OPD 与 LoRA
+### 四能力 LoRA 的共享策略 OPD
 
-Teacher 和 Student 共用一个 `Qwen/Qwen3.5-9B` Python 模型对象和当前 LoRA 参数存储：
+`sel`、`act`、`write`、`maint` 分别训练独立的 LoRA checkpoint。每套能力内部的 Teacher 和 Student 共用一个 `Qwen/Qwen3.5-9B` Python 模型对象和该能力当前的 LoRA 参数存储：
 
 - Student 只接收部署时可获得的 public input，并先进行 on-policy sampling。
 - Teacher 加载同一个 LoRA，在 `eval()` 和 `torch.no_grad()` 下接收 public input 与 privileged hindsight。
@@ -169,7 +169,7 @@ created -> rollout_complete -> attribution_complete
 
 每个状态只在对应 artifact 已发布、train-only 扫描通过并记录 SHA-256 后推进。恢复时重新计算所有已完成产物的哈希，不重跑已经提交的阶段；不完整 adapter、断裂的 Memory snapshot 或不连续的父子 revision 不能进入 `promoted`。下一轮必须继承上一轮 promotion 中的 checkpoint、adapter revision、Memory snapshot 和累计 train task 数。
 
-任务 curriculum 使用 `training.seed` 与 `iteration` 共同生成确定性随机序列，生产默认每轮覆盖全部 74 个官方 train tasks；`pipeline.iteration_task_count` 可在 smoke 阶段缩小任务数量。`sel/act/write/maint` 使用同一个均衡 round-robin 调度，只循环已有类别，不伪造缺失的 write 或 maintenance 样本。
+任务 curriculum 使用 `training.seed` 与 `iteration` 共同生成确定性随机序列，生产默认每轮覆盖全部 74 个官方 train tasks；`pipeline.iteration_task_count` 可在 smoke 阶段缩小任务数量。Slow Loop 不对四类样本做补齐或跨类均衡：每个 epoch 内，每条原始 `sel`、`act`、`write`、`maint` 样本只进入各自 LoRA 的训练序列一次，类别数量保持数据集的自然分布。
 
 ## 实验设计
 
@@ -370,7 +370,7 @@ export OUTPUT_DIR='/root/autodl-tmp/tau3-retail-evolver/runs/opd-training-0001'
 先执行不加载 Qwen/PEFT 的 dry-run。它会审计 Stage 5 数据、lineage、配置与输出目录：
 
 ```bash
-python -m scripts.train_opd_lora \
+python -m scripts.train_opd_lora_suite \
   --config configs/default.yaml \
   --dataset-dir "$DATASET_DIR" \
   --output-dir "$OUTPUT_DIR" \
@@ -384,7 +384,7 @@ python -m scripts.train_opd_lora \
 Dry-run 通过后运行真实 BF16 训练：
 
 ```bash
-python -m scripts.train_opd_lora \
+python -m scripts.train_opd_lora_suite \
   --config configs/default.yaml \
   --dataset-dir "$DATASET_DIR" \
   --output-dir "$OUTPUT_DIR" \
@@ -399,9 +399,7 @@ python -m scripts.train_opd_lora \
 只允许从最高的已发布 optimizer-step checkpoint 恢复：
 
 ```bash
-export CHECKPOINT="$OUTPUT_DIR/checkpoints/step-00000001"
-
-python -m scripts.train_opd_lora \
+python -m scripts.train_opd_lora_suite \
   --config configs/default.yaml \
   --dataset-dir "$DATASET_DIR" \
   --output-dir "$OUTPUT_DIR" \
@@ -409,7 +407,6 @@ python -m scripts.train_opd_lora \
   --adapter-revision "$ADAPTER_REVISION" \
   --set training.per_device_batch_size=1 \
   --set training.gradient_accumulation_steps=8 \
-  --resume-from "$CHECKPOINT" \
   --dry-run
 ```
 

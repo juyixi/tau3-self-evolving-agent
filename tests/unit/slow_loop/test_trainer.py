@@ -264,6 +264,7 @@ def _request(
     dataset: Path,
     output: Path,
     *,
+    kind: str = "sel",
     resume_from: Path | None = None,
     loaded_adapter_path: Path | None = None,
 ) -> TrainingRequest:
@@ -272,6 +273,7 @@ def _request(
         output_dir=output,
         model_revision="model-a",
         adapter_revision="adapter-a",
+        kind=kind,
         resume_from=resume_from,
         loaded_adapter_path=loaded_adapter_path,
     )
@@ -300,7 +302,7 @@ def _load_stochastic_policy(adapter_path: Path) -> StochasticToyPolicy:
     return model
 
 
-def test_online_generation_uses_only_public_prompts_and_balances_kinds(tmp_path: Path) -> None:
+def test_online_generation_trains_one_kind_without_oversampling(tmp_path: Path) -> None:
     examples = _write_dataset(
         tmp_path / "dataset", {"sel": 1, "act": 2, "write": 1, "maint": 1}
     )
@@ -310,25 +312,22 @@ def test_online_generation_uses_only_public_prompts_and_balances_kinds(tmp_path:
     result = OPDTrainer(
         model,
         ToyTokenizer(),
-        _config(),
+        _config(num_train_epochs=2),
         RolloutConfig(temperature=0.7, top_p=0.8),
         checkpoint_saver=saver,
         optimizer_factory=OptimizerFactory(),
-    ).train(_request(tmp_path / "dataset", tmp_path / "output"))
+    ).train(_request(tmp_path / "dataset", tmp_path / "output", kind="act"))
 
     generations = _rows(result.output_dir / "training_generations.jsonl")
-    assert [row["kind"] for row in generations] == [*KINDS, *KINDS]
-    assert [row["example_id"] for row in generations] == [
-        "sel-0",
-        "act-0",
-        "write-0",
-        "maint-0",
-        "sel-0",
-        "act-1",
-        "write-0",
-        "maint-0",
-    ]
-    assert len(model.generate_calls) == 8
+    assert [row["kind"] for row in generations] == ["act"] * 4
+    assert [row["epoch"] for row in generations] == [0, 0, 1, 1]
+    assert {
+        row["example_id"] for row in generations[:2]
+    } == {"act-0", "act-1"}
+    assert {
+        row["example_id"] for row in generations[2:]
+    } == {"act-0", "act-1"}
+    assert len(model.generate_calls) == 4
     tokenizer = ToyTokenizer()
     scheduled = [
         examples[row["kind"]][int(row["example_id"].rsplit("-", 1)[1])]
@@ -434,6 +433,7 @@ def test_rejects_source_lineage_mismatch_before_generation(
                 output_dir=tmp_path / "output",
                 model_revision=model_revision,
                 adapter_revision=adapter_revision,
+                kind="sel",
             )
         )
 
@@ -489,6 +489,8 @@ def test_checkpoint_contains_adapter_optimizer_and_atomic_json_manifests_only(
     assert checkpoint_manifest["schedule_sha256"] == checkpoint_manifest[
         "schedule_fingerprint"
     ]
+    assert checkpoint_manifest["opd_kind"] == "sel"
+    assert checkpoint_manifest["adapter_revision"] == "opd-sel-step-00000001"
     assert (result.output_dir / "training_manifest.json").is_file()
     assert not list(result.output_dir.rglob("pytorch_model*"))
     replaced_names = [destination.name for _, destination in replacements]

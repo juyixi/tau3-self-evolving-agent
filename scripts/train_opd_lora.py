@@ -16,6 +16,7 @@ from tau3_retail_evolver.models.lora import (
     validate_stage6_adapter_contract,
     validate_stage6_lora_settings,
 )
+from tau3_retail_evolver.pipeline.sampling import OPD_KINDS
 from tau3_retail_evolver.slow_loop.audit import AuditReport, audit_dataset
 
 
@@ -26,6 +27,8 @@ class _Preflight:
     output_dir: Path
     model_revision: str
     adapter_revision: str
+    kind: str
+    examples_per_epoch: int
     dataset_build_id: str
     resume_from: Path | None
     resume_adapter_path: Path | None
@@ -33,7 +36,7 @@ class _Preflight:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train the shared Qwen3.5 LoRA policy on an audited Stage 5 dataset."
+        description="Train one Qwen3.5 LoRA capability on an audited Stage 5 dataset."
     )
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--set", dest="overrides", action="append", default=[])
@@ -41,6 +44,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model-revision", required=True)
     parser.add_argument("--adapter-revision", required=True)
+    parser.add_argument("--kind", choices=OPD_KINDS, required=True)
     parser.add_argument("--resume-from", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
@@ -80,6 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=preflight.output_dir,
             model_revision=preflight.model_revision,
             adapter_revision=preflight.adapter_revision,
+            kind=preflight.kind,
             resume_from=preflight.resume_from,
             loaded_adapter_path=preflight.resume_adapter_path,
         )
@@ -87,6 +92,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _print_json(
         {
             "completed_examples": result.completed_examples,
+            "kind": preflight.kind,
             "latest_checkpoint": str(result.latest_checkpoint),
             "optimizer_steps": result.optimizer_steps,
             "output_dir": str(result.output_dir),
@@ -118,6 +124,9 @@ def _run_preflight(args: argparse.Namespace) -> _Preflight:
     build_id = dataset_manifest.get("dataset_build_id")
     if not isinstance(build_id, str) or not build_id:
         raise ValueError("dataset_build_id is missing")
+    examples_per_epoch = _kind_example_count(dataset_manifest, args.kind)
+    if examples_per_epoch < 1:
+        raise ValueError(f"dataset contains no {args.kind} OPD examples")
 
     resume_from: Path | None = None
     resume_adapter_path: Path | None = None
@@ -132,6 +141,7 @@ def _run_preflight(args: argparse.Namespace) -> _Preflight:
             dataset_build_id=build_id,
             model_revision=model_revision,
             adapter_revision=adapter_revision,
+            kind=args.kind,
         )
     return _Preflight(
         config=config,
@@ -139,6 +149,8 @@ def _run_preflight(args: argparse.Namespace) -> _Preflight:
         output_dir=output_dir,
         model_revision=model_revision,
         adapter_revision=adapter_revision,
+        kind=args.kind,
+        examples_per_epoch=examples_per_epoch,
         dataset_build_id=build_id,
         resume_from=resume_from,
         resume_adapter_path=resume_adapter_path,
@@ -153,6 +165,7 @@ def _resolve_resume_adapter(
     dataset_build_id: str,
     model_revision: str,
     adapter_revision: str,
+    kind: str,
 ) -> Path:
     if not checkpoint.is_dir():
         raise ValueError(f"resume checkpoint does not exist: {checkpoint}")
@@ -170,7 +183,12 @@ def _resolve_resume_adapter(
     }
     if manifest.get("source_lineage") != expected_lineage:
         raise ValueError("resume checkpoint source_lineage mismatch")
-    if manifest.get("trainer_start") != expected_lineage:
+    if manifest.get("opd_kind") != kind:
+        raise ValueError("resume checkpoint OPD kind mismatch")
+    if manifest.get("trainer_start") != {
+        **expected_lineage,
+        "opd_kind": kind,
+    }:
         raise ValueError("resume checkpoint trainer_start mismatch")
     if manifest.get("training_config") != config.training.model_dump(mode="json"):
         raise ValueError("resume checkpoint training_config mismatch")
@@ -309,6 +327,8 @@ def _preflight_summary(preflight: _Preflight) -> dict[str, Any]:
         "dataset_build_id": preflight.dataset_build_id,
         "dataset_dir": str(preflight.dataset_dir),
         "dry_run": True,
+        "examples_per_epoch": preflight.examples_per_epoch,
+        "kind": preflight.kind,
         "model_id": preflight.config.model.base_model,
         "model_revision": preflight.model_revision,
         "output_dir": str(preflight.output_dir),
@@ -322,7 +342,24 @@ def _preflight_summary(preflight: _Preflight) -> dict[str, Any]:
         ),
         "rollout_config": preflight.config.rollout.model_dump(mode="json"),
         "training_config": preflight.config.training.model_dump(mode="json"),
+        "total_examples": (
+            preflight.examples_per_epoch
+            * preflight.config.training.num_train_epochs
+        ),
     }
+
+
+def _kind_example_count(manifest: Mapping[str, Any], kind: str) -> int:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        raise ValueError("dataset artifact metadata is missing")
+    metadata = artifacts.get(f"datasets/{kind}.jsonl")
+    if not isinstance(metadata, Mapping):
+        raise ValueError(f"dataset artifact metadata is missing for {kind}")
+    count = metadata.get("line_count")
+    if type(count) is not int or count < 0:
+        raise ValueError(f"dataset artifact line_count is invalid for {kind}")
+    return count
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

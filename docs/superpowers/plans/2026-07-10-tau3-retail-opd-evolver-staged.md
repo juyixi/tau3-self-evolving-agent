@@ -1,5 +1,10 @@
 # Tau3 Retail OPD-Evolver 分阶段实施计划
 
+> **2026-07-28 修订：** `sel/act/write/maint` 现在分别训练独立 LoRA，禁止按最大
+> 类别过采样补齐。单个能力内部仍由同一 Qwen3.5-9B 与该能力当前 LoRA 执行
+> teacher/student OPD。现行契约见
+> [四能力 LoRA OPSD 训练设计](../../four-lora-opd-training.md)。
+
 > **供智能体实施者使用：** 必须使用子技能 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans，逐任务实施本计划。各步骤使用 checkbox（`- [ ]`）跟踪状态。
 
 **目标：** 分八个可独立测试的阶段构建并验证 tau3 retail 训练系统，覆盖官方 tau2-bench 环境接入、OPD-Evolver 快循环记忆、共享策略 LoRA 慢循环训练，以及留出 retail 任务评测。

@@ -8,6 +8,7 @@ import pytest
 from tau3_retail_evolver.pipeline.sampling import (
     assert_train_only_artifacts,
     balanced_kind_schedule,
+    natural_kind_schedule,
     select_train_tasks,
 )
 
@@ -89,6 +90,27 @@ def test_balanced_kind_schedule_cycles_only_existing_examples() -> None:
     assert all(sample.kind != "write" for sample in schedule)
     assert {sample.index for sample in schedule if sample.kind == "act"} == {0}
     assert {sample.index for sample in schedule if sample.kind == "maint"} == {0, 1, 2}
+
+
+def test_natural_kind_schedule_visits_each_example_once_per_epoch() -> None:
+    schedule = natural_kind_schedule(
+        3,
+        kind="write",
+        num_epochs=2,
+        seed=42,
+    )
+
+    assert len(schedule) == 6
+    assert {sample.kind for sample in schedule} == {"write"}
+    assert [sample.epoch for sample in schedule] == [0, 0, 0, 1, 1, 1]
+    assert {sample.index for sample in schedule[:3]} == {0, 1, 2}
+    assert {sample.index for sample in schedule[3:]} == {0, 1, 2}
+    assert schedule == natural_kind_schedule(
+        3,
+        kind="write",
+        num_epochs=2,
+        seed=42,
+    )
 
 
 def test_artifact_scan_rejects_test_task_ids(tmp_path: Path) -> None:

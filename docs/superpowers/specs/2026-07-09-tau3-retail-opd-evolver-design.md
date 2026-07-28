@@ -1,5 +1,10 @@
 # Tau3 Retail OPD-Evolver 训练项目设计
 
+> **2026-07-28 修订：** 四类生命周期能力不再共用一套 LoRA。
+> `sel/act/write/maint` 分别训练和部署独立 LoRA；每套能力内部的教师与学生仍
+> 共用同一基础模型和该能力当前 LoRA。训练保持原始类别数量，不执行跨类补齐。
+> 完整契约见 [四能力 LoRA OPSD 训练设计](../../four-lora-opd-training.md)。
+
 ## 目标
 
 构建一个面向 tau3-bench retail 任务的训练项目，使用 Qwen3.5-9B 同时作为特权教师（privileged teacher）和可部署学生（deployable student）。训练方法采用 OPD-Evolver 的同策略蒸馏（on-policy distillation），而非离线自蒸馏。学生模型使用 LoRA 适配器训练，不进行全参数微调。

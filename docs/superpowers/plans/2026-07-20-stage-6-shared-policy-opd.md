@@ -1,5 +1,11 @@
 # Stage 6 Shared-Policy OPD Slow Loop Implementation Plan
 
+> **2026-07-28 修订：** 本计划中“一个 LoRA 混合四类样本”和“equal kind
+> round-robin”已被真实实验否决。现行设计以
+> [四能力 LoRA OPSD 训练设计](../../four-lora-opd-training.md) 为准：
+> `sel/act/write/maint` 分别训练独立 LoRA，每类保持自然样本数。本文后续旧任务
+> 记录仅保留为实现历史。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Train a zero-impact Qwen3.5-9B LoRA adapter with online student generation and full-vocabulary `KL(teacher || student)` on Stage 5 OPD examples.
