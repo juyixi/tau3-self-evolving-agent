@@ -500,6 +500,28 @@ def test_checkpoint_contains_adapter_optimizer_and_atomic_json_manifests_only(
     )
 
 
+def test_training_retains_only_the_two_latest_published_checkpoints(
+    tmp_path: Path,
+) -> None:
+    _write_dataset(tmp_path / "dataset", {"sel": 3})
+    output = tmp_path / "output"
+
+    result = OPDTrainer(
+        ToyPolicy(),
+        ToyTokenizer(),
+        _config(per_device_batch_size=1, gradient_accumulation_steps=1),
+        RolloutConfig(),
+        checkpoint_saver=ToyCheckpointSaver(),
+        optimizer_factory=OptimizerFactory(),
+    ).train(_request(tmp_path / "dataset", output))
+
+    assert result.optimizer_steps == 3
+    assert [
+        checkpoint.name
+        for checkpoint in sorted((output / "checkpoints").glob("step-*"))
+    ] == ["step-00000002", "step-00000003"]
+
+
 def test_failed_example_is_not_appended_and_empty_response_is_rejected(tmp_path: Path) -> None:
     _write_dataset(tmp_path / "dataset", {"sel": 1})
     model = ToyPolicy()

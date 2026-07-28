@@ -30,6 +30,7 @@ from tau3_retail_evolver.slow_loop.opd_step import shared_policy_opd_step
 
 _KINDS = ("sel", "act", "write", "maint")
 _MANIFEST_SCHEMA_VERSION = 1
+_MAX_PUBLISHED_CHECKPOINTS = 2
 CheckpointSaver = Callable[[Any, Path], Path]
 OptimizerFactory = Callable[..., torch.optim.Optimizer]
 
@@ -341,10 +342,33 @@ class OPDTrainer:
             _fsync_directory(temporary)
             os.replace(temporary, checkpoint)
             _fsync_directory(checkpoints)
+            _prune_published_checkpoints(
+                checkpoints,
+                keep=_MAX_PUBLISHED_CHECKPOINTS,
+            )
         except BaseException:
             shutil.rmtree(temporary, ignore_errors=True)
             raise
         return checkpoint, manifest
+
+
+def _prune_published_checkpoints(checkpoints: Path, *, keep: int) -> None:
+    published = sorted(
+        (
+            child
+            for child in checkpoints.iterdir()
+            if child.is_dir()
+            and not child.is_symlink()
+            and re.fullmatch(r"step-(\d{8})", child.name)
+            and (child / "checkpoint_manifest.json").is_file()
+        ),
+        key=lambda path: int(path.name.removeprefix("step-")),
+        reverse=True,
+    )
+    for checkpoint in published[keep:]:
+        shutil.rmtree(checkpoint)
+    if len(published) > keep:
+        _fsync_directory(checkpoints)
 
 
 def _load_examples(dataset_dir: Path) -> dict[str, tuple[OPDExample, ...]]:
