@@ -120,18 +120,21 @@ def run_evaluation_trials(
                 trial_index=trial_index,
                 memory_snapshot_id=snapshot_id,
             )
-            result = run_evaluation_episode(
-                task_id=task_id,
-                task_instruction=task_instruction,
-                environment=env_factory(task_id),
-                policy=policy,
-                memory=memory,
-                retriever=retriever,
-                config=config,
-                context=episode_context,
-                guard=guard,
-                trial_index=trial_index,
-            )
+            try:
+                result = run_evaluation_episode(
+                    task_id=task_id,
+                    task_instruction=task_instruction,
+                    environment=env_factory(task_id),
+                    policy=policy,
+                    memory=memory,
+                    retriever=retriever,
+                    config=config,
+                    context=episode_context,
+                    guard=guard,
+                    trial_index=trial_index,
+                )
+            except Exception as error:
+                result = _failed_episode_result(task_id, error)
             episodes.append(
                 TrialEpisode(
                     trial_index=trial_index,
@@ -163,6 +166,26 @@ def run_evaluation_trials(
         episodes=tuple(episodes),
         maintenance_rounds_by_trial=tuple(maintenance_by_trial),
         output_memory_snapshot_ids=tuple(output_snapshots),
+    )
+
+
+def _failed_episode_result(task_id: str, error: Exception) -> EpisodeResult:
+    return EpisodeResult(
+        task_id=task_id,
+        final_reward=0.0,
+        steps=0,
+        terminal_evaluation={
+            "reward": 0.0,
+            "evaluation_error": {
+                "type": type(error).__name__,
+                "message": "operation failed",
+            },
+        },
+        simulation_result={"termination_reason": "evaluation_error"},
+        selected_memory_ids=(),
+        written_memory_ids=(),
+        truncated=False,
+        completed=False,
     )
 
 

@@ -103,6 +103,29 @@ class ScriptedPolicy:
         )
 
 
+class FailingOncePolicy:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, _prompt: Any) -> LifecycleResponse:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("first task failed")
+        return LifecycleResponse(
+            raw_output='{"action":"finish"}',
+            sampling_params={"temperature": 0.7, "top_p": 0.9},
+            latency_s=0.01,
+        )
+
+    def repair(
+        self,
+        _prompt: Any,
+        _raw_output: str,
+        _error: str,
+    ) -> LifecycleResponse:
+        raise AssertionError("repair was not expected")
+
+
 def _terminal_step(
     reward: float = 1.0,
     *,
@@ -356,6 +379,51 @@ def test_trial_dependency_mismatch_is_rejected_before_quarantine_creation(
         )
 
     assert not guard.quarantine_root.exists()
+
+
+def test_evaluation_trials_record_failed_episode_and_continue(
+    tmp_path: Path,
+) -> None:
+    guard = EvaluationGuard(
+        protocol=EvaluationProtocol.NO_MEMORY,
+        run_id="eval-001",
+        agent_id="retail",
+        project_root=tmp_path,
+        split="test",
+    )
+    events = EventCollector()
+
+    result = run_evaluation_trials(
+        task_ids=("75", "76"),
+        seeds=(42,),
+        env_factory=lambda _task_id: FakeEnvironment([_terminal_step()]),
+        policy=FailingOncePolicy(),
+        guard=guard,
+        retriever_factory=None,
+        config=FastLoopConfig(memory_enabled=False),
+        context=_context(events),
+        maintenance_period=30,
+    )
+
+    assert [episode.result.task_id for episode in result.episodes] == ["75", "76"]
+    assert result.episodes[0].result.final_reward == 0.0
+    assert result.episodes[0].result.completed is False
+    assert result.episodes[0].result.terminal_evaluation["evaluation_error"] == {
+        "type": "RuntimeError",
+        "message": "operation failed",
+    }
+    assert result.episodes[1].result.final_reward == 1.0
+    assert result.episodes[1].result.completed is True
+    assert [event["event_type"] for event in events.events] == [
+        "EpisodeStarted",
+        "MemoryDisabled",
+        "EpisodeFailed",
+        "EpisodeStarted",
+        "MemoryDisabled",
+        "DecisionMade",
+        "EnvironmentStepped",
+        "EpisodeFinished",
+    ]
 
 
 def test_streaming_trials_each_start_from_empty_memory(
