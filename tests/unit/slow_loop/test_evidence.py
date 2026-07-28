@@ -442,6 +442,7 @@ def _source_with_maintenance(
     tmp_path: Path,
     *,
     content: str = "Keep this public.",
+    diagnostic_content: str | None = None,
     committed_created_ids: list[str] | None = None,
 ) -> tuple[SourceRunSet, Path, str]:
     memory_root = tmp_path / "history" / "agents" / "retail" / "memory"
@@ -476,7 +477,11 @@ def _source_with_maintenance(
     public_item = {
         "id": public_memory.id,
         "tier": "tip",
-        "content": content[:MAX_DIAGNOSTIC_CONTENT_CHARS],
+        "content": (
+            diagnostic_content
+            if diagnostic_content is not None
+            else content[:MAX_DIAGNOSTIC_CONTENT_CHARS]
+        ),
         "version": 1,
         "status": "active",
     }
@@ -561,6 +566,45 @@ def test_maintenance_evidence_accepts_canonical_public_content_truncation(
 
     assert maintenance.public_repository[0].content == content[:MAX_DIAGNOSTIC_CONTENT_CHARS]
     assert maintenance.repository_state[0].content == content
+
+
+@pytest.mark.parametrize(
+    "diagnostic_content",
+    [
+        "x" * (MAX_DIAGNOSTIC_CONTENT_CHARS + 17),
+        "x" * 127,
+    ],
+    ids=["legacy-full-content", "budget-shortened-prefix"],
+)
+def test_maintenance_evidence_preserves_historical_public_content_lengths(
+    tmp_path: Path,
+    diagnostic_content: str,
+) -> None:
+    content = "x" * (MAX_DIAGNOSTIC_CONTENT_CHARS + 17)
+    source, memory_root, _ = _source_with_maintenance(
+        tmp_path,
+        content=content,
+        diagnostic_content=diagnostic_content,
+    )
+
+    maintenance = build_evidence(source, memory_root=memory_root).maintenance[0]
+
+    assert maintenance.public_repository[0].content == diagnostic_content
+    assert maintenance.repository_state[0].content == content
+
+
+def test_maintenance_evidence_rejects_non_prefix_public_content(
+    tmp_path: Path,
+) -> None:
+    content = "x" * (MAX_DIAGNOSTIC_CONTENT_CHARS + 17)
+    source, memory_root, _ = _source_with_maintenance(
+        tmp_path,
+        content=content,
+        diagnostic_content="not a snapshot prefix",
+    )
+
+    with pytest.raises(ValueError, match="maintenance public memory mismatch"):
+        build_evidence(source, memory_root=memory_root)
 
 
 def test_maintenance_evidence_rejects_commit_result_not_produced_by_commands(

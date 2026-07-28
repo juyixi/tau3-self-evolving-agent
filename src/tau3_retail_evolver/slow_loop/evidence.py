@@ -683,9 +683,13 @@ def _build_maintenance(
             item = snapshot.get(public.id)
             if item is None:
                 raise ValueError(f"maintenance memory missing from snapshot: {public.id}")
+            content_matches = public.content == item.content or (
+                0 < len(public.content) <= MAX_DIAGNOSTIC_CONTENT_CHARS
+                and item.content.startswith(public.content)
+            )
             if (
                 item.tier != public.tier
-                or item.content[:MAX_DIAGNOSTIC_CONTENT_CHARS] != public.content
+                or not content_matches
                 or item.version != public.version
                 or item.status != public.status
             ):
