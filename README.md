@@ -58,10 +58,10 @@ Memory 不只是历史对话缓存，而是按照复用粒度拆分的结构化�
 
 | 层级 | 保存内容 | 典型用途 |
 | --- | --- | --- |
-| `trajectory` | 绑定真实 episode、步骤、结果与来源的完整案例 | 参考相似任务的端到端处理过程 |
+| `trajectory` | 运行时代码逐 task 记录的 observation、action/arguments、result、reward 与终止状态 | 参考相似任务的真实端到端执行过程 |
 | `tip` | 条件、建议和原因组成的原子规则 | 提醒认证、确认、状态检查等关键约束 |
 | `skill` | 目标、有序步骤和成功条件组成的工作流 | 复用退货、换货、订单修改等多步能力 |
-| `tool` | 工具用途、前置条件、参数规则与预期效果 | 降低工具选错、参数错误和非法调用 |
+| `tool` | 针对真实 Tau2 工具提炼的可执行调用方法、前置条件、完整参数绑定规则、预期效果与示例 | 选中后注入对应 function schema，降低工具选错、参数错误和非法调用 |
 
 四层权威状态使用 **JSON** 保存；rollout、Memory 选择、写入、维护、归因和训练样本使用只追加 **JSONL**。每条 Memory 同时记录：
 
@@ -76,9 +76,9 @@ Memory 不只是历史对话缓存，而是按照复用粒度拆分的结构化�
 
 1. 使用 `Qwen3-Embedding-0.6B` 从四层 Memory 召回候选。
 2. 先按 tier 配额保留不同类型的经验，再通过 MMR 在相关性与多样性之间重排。
-3. Selector 从候选集合中选择最多 20 条 Memory 注入任务上下文。
-4. rollout 结束后，只有满足结果门控的 episode 才能写入有效 Memory 和 OPD source。
-5. 每累计 30 个 train task 触发一次 Maintenance，对高相似、低价值或长期未使用的经验执行 merge、retain、retire。
+3. Selector 从候选集合中选择最多 20 条 Memory；被选中的 Tool Memory 写入对应原生工具的 function description，随 `tools` 参数传给 Qwen，其余层进入 Memory 上下文。
+4. rollout 结束后，Trajectory Memory 一律由运行时代码从真实轨迹写入；LLM writer 只在结果门控允许时提炼 `tip`、`skill`、`tool`，不能生成或改写 trajectory。
+5. 每累计 30 个 train task 触发一次 Maintenance，对高相似、低价值或长期未使用的经验执行 merge、retain、retire；trajectory 是不可合并的原始执行记录。
 
 这套设计同时处理两个问题：Embedding 负责“找得到”，tier 配额与 MMR 负责“不要总找到同一类”，Maintenance 负责“经验库不会无限增长”。
 

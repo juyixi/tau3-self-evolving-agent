@@ -27,9 +27,10 @@ from tau3_retail_evolver.memory.tier_contracts import (
     SkillPayload,
     SkillStep,
     TipPayload,
+    materialize_rule_trajectory_memory,
     render_tier_payload,
 )
-from tau3_retail_evolver.memory.types import MemoryTier
+from tau3_retail_evolver.memory.types import MemoryTier, stable_memory_id
 
 
 def _candidate(memory_id: str, tier: str, rank: int) -> MemoryCandidateEvidence:
@@ -288,11 +289,42 @@ def test_writing_example_uses_only_future_scored_committed_memories() -> None:
         source_task_ids=("task-creator",),
         created_round=3,
     )
+    rule_trajectory = materialize_rule_trajectory_memory(
+        task_instruction="Complete the customer request.",
+        run_id="run-a",
+        task_id="task-creator",
+        task_group="returns",
+        final_reward=1.0,
+        outcome_class="success",
+        trajectory=(
+            {
+                "observation": "Observation 0.",
+                "action": "lookup_order(order_id='1')",
+                "next_observation": "Observation 1.",
+                "reward": 1.0,
+                "done": True,
+                "terminated": True,
+                "truncated": False,
+            },
+        ),
+    )
+    rule_id = stable_memory_id(MemoryTier.TRAJECTORY, rule_trajectory.content)
+    rule_proposal = WriteProposalEvidence(
+        memory_id=rule_id,
+        generation_mode="rule",
+        tier="trajectory",
+        payload=rule_trajectory.payload,
+        content=rule_trajectory.content,
+        retrieval_text=rule_trajectory.retrieval_text,
+        metadata={"generation_mode": "rule"},
+        source_task_ids=("task-creator",),
+        created_round=3,
+    )
     creator = _episode(
         "creator",
         reward=1.0,
-        proposals=(proposal, replay),
-        committed_new_ids=("mem-new",),
+        proposals=(rule_proposal, proposal, replay),
+        committed_new_ids=(rule_id, "mem-new"),
         replayed_ids=("mem-replay",),
     )
     score = _score(
@@ -318,6 +350,7 @@ def test_writing_example_uses_only_future_scored_committed_memories() -> None:
     assert rows[0]["payload"] == proposal_payload.model_dump(mode="json")
     assert "creator" not in rows[0]["source_episode_ids"]
     assert "mem-replay" not in json.dumps(example.privileged_hindsight)
+    assert rule_id not in json.dumps(example.privileged_hindsight)
     assert example.provenance["sample_unit"] == "task"
     audit_example_boundaries(example)
 

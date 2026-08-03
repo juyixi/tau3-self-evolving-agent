@@ -396,9 +396,22 @@ def test_happy_path_emits_canonical_evidence_and_persists_provenance(
     assert result.simulation_result == {"id": "sim-1", "status": "complete"}
     assert result.steps == 1
     assert result.selected_memory_ids == (candidate.id,)
-    assert len(result.written_memory_ids) == 1
+    assert len(result.written_memory_ids) == 2
     assert result.truncated is False
-    written = repository.get(result.written_memory_ids[0])
+    written_by_tier = {
+        item.tier: item
+        for memory_id in result.written_memory_ids
+        if (item := repository.get(memory_id)) is not None
+    }
+    trajectory_memory = written_by_tier[MemoryTier.TRAJECTORY]
+    written = written_by_tier[MemoryTier.TIP]
+    assert trajectory_memory.metadata["generation_mode"] == "rule"
+    assert trajectory_memory.payload is not None
+    assert trajectory_memory.payload["lesson"] is None
+    assert trajectory_memory.payload["steps"][0]["observation"] == (
+        "Customer asks for a refund"
+    )
+    assert trajectory_memory.payload["steps"][0]["result"] == "Refund complete"
     assert written is not None
     assert written.source_task_ids == ("provenance-task-923",)
     assert written.created_round == 3
@@ -443,10 +456,6 @@ def test_failed_episode_repairs_success_skill_into_caution_memories(
             "Avoid treating transfer_to_human_agents as successful completion; "
             "continue the supported workflow when tools can handle the request."
         ),
-        _trajectory_write(
-            "The agent transferred a supported request before completing it.",
-            "The transfer was a failed outcome and must not be imitated.",
-        ),
     )
     policy = ScriptedLifecyclePolicy(
         [
@@ -484,7 +493,7 @@ def test_failed_episode_repairs_success_skill_into_caution_memories(
         "final_reward": 0.0,
         "outcome_class": "task_failure",
         "polarity": "caution",
-        "allowed_tiers": ["tip", "trajectory"],
+        "allowed_tiers": ["tip"],
         "guidance": (
             "Extract only failure reflections: describe what to avoid and the "
             "corrective behavior. Do not present failed behavior as a success strategy."
@@ -521,7 +530,7 @@ def test_missing_terminal_evaluation_skips_memory_generation(
         events=events,
     )
 
-    assert result.written_memory_ids == ()
+    assert len(result.written_memory_ids) == 1
     assert [prompt.kind for prompt in policy.prompts] == ["selection", "action"]
     proposed = next(
         event for event in events.events if event["event_type"] == "MemoryWriteProposed"
@@ -529,11 +538,13 @@ def test_missing_terminal_evaluation_skips_memory_generation(
     committed = next(
         event for event in events.events if event["event_type"] == "MemoryWriteCommitted"
     )
-    assert proposed["proposals"] == []
+    assert len(proposed["proposals"]) == 1
+    assert proposed["proposals"][0]["tier"] == "trajectory"
+    assert proposed["proposals"][0]["generation_mode"] == "rule"
     assert proposed["outcome_class"] == "infra_failure"
     assert proposed["skipped_reason"] == "missing_terminal_evaluation"
-    assert committed["written_memory_ids"] == []
-    assert repository.list() == []
+    assert committed["written_memory_ids"] == list(result.written_memory_ids)
+    assert len(repository.list()) == 1
 
 
 def test_selected_candidate_details_follow_teacher_preference_order(
@@ -581,25 +592,23 @@ def _skill_write(goal: str) -> dict[str, Any]:
     }
 
 
-def _trajectory_write(initial_state: str, lesson: str) -> dict[str, Any]:
-    return {
-        "tier": "trajectory",
-        "payload": {
-            "initial_state": initial_state,
-            "lesson": lesson,
-        },
-    }
-
-
 def _tool_write(purpose: str) -> dict[str, Any]:
     return {
         "tier": "tool",
         "payload": {
             "tool_name": "lookup_order",
             "purpose": purpose,
+            "method": (
+                "Call lookup_order once with the exact customer-supplied order ID, "
+                "then use the returned order state before choosing a mutation."
+            ),
             "preconditions": ["An order ID is available."],
             "argument_rules": {"order_id": "Use the exact customer order ID."},
             "expected_effect": "The current order state is returned.",
+            "example": {
+                "name": "lookup_order",
+                "arguments": {"order_id": "<customer_order_id>"},
+            },
         },
     }
 
@@ -1094,13 +1103,14 @@ def test_invalid_non_sensitive_write_after_repair_skips_memory_and_keeps_episode
     )
     assert len(policy.repair_calls) == 1
     assert result.final_reward == 1.0
-    assert result.written_memory_ids == ()
+    assert len(result.written_memory_ids) == 1
     assert result.response_parse_error_count == 1
-    assert proposed["proposals"] == []
+    assert len(proposed["proposals"]) == 1
+    assert proposed["proposals"][0]["generation_mode"] == "rule"
     assert proposed["invalid_output_skipped"] is True
-    assert committed["written_memory_ids"] == []
+    assert committed["written_memory_ids"] == list(result.written_memory_ids)
     assert committed["replayed_memory_ids"] == []
-    assert repository.list() == []
+    assert len(repository.list()) == 1
 
 
 def test_invalid_action_with_failed_repair_never_steps_environment(tmp_path: Path) -> None:
@@ -1334,7 +1344,7 @@ def test_partial_write_failure_separates_replays_from_new_commits(
     repository.fail_on_add = 99
     existing = _add_v2_tip(repository, "Existing replay")
     repository.runner_add_calls = 0
-    repository.fail_on_add = 3
+    repository.fail_on_add = 4
     events = EventCollector()
     environment = FakeEnvironment(_reset(), [_terminal_step()])
     policy = ScriptedLifecyclePolicy(
@@ -1357,7 +1367,10 @@ def test_partial_write_failure_separates_replays_from_new_commits(
         item for item in repository.list() if item.tier is MemoryTier.SKILL
     )
     assert failed["event_type"] == "MemoryWriteFailed"
-    assert failed["committed_memory_ids"] == [new_item.id]
+    trajectory_item = next(
+        item for item in repository.list() if item.tier is MemoryTier.TRAJECTORY
+    )
+    assert failed["committed_memory_ids"] == [trajectory_item.id, new_item.id]
     assert failed["replayed_memory_ids"] == [existing.id]
 
 
@@ -1408,7 +1421,10 @@ def test_replay_lookup_failure_preserves_prior_write_progress(
         render_tier_payload(MemoryTier.SKILL, new_skill),
     )
     assert failed["event_type"] == "MemoryWriteFailed"
-    assert failed["committed_memory_ids"] == [new_memory_id]
+    trajectory_id = next(
+        item.id for item in repository.list() if item.tier is MemoryTier.TRAJECTORY
+    )
+    assert failed["committed_memory_ids"] == [trajectory_id, new_memory_id]
     assert failed["replayed_memory_ids"] == [replay.id]
     assert repository.get(new_memory_id) is not None
     assert "super-secret" not in json.dumps(events.events)
@@ -1437,10 +1453,11 @@ def test_duplicate_write_is_accepted_only_as_safe_stable_id_replay(tmp_path: Pat
 
     result = _run(repository=repository, environment=environment, policy=policy, events=events)
 
-    assert result.written_memory_ids == (existing.id,)
+    assert result.written_memory_ids[1:] == (existing.id,)
+    assert repository.get(result.written_memory_ids[0]).tier is MemoryTier.TRAJECTORY
     assert events.events[-1]["event_type"] == "MemoryWriteCommitted"
     assert events.events[-1]["replayed_memory_ids"] == [existing.id]
-    assert len(repository.list()) == 1
+    assert len(repository.list()) == 2
 
 
 def test_cleanup_failure_is_attached_to_primary_exception(tmp_path: Path) -> None:

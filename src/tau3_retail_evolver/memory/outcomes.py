@@ -53,8 +53,10 @@ class EpisodeMemoryPolicy:
         }
 
 
-_SUCCESS_TIERS = tuple(MemoryTier)
-_FAILURE_TIERS = (MemoryTier.TIP, MemoryTier.TRAJECTORY)
+# Trajectories are runtime-owned records of every rollout.  They are intentionally
+# absent from the LLM writer contract; the writer extracts only reusable knowledge.
+_SUCCESS_TIERS = (MemoryTier.TIP, MemoryTier.SKILL, MemoryTier.TOOL)
+_FAILURE_TIERS = (MemoryTier.TIP,)
 
 
 def classify_episode_memory(

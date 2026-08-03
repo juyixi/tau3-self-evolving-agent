@@ -279,8 +279,9 @@ def test_streaming_episode_writes_only_to_its_trial_quarantine(
         trial_index=0,
     )
 
-    assert len(memory.repository.list()) == 1
-    assert result.written_memory_ids
+    written_items = memory.repository.list()
+    assert sorted(item.tier.value for item in written_items) == ["tip", "trajectory"]
+    assert len(result.written_memory_ids) == 2
     assert result.parse_error_count == 1
     assert result.completed is True
     assert not training_memory_root("retail", root=tmp_path).exists()

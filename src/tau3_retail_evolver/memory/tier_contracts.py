@@ -100,15 +100,16 @@ class ToolCallExample(_ContractModel):
 class ToolPayload(_ContractModel):
     tool_name: str
     purpose: str
+    method: str | None = None
     preconditions: tuple[str, ...] = Field(min_length=1)
     argument_rules: dict[str, str] = Field(default_factory=dict)
     expected_effect: str
     example: ToolCallExample | None = None
 
-    @field_validator("tool_name", "purpose", "expected_effect")
+    @field_validator("tool_name", "purpose", "method", "expected_effect")
     @classmethod
-    def text_must_be_nonblank(cls, value: str) -> str:
-        return _nonblank(value, "tool text")
+    def text_must_be_nonblank(cls, value: str | None) -> str | None:
+        return _optional_nonblank(value, "tool text")
 
     @field_validator("preconditions")
     @classmethod
@@ -144,14 +145,20 @@ class TrajectoryDraftPayload(_ContractModel):
 
 class TrajectoryStepPayload(_ContractModel):
     order: int = Field(ge=1)
+    observation: str | None = None
     action: str
+    action_name: str | None = None
+    action_arguments: dict[str, Any] = Field(default_factory=dict)
+    result: str | None = None
     reward: float
     done: bool
+    terminated: bool | None = None
+    truncated: bool | None = None
 
-    @field_validator("action")
+    @field_validator("observation", "action", "action_name", "result")
     @classmethod
-    def action_must_be_nonblank(cls, value: str) -> str:
-        return _nonblank(value, "trajectory action")
+    def text_must_be_nonblank(cls, value: str | None) -> str | None:
+        return _optional_nonblank(value, "trajectory step text")
 
     @field_validator("reward")
     @classmethod
@@ -164,16 +171,20 @@ class TrajectoryStepPayload(_ContractModel):
 class TrajectoryPayload(_ContractModel):
     source_episode_id: str
     task_group: str
+    task_instruction: str | None = None
     initial_state: str
     steps: tuple[TrajectoryStepPayload, ...] = Field(min_length=1)
     final_reward: float
     result: Literal["success", "partial", "failure"]
-    lesson: str
+    outcome_class: Literal["success", "task_failure", "infra_failure", "incomplete"] | None = None
+    lesson: str | None = None
 
-    @field_validator("source_episode_id", "task_group", "initial_state", "lesson")
+    @field_validator(
+        "source_episode_id", "task_group", "task_instruction", "initial_state", "lesson"
+    )
     @classmethod
-    def text_must_be_nonblank(cls, value: str) -> str:
-        return _nonblank(value, "trajectory text")
+    def text_must_be_nonblank(cls, value: str | None) -> str | None:
+        return _optional_nonblank(value, "trajectory text")
 
     @field_validator("final_reward")
     @classmethod
@@ -281,6 +292,10 @@ def materialize_tier_memory(
     validate_draft_tier_payload(resolved, payload)
     if resolved is MemoryTier.TOOL:
         assert isinstance(payload, ToolPayload)
+        if payload.method is None:
+            raise ValueError("new tool memory requires a reusable executable method")
+        if payload.example is None:
+            raise ValueError("new tool memory requires a valid example call")
         _validate_tool_payload(payload, tools)
         stored: StoredTierPayload = payload
     elif resolved is MemoryTier.TRAJECTORY:
@@ -307,6 +322,45 @@ def materialize_tier_memory(
         content=content,
         retrieval_text=resolved_retrieval,
         classification_rule=f"{resolved.value}-contract-v2",
+    )
+
+
+def materialize_rule_trajectory_memory(
+    *,
+    task_instruction: str,
+    run_id: str,
+    task_id: str,
+    task_group: str,
+    final_reward: float,
+    outcome_class: Literal["success", "task_failure", "infra_failure", "incomplete"],
+    trajectory: Sequence[Mapping[str, Any]],
+) -> MaterializedTierMemory:
+    """Build an immutable trajectory memory solely from observed runtime evidence."""
+    if not trajectory:
+        raise ValueError("trajectory memory requires at least one observed step")
+    steps = tuple(
+        _rule_trajectory_step(index, step)
+        for index, step in enumerate(trajectory, start=1)
+    )
+    resolved_reward = _finite_number(final_reward, "final reward")
+    stored = TrajectoryPayload(
+        source_episode_id=f"{_nonblank(run_id, 'run ID')}:{_nonblank(task_id, 'task ID')}",
+        task_group=_nonblank(task_group, "task group"),
+        task_instruction=_bounded_text(task_instruction, "task instruction"),
+        initial_state=_bounded_text(trajectory[0].get("observation"), "initial observation"),
+        steps=steps,
+        final_reward=resolved_reward,
+        result=_reward_result(resolved_reward),
+        outcome_class=outcome_class,
+        lesson=None,
+    )
+    content = render_tier_payload(MemoryTier.TRAJECTORY, stored)
+    return MaterializedTierMemory(
+        tier=MemoryTier.TRAJECTORY,
+        payload=stored.model_dump(mode="json"),
+        content=content,
+        retrieval_text=default_retrieval_text(MemoryTier.TRAJECTORY, stored),
+        classification_rule="trajectory-runtime-record-v2",
     )
 
 
@@ -353,31 +407,62 @@ def render_tier_payload(
         lines = [
             f"Tool: {stored.tool_name}",
             f"Purpose: {stored.purpose}",
+        ]
+        if stored.method is not None:
+            lines.append(f"Executable method: {stored.method}")
+        lines.extend((
             "Preconditions: " + "; ".join(stored.preconditions),
             "Argument rules:",
-        ]
+        ))
         lines.extend(
             f"- {name}: {rule}" for name, rule in sorted(stored.argument_rules.items())
         )
         lines.append(f"Expected effect: {stored.expected_effect}")
+        if stored.example is not None:
+            lines.append(
+                "Example call: "
+                f"{stored.example.name}("
+                f"{json.dumps(stored.example.arguments, ensure_ascii=False, sort_keys=True)}"
+                ")"
+            )
         return "\n".join(lines)
     assert isinstance(stored, TrajectoryPayload)
-    lines = [
+    lines = []
+    if stored.task_instruction is not None:
+        lines.append(f"Task: {stored.task_instruction}")
+    lines.extend([
         f"Case: {stored.initial_state}",
         f"Episode: {stored.source_episode_id}",
         f"Task group: {stored.task_group}",
         "Observed steps:",
-    ]
-    lines.extend(
-        f"{step.order}. {step.action} [reward={step.reward}, done={str(step.done).lower()}]"
-        for step in stored.steps
+    ])
+    for step in stored.steps:
+        if step.observation is not None:
+            lines.append(f"{step.order}. Observation: {step.observation}")
+            lines.append(f"   Action: {step.action}")
+            if step.result is not None:
+                lines.append(f"   Result: {step.result}")
+            lines.append(
+                "   Outcome: "
+                f"reward={step.reward}, done={str(step.done).lower()}, "
+                f"terminated={str(bool(step.terminated)).lower()}, "
+                f"truncated={str(bool(step.truncated)).lower()}"
+            )
+        else:
+            lines.append(
+                f"{step.order}. {step.action} "
+                f"[reward={step.reward}, done={str(step.done).lower()}]"
+            )
+    outcome_suffix = (
+        f", outcome_class={stored.outcome_class}"
+        if stored.outcome_class is not None
+        else ""
     )
-    lines.extend(
-        (
-            f"Result: {stored.result} (final_reward={stored.final_reward})",
-            f"Lesson: {stored.lesson}",
-        )
+    lines.append(
+        f"Result: {stored.result} (final_reward={stored.final_reward}{outcome_suffix})"
     )
+    if stored.lesson is not None:
+        lines.append(f"Lesson: {stored.lesson}")
     return "\n".join(lines)
 
 
@@ -398,9 +483,20 @@ def default_retrieval_text(
     if isinstance(stored, SkillPayload):
         return f"{stored.goal} {' '.join(step.instruction for step in stored.steps)}"
     if isinstance(stored, ToolPayload):
-        return f"{stored.tool_name} {stored.purpose}"
+        return " ".join(
+            part for part in (stored.tool_name, stored.purpose, stored.method) if part
+        )
     assert isinstance(stored, TrajectoryPayload)
-    return f"{stored.initial_state} {stored.lesson}"
+    return " ".join(
+        part
+        for part in (
+            stored.task_instruction,
+            stored.initial_state,
+            stored.outcome_class,
+            stored.lesson,
+        )
+        if part
+    )
 
 
 def _materialize_trajectory(
@@ -433,6 +529,57 @@ def _materialize_trajectory(
         result=_reward_result(resolved_reward),
         lesson=draft.lesson,
     )
+
+
+def _rule_trajectory_step(
+    order: int,
+    step: Mapping[str, Any],
+) -> TrajectoryStepPayload:
+    action = _nonblank(step.get("action"), "trajectory action")
+    action_name, action_arguments = _structured_action(action)
+    return TrajectoryStepPayload(
+        order=order,
+        observation=_bounded_text(step.get("observation"), "trajectory observation"),
+        action=action,
+        action_name=action_name,
+        action_arguments=action_arguments,
+        result=_optional_bounded_text(
+            step.get("next_observation"), "trajectory result"
+        ),
+        reward=_finite_number(step.get("reward"), "trajectory reward"),
+        done=_strict_bool(step.get("done"), "trajectory done"),
+        terminated=_strict_bool(step.get("terminated"), "trajectory terminated"),
+        truncated=_strict_bool(step.get("truncated"), "trajectory truncated"),
+    )
+
+
+def _structured_action(action: str) -> tuple[str | None, dict[str, Any]]:
+    try:
+        parsed = json.loads(action)
+    except json.JSONDecodeError:
+        return None, {}
+    if not isinstance(parsed, Mapping):
+        return None, {}
+    name = parsed.get("name")
+    arguments = parsed.get("arguments")
+    if not isinstance(name, str) or not name.strip() or not isinstance(arguments, Mapping):
+        return None, {}
+    return name.strip(), dict(arguments)
+
+
+def _bounded_text(value: Any, label: str, *, limit: int = 500) -> str:
+    return _nonblank(value, label)[:limit]
+
+
+def _optional_bounded_text(
+    value: Any,
+    label: str,
+    *,
+    limit: int = 500,
+) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return _bounded_text(value, label, limit=limit)
 
 
 def _validate_tool_payload(

@@ -138,12 +138,11 @@ def test_write_decision_schema_discriminates_payloads_by_tier() -> None:
 
     assert memory_schema["discriminator"]["propertyName"] == "tier"
     assert set(memory_schema["discriminator"]["mapping"]) == {
-        "trajectory",
         "tip",
         "skill",
         "tool",
     }
-    assert len(memory_schema["oneOf"]) == 4
+    assert len(memory_schema["oneOf"]) == 3
 
 
 def test_maintenance_decision_parses_only_known_typed_commands() -> None:

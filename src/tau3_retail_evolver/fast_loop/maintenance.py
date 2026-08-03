@@ -580,7 +580,9 @@ def _materialize_v2_merge(
             raise ValueError("tool merge sources must describe the same tool")
         payload = payload.model_copy(update={"purpose": command.content})
     elif isinstance(payload, TrajectoryPayload):
-        payload = payload.model_copy(update={"lesson": command.content})
+        raise ValueError(
+            "trajectory memories are immutable runtime records and cannot be merged"
+        )
     else:
         raise TypeError(f"unsupported V2 merge payload: {type(payload).__name__}")
 

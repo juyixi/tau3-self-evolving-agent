@@ -11,7 +11,13 @@ from tau3_retail_evolver.fast_loop.baseline_prompt import normalize_tool_schema
 from tau3_retail_evolver.fast_loop.decisions import maintenance_command_schemas
 from tau3_retail_evolver.memory.outcomes import memory_outcome_labels
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate
-from tau3_retail_evolver.memory.types import MemoryItem
+from tau3_retail_evolver.memory.tier_contracts import (
+    ToolPayload,
+    render_tier_payload,
+    validate_stored_tier_payload,
+    validate_tool_payload_against_tools,
+)
+from tau3_retail_evolver.memory.types import MemoryItem, MemoryTier
 from tau3_retail_evolver.runs.manifest import sanitize_artifact_data
 
 
@@ -19,6 +25,7 @@ PromptKind = Literal["selection", "action", "write", "maintenance"]
 MAX_DIAGNOSTIC_ITEMS_PER_TIER = 100
 MAX_DIAGNOSTIC_CONTENT_CHARS = 320
 MAX_PROMPT_MEMORY_CONTENT_CHARS = 800
+MAX_INJECTED_TOOL_METHOD_CHARS = 1_600
 CUMULATIVE_TRAJECTORY_FORMAT = "final_observation_plus_actions_v1"
 _FORBIDDEN_PUBLIC_KEY_NAMES = frozenset(
     {
@@ -142,8 +149,15 @@ def build_action_prompt(
         observation=observation,
         history=history,
     )
+    payload["tools"], injected_tool_memory_ids = _inject_selected_tool_memories(
+        payload["tools"], memories
+    )
     if include_memory_context:
-        payload["memories"] = [_public_memory(memory) for memory in memories]
+        payload["memories"] = [
+            _public_memory(memory)
+            for memory in memories
+            if _memory_id(memory) not in injected_tool_memory_ids
+        ]
     return LifecyclePrompt(
         kind="action",
         payload=payload,
@@ -300,8 +314,88 @@ def _public_memory(candidate: MemoryCandidate | MemoryItem | Mapping[str, Any]) 
     for key in ("rank", "similarity"):
         if key in candidate:
             public[key] = candidate[key]
+    if candidate.get("tier_schema_version") == 2 and isinstance(
+        candidate.get("payload"), Mapping
+    ):
+        public["tier_schema_version"] = 2
+        public["payload"] = _json_copy(candidate["payload"], "memory tier payload")
     _require_json_safe(public, "public memory")
     return _json_copy(public, "public memory")
+
+
+def _inject_selected_tool_memories(
+    tools: Sequence[Mapping[str, Any]],
+    memories: Sequence[MemoryCandidate | MemoryItem | Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], frozenset[str]]:
+    injected = _json_copy(list(tools), "action tools")
+    registry: dict[str, dict[str, Any]] = {}
+    for tool in injected:
+        function = tool.get("function")
+        schema = function if isinstance(function, dict) else tool
+        name = schema.get("name")
+        if isinstance(name, str) and name.strip():
+            registry[name.strip()] = schema
+
+    injected_ids: set[str] = set()
+    for memory in memories:
+        record = _typed_memory_record(memory)
+        if record is None or record[1] is not MemoryTier.TOOL:
+            continue
+        memory_id, _, raw_payload = record
+        stored = validate_stored_tier_payload(MemoryTier.TOOL, raw_payload)
+        if not isinstance(stored, ToolPayload):
+            continue
+        validate_tool_payload_against_tools(stored, injected)
+        target = registry.get(stored.tool_name)
+        if target is None:
+            raise ValueError(
+                f"selected tool memory references an unavailable tool: {stored.tool_name}"
+            )
+        method = render_tier_payload(MemoryTier.TOOL, stored)
+        existing_description = target.get("description")
+        base = existing_description.strip() if isinstance(existing_description, str) else ""
+        addition = (
+            f"Selected executable memory method ({memory_id}):\n{method}"
+        )[:MAX_INJECTED_TOOL_METHOD_CHARS]
+        target["description"] = f"{base}\n\n{addition}".strip()
+        injected_ids.add(memory_id)
+    _require_json_safe(injected, "action tools with selected tool memory")
+    return injected, frozenset(injected_ids)
+
+
+def _typed_memory_record(
+    candidate: MemoryCandidate | MemoryItem | Mapping[str, Any],
+) -> tuple[str, MemoryTier, Mapping[str, Any]] | None:
+    item: MemoryItem | Mapping[str, Any]
+    item = candidate.item if isinstance(candidate, MemoryCandidate) else candidate
+    if isinstance(item, MemoryItem):
+        if item.tier_schema_version != 2 or not isinstance(item.payload, Mapping):
+            return None
+        return item.id, item.tier, item.payload
+    if not isinstance(item, Mapping) or item.get("tier_schema_version") != 2:
+        return None
+    raw_payload = item.get("payload")
+    raw_id = item.get("id")
+    try:
+        tier = MemoryTier(item.get("tier"))
+    except ValueError:
+        return None
+    if not isinstance(raw_id, str) or not raw_id.strip() or not isinstance(
+        raw_payload, Mapping
+    ):
+        return None
+    return raw_id.strip(), tier, raw_payload
+
+
+def _memory_id(
+    candidate: MemoryCandidate | MemoryItem | Mapping[str, Any],
+) -> str:
+    item: MemoryItem | Mapping[str, Any]
+    item = candidate.item if isinstance(candidate, MemoryCandidate) else candidate
+    value = item.id if isinstance(item, MemoryItem) else item.get("id")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("memory candidate is missing an ID")
+    return value.strip()
 
 
 def _bounded_memory_content(value: str) -> str:

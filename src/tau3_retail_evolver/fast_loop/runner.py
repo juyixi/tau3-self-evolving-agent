@@ -33,6 +33,8 @@ from tau3_retail_evolver.memory.outcomes import (
 )
 from tau3_retail_evolver.memory.tier_contracts import (
     TIER_SCHEMA_VERSION,
+    MaterializedTierMemory,
+    materialize_rule_trajectory_memory,
     materialize_tier_memory,
 )
 from tau3_retail_evolver.memory.types import (
@@ -506,13 +508,27 @@ def _run_lifecycle_episode(
                 terminal_evaluation=terminal_evaluation,
                 truncated=truncated or project_truncated,
             )
-            if not memory_policy.should_generate:
-                _emit_skipped_memory_write(
-                    context,
-                    task_id,
-                    memory_policy,
-                )
-            else:
+            trajectory_proposal = _rule_trajectory_proposal(
+                task_instruction=public_task_instruction,
+                task_id=task_id,
+                context=context,
+                final_reward=final_reward,
+                selected_ids=selected_ids,
+                trajectory=trajectory,
+                memory_policy=memory_policy,
+            )
+            learned_proposals: list[dict[str, Any]] = []
+            dropped_by_tier: dict[str, int] = {}
+            write_audit: dict[str, Any] = {
+                "repaired_output": None,
+                "error": None,
+                "fallback_used": False,
+                "sampling_params": {},
+                "latency_s": 0.0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            }
+            if memory_policy.should_generate:
                 write_prompt = build_write_prompt(
                     task_instruction=public_task_instruction,
                     policy=public_policy,
@@ -555,7 +571,7 @@ def _run_lifecycle_episode(
                     write_decision,
                     config,
                 )
-                proposals = [
+                learned_proposals = [
                     _write_proposal(
                         memory,
                         task_id,
@@ -568,48 +584,54 @@ def _run_lifecycle_episode(
                     )
                     for memory in accepted_memories
                 ]
-                _emit(
-                    context,
-                    task_id,
-                    "MemoryWriteProposed",
-                    proposals=[proposal["evidence"] for proposal in proposals],
-                    repair_used=write_audit["repaired_output"] is not None,
-                    invalid_output_skipped=write_audit["fallback_used"],
-                    sampling_params=write_audit["sampling_params"],
-                    latency_s=write_audit["latency_s"],
-                    prompt_tokens=write_audit["prompt_tokens"],
-                    completion_tokens=write_audit["completion_tokens"],
-                    dropped_by_tier=dropped_by_tier,
-                    outcome_class=memory_policy.outcome_class.value,
-                    polarity=memory_policy.polarity.value,
-                )
+            proposals = [trajectory_proposal, *learned_proposals]
+            _emit(
+                context,
+                task_id,
+                "MemoryWriteProposed",
+                proposals=[proposal["evidence"] for proposal in proposals],
+                repair_used=write_audit["repaired_output"] is not None,
+                invalid_output_skipped=write_audit["fallback_used"],
+                sampling_params=write_audit["sampling_params"],
+                latency_s=write_audit["latency_s"],
+                prompt_tokens=write_audit["prompt_tokens"],
+                completion_tokens=write_audit["completion_tokens"],
+                dropped_by_tier=dropped_by_tier,
+                outcome_class=memory_policy.outcome_class.value,
+                polarity=(
+                    memory_policy.polarity.value
+                    if memory_policy.polarity is not None
+                    else None
+                ),
+                skipped_reason=memory_policy.skip_reason,
+            )
+            try:
+                written_ids, replayed_ids = _persist_proposals(repository, proposals)
+            except BaseException as error:
+                committed_ids = getattr(error, "_fast_loop_committed_ids", ())
+                replayed_ids = getattr(error, "_fast_loop_replayed_ids", ())
+                write_failure_emitted = True
                 try:
-                    written_ids, replayed_ids = _persist_proposals(repository, proposals)
-                except BaseException as error:
-                    committed_ids = getattr(error, "_fast_loop_committed_ids", ())
-                    replayed_ids = getattr(error, "_fast_loop_replayed_ids", ())
-                    write_failure_emitted = True
-                    try:
-                        _emit(
-                            context,
-                            task_id,
-                            "MemoryWriteFailed",
-                            committed_memory_ids=list(committed_ids),
-                            replayed_memory_ids=list(replayed_ids),
-                            error=_sanitized_error(error),
-                        )
-                    except Exception as evidence_error:
-                        error.add_note(
-                            f"Fast-loop write failure evidence also failed: {evidence_error}"
-                        )
-                    raise
-                _emit(
-                    context,
-                    task_id,
-                    "MemoryWriteCommitted",
-                    written_memory_ids=list(written_ids),
-                    replayed_memory_ids=list(replayed_ids),
-                )
+                    _emit(
+                        context,
+                        task_id,
+                        "MemoryWriteFailed",
+                        committed_memory_ids=list(committed_ids),
+                        replayed_memory_ids=list(replayed_ids),
+                        error=_sanitized_error(error),
+                    )
+                except Exception as evidence_error:
+                    error.add_note(
+                        f"Fast-loop write failure evidence also failed: {evidence_error}"
+                    )
+                raise
+            _emit(
+                context,
+                task_id,
+                "MemoryWriteCommitted",
+                written_memory_ids=list(written_ids),
+                replayed_memory_ids=list(replayed_ids),
+            )
         result = EpisodeResult(
             task_id=task_id,
             final_reward=final_reward,
@@ -866,38 +888,6 @@ def _terminal_json_mapping(
     return parsed
 
 
-def _emit_skipped_memory_write(
-    context: RunContext,
-    task_id: str,
-    memory_policy: EpisodeMemoryPolicy,
-) -> None:
-    if memory_policy.should_generate:
-        raise ValueError("generated Memory outcomes cannot use the skipped lifecycle")
-    _emit(
-        context,
-        task_id,
-        "MemoryWriteProposed",
-        proposals=[],
-        repair_used=False,
-        invalid_output_skipped=False,
-        sampling_params={},
-        latency_s=0.0,
-        prompt_tokens=0,
-        completion_tokens=0,
-        dropped_by_tier={},
-        outcome_class=memory_policy.outcome_class.value,
-        polarity=None,
-        skipped_reason=memory_policy.skip_reason,
-    )
-    _emit(
-        context,
-        task_id,
-        "MemoryWriteCommitted",
-        written_memory_ids=[],
-        replayed_memory_ids=[],
-    )
-
-
 def _write_proposal(
     memory: Any,
     task_id: str,
@@ -940,6 +930,65 @@ def _write_proposal(
         polarity=memory_policy.polarity.value,
         outcome_class=memory_policy.outcome_class.value,
     )
+    return _materialized_proposal(
+        materialized=materialized,
+        task_id=task_id,
+        context=context,
+        metadata=metadata,
+        generation_mode="llm",
+    )
+
+
+def _rule_trajectory_proposal(
+    *,
+    task_instruction: str,
+    task_id: str,
+    context: RunContext,
+    final_reward: float,
+    selected_ids: tuple[str, ...],
+    trajectory: Sequence[Mapping[str, Any]],
+    memory_policy: EpisodeMemoryPolicy,
+) -> dict[str, Any]:
+    materialized = materialize_rule_trajectory_memory(
+        task_instruction=task_instruction,
+        run_id=context.run_id,
+        task_id=task_id,
+        task_group=context.task_group_for(task_id),
+        final_reward=final_reward,
+        outcome_class=memory_policy.outcome_class.value,
+        trajectory=trajectory,
+    )
+    metadata = {
+        "source_run_id": context.run_id,
+        "source_iteration": context.iteration,
+        "source_final_reward": final_reward,
+        "selected_memory_ids": list(selected_ids),
+        "classification_rule": materialized.classification_rule,
+        "polarity": (
+            memory_policy.polarity.value
+            if memory_policy.polarity is not None
+            else "caution"
+        ),
+        "outcome_class": memory_policy.outcome_class.value,
+        "generation_mode": "rule",
+    }
+    return _materialized_proposal(
+        materialized=materialized,
+        task_id=task_id,
+        context=context,
+        metadata=metadata,
+        generation_mode="rule",
+    )
+
+
+def _materialized_proposal(
+    *,
+    materialized: MaterializedTierMemory,
+    task_id: str,
+    context: RunContext,
+    metadata: Mapping[str, Any],
+    generation_mode: str,
+) -> dict[str, Any]:
     memory_id = stable_memory_id(materialized.tier, materialized.content)
     add_kwargs = {
         "tier": materialized.tier,
@@ -948,7 +997,7 @@ def _write_proposal(
         "content": materialized.content,
         "source_task_ids": (task_id,),
         "created_round": context.iteration,
-        "metadata": metadata,
+        "metadata": dict(metadata),
         "retrieval_text": materialized.retrieval_text,
     }
     return {
@@ -956,12 +1005,13 @@ def _write_proposal(
         "add_kwargs": add_kwargs,
         "evidence": {
             "memory_id": memory_id,
+            "generation_mode": generation_mode,
             "tier": materialized.tier.value,
             "tier_schema_version": TIER_SCHEMA_VERSION,
             "payload": materialized.payload,
             "content": materialized.content,
             "retrieval_text": materialized.retrieval_text,
-            "metadata": metadata,
+            "metadata": dict(metadata),
             "source_task_ids": [task_id],
             "created_round": context.iteration,
         },

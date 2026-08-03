@@ -13,6 +13,7 @@ from tau3_retail_evolver.memory.tier_contracts import (
     ToolCallExample,
     ToolPayload,
     TrajectoryDraftPayload,
+    materialize_rule_trajectory_memory,
     materialize_tier_memory,
     render_tier_payload,
     validate_tool_payload_against_tools,
@@ -101,6 +102,7 @@ def test_tool_must_reference_one_available_tool_and_declared_arguments() -> None
     payload = ToolPayload(
         tool_name="lookup_order",
         purpose="Read the current order state before a mutation.",
+        method="Call lookup_order once with the exact customer-supplied order ID.",
         preconditions=("The customer supplied an order ID.",),
         argument_rules={"order_id": "Use the exact order ID."},
         expected_effect="The current order record is returned.",
@@ -134,6 +136,7 @@ def test_tool_contract_supports_real_zero_argument_tools() -> None:
     payload = ToolPayload(
         tool_name="list_categories",
         purpose="List the supported retail categories.",
+        method="Call list_categories without arguments and use the returned list.",
         preconditions=("A category choice is required.",),
         expected_effect="The supported categories are returned.",
     )
@@ -179,14 +182,42 @@ def test_trajectory_provenance_and_outcome_are_derived_from_the_episode() -> Non
     assert materialized.payload["task_group"] == "retail:return"
     assert materialized.payload["final_reward"] == 0.8
     assert materialized.payload["result"] == "partial"
-    assert materialized.payload["steps"] == [
-        {
-            "order": 1,
-            "action": "lookup_order(order_id='A1')",
-            "reward": 0.8,
-            "done": True,
-        }
-    ]
+    assert materialized.payload["steps"][0]["order"] == 1
+    assert materialized.payload["steps"][0]["action"] == "lookup_order(order_id='A1')"
+    assert materialized.payload["steps"][0]["reward"] == 0.8
+    assert materialized.payload["steps"][0]["done"] is True
+
+
+def test_rule_trajectory_is_materialized_from_observed_rollout_without_llm_draft() -> None:
+    materialized = materialize_rule_trajectory_memory(
+        task_instruction="Look up order A1.",
+        run_id="run-8",
+        task_id="task-4",
+        task_group="retail",
+        final_reward=1.0,
+        outcome_class="success",
+        trajectory=(
+            {
+                "observation": "Customer asks about order A1.",
+                "action": '{"arguments":{"order_id":"A1"},"name":"lookup_order"}',
+                "next_observation": "Order A1 is delivered.",
+                "reward": 1.0,
+                "done": True,
+                "terminated": True,
+                "truncated": False,
+            },
+        ),
+    )
+
+    payload = materialized.payload
+    assert payload["source_episode_id"] == "run-8:task-4"
+    assert payload["task_instruction"] == "Look up order A1."
+    assert payload["lesson"] is None
+    assert payload["steps"][0]["action_name"] == "lookup_order"
+    assert payload["steps"][0]["action_arguments"] == {"order_id": "A1"}
+    assert payload["steps"][0]["observation"] == "Customer asks about order A1."
+    assert payload["steps"][0]["result"] == "Order A1 is delivered."
+    assert materialized.classification_rule == "trajectory-runtime-record-v2"
 
 
 def test_v2_memory_persists_payload_and_rejects_content_drift(tmp_path: Path) -> None:

@@ -223,18 +223,24 @@ def build_writing_examples(
     threshold = _threshold(score_threshold)
     examples: list[OPDExample] = []
     for episode in ledger.episodes:
-        if not episode.committed_new_memory_ids:
-            continue
         proposal_by_id = {
             proposal.memory_id: proposal for proposal in episode.write_proposals
         }
-        rows: list[dict[str, Any]] = []
+        llm_committed_memory_ids: list[str] = []
         for memory_id in episode.committed_new_memory_ids:
             proposal = proposal_by_id.get(memory_id)
             if proposal is None:
                 raise ValueError(
-                    f"committed new memory has no proposal: {episode.episode_id}/{memory_id}"
+                    f"committed new memory has no proposal: "
+                    f"{episode.episode_id}/{memory_id}"
                 )
+            if proposal.generation_mode == "llm":
+                llm_committed_memory_ids.append(memory_id)
+        if not llm_committed_memory_ids:
+            continue
+        rows: list[dict[str, Any]] = []
+        for memory_id in llm_committed_memory_ids:
+            proposal = proposal_by_id[memory_id]
             score = _score_for(score_by_id, memory_id)
             if score.creator_episode_id != episode.episode_id:
                 raise ValueError(f"new memory creator provenance mismatch: {memory_id}")

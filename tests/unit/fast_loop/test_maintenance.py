@@ -22,7 +22,12 @@ from tau3_retail_evolver.fast_loop.runner import LifecycleResponse
 from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_retail_evolver.memory.operations import DeleteCommand
 from tau3_retail_evolver.memory.repository import MemoryRepository
-from tau3_retail_evolver.memory.tier_contracts import TipPayload, render_tier_payload
+from tau3_retail_evolver.memory.tier_contracts import (
+    TipPayload,
+    TrajectoryPayload,
+    TrajectoryStepPayload,
+    render_tier_payload,
+)
 from tau3_retail_evolver.memory.types import MemoryStatus, MemoryTier
 
 
@@ -807,6 +812,66 @@ def test_cross_tier_merge_is_rejected_by_real_operations(tmp_path: Path) -> None
 
     assert repository.get(first.id).status == MemoryStatus.ACTIVE
     assert repository.get(tool.id).status == MemoryStatus.ACTIVE
+    assert not (repository.root / "maintenance_state.json").exists()
+
+
+def test_runtime_trajectory_merge_is_rejected(tmp_path: Path) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+    memories = []
+    for index in (1, 2):
+        payload = TrajectoryPayload(
+            source_episode_id=f"run-1:task-{index}",
+            task_group="retail",
+            task_instruction="Resolve the customer request.",
+            initial_state="Customer asks for help.",
+            steps=(
+                TrajectoryStepPayload(
+                    order=1,
+                    observation="Customer asks for help.",
+                    action='{"name":"lookup_order","arguments":{"order_id":"1"}}',
+                    action_name="lookup_order",
+                    action_arguments={"order_id": "1"},
+                    result="Order found.",
+                    reward=1.0,
+                    done=True,
+                    terminated=True,
+                    truncated=False,
+                ),
+            ),
+            final_reward=1.0,
+            result="success",
+            outcome_class="success",
+        )
+        memories.append(
+            repository.add(
+                tier=MemoryTier.TRAJECTORY,
+                tier_schema_version=2,
+                payload=payload.model_dump(mode="json"),
+                content=render_tier_payload(MemoryTier.TRAJECTORY, payload),
+                source_task_ids=(f"task-{index}",),
+                created_round=0,
+            )
+        )
+    decision = json.dumps(
+        {
+            "commands": [
+                {
+                    "operation": "merge",
+                    "source_ids": [memory.id for memory in memories],
+                    "content": "Do not synthesize a lesson over raw trajectory records.",
+                    "updated_round": 1,
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="immutable runtime records"):
+        _run(repository, ScriptedPolicy([decision]))
+
+    assert all(
+        repository.get(memory.id).status == MemoryStatus.ACTIVE
+        for memory in memories
+    )
     assert not (repository.root / "maintenance_state.json").exists()
 
 

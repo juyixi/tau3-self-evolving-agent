@@ -69,61 +69,29 @@ class FakeClock:
         return next(self._values)
 
 
-SELECTION_SYSTEM = (
-    'Return exactly one strict JSON object matching SelectionDecision: '
-    '{"memory_ids":[...]}. Use only candidate IDs from the user payload. '
-    "Positive memories describe proven strategies. Caution memories describe failure "
-    "reflections and must only be selected when their warning is relevant. "
-    'Do not use tools or include any other text.'
-)
-ACTION_SYSTEM = (
-    "Choose exactly one Tau2 action using the official policy and public context. "
-    "Use at most one provided tool call, or return a valid Tau2 text action. "
-    "Treat positive memories as reusable strategies. Treat caution memories only as "
-    "behavior to avoid or correct; never imitate their failed behavior or treat them "
-    "as successful completion conditions. "
-    "Do not include hidden data."
-)
-WRITE_SYSTEM = (
-    "Return exactly one strict JSON object matching WriteDecision. Each memory must use "
-    'one tier-specific payload: "tip" is one atomic condition or rule; "skill" is one '
-    'reusable goal with at least two ordered steps; "tool" is usage knowledge for exactly '
-    'one tool present in the supplied tool schemas; "trajectory" is one concrete observed '
-    "episode case. Split mixed lessons into separate memories. Use this shape: "
-    '{"memories":[{"tier":"tip","payload":{"condition":"optional condition",'
-    '"guidance":"one atomic rule","rationale":"optional rationale","scope":[]},'
-    '"retrieval_text":"optional retrieval query","metadata":{}}]}. '
-    'Use {"memories":[]} when no durable lesson passes a tier definition. Content is '
-    "rendered by the runtime and must not be returned. Attribution fields are not allowed. "
-    "Follow memory_outcome exactly: successful outcomes may write positive memories; "
-    "task failures may write only caution tips and failure trajectories. Failure memories "
-    "must state what to avoid and the corrective behavior, never a success condition. "
-    'When trajectory_format is "final_observation_plus_actions_v1", observation contains '
-    "the complete cumulative transcript and trajectory contains its ordered action and "
-    "outcome metadata without repeated observations. "
-    "Do not use tools, Markdown fences, or include any other text."
-)
-MAINTENANCE_SYSTEM = (
-    "You are the Memory maintenance controller. Return exactly one strict JSON object "
-    'matching MaintenanceDecision: {"reviews":[...],"commands":[...]}. '
-    "Apply these rules: "
-    "1. Review priority candidates first. Every reviewed Memory ID appears exactly once "
-    "with disposition keep, merge, or retire. "
-    "2. Use keep when evidence is insufficient. Do not change a useful distinct Memory. "
-    "3. Merge only redundant Memories from the same tier. Put all merged IDs in one merge "
-    "command and mark those reviews as merge. Never also delete a merge source. "
-    "4. Retire only clearly obsolete, incorrect, or redundant Memories. Mark deleted IDs "
-    "as retire and provide a concrete reason. "
-    "5. Commands may reference only IDs present in diagnostics. Do not repeat an ID across "
-    "commands. Do not mix lookup commands with merge or delete commands. "
-    "6. The runtime owns updated_round and typed payload fields; omit them. Return only "
-    "semantic merge content or delete reasons. "
-    "7. When requires_tip_reduction is true, reduce redundant tips toward tip_capacity. "
-    'Otherwise commands may be empty. Use {"reviews":[],"commands":[]} only when there '
-    "is genuinely nothing safe to review. "
-    "Use only the supplied diagnostics and command schemas. Do not call tools, use Markdown, "
-    "or include any text outside the JSON object."
-)
+SELECTION_SYSTEM = openai_compatible._SELECTION_SYSTEM
+ACTION_SYSTEM = openai_compatible._ACTION_SYSTEM
+WRITE_SYSTEM = openai_compatible._WRITE_SYSTEM
+MAINTENANCE_SYSTEM = openai_compatible._MAINTENANCE_SYSTEM
+
+
+def test_fast_loop_system_prompts_encode_opd_experience_lifecycle() -> None:
+    assert "smallest actionable memory context" in SELECTION_SYSTEM
+    assert "expected causal utility" in SELECTION_SYSTEM
+    assert "not by topical similarity or retrieval rank alone" in SELECTION_SYSTEM
+
+    assert "goal is to solve the current task, not to demonstrate memory use" in ACTION_SYSTEM
+    assert "selected memories are fallible prior experience" in ACTION_SYSTEM
+    assert "verify all required effects and the true success condition" in ACTION_SYSTEM
+
+    assert "compact future-facing knowledge" in WRITE_SYSTEM
+    assert "do not summarize or restate the trajectory" in WRITE_SYSTEM
+    assert "causal behavior that produced the outcome" in WRITE_SYSTEM
+    assert "never propose trajectory memory" in WRITE_SYSTEM
+
+    assert "maximum downstream usefulness" in MAINTENANCE_SYSTEM
+    assert "Judge incremental utility" in MAINTENANCE_SYSTEM
+    assert "Capacity pressure alone does not justify deleting" in MAINTENANCE_SYSTEM
 
 
 def _decision_response_format(kind: str) -> dict[str, Any]:

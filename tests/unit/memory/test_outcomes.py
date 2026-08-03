@@ -19,10 +19,14 @@ def test_success_allows_positive_memory_tiers() -> None:
     assert policy.should_generate is True
     assert policy.outcome_class is MemoryOutcomeClass.SUCCESS
     assert policy.polarity is MemoryPolarity.POSITIVE
-    assert set(policy.allowed_tiers) == set(MemoryTier)
+    assert policy.allowed_tiers == (
+        MemoryTier.TIP,
+        MemoryTier.SKILL,
+        MemoryTier.TOOL,
+    )
 
 
-def test_task_failure_allows_only_caution_tip_and_trajectory() -> None:
+def test_task_failure_allows_only_caution_tip() -> None:
     policy = classify_episode_memory(
         final_reward=0.0,
         terminal_evaluation={"reward": 0.0},
@@ -32,7 +36,7 @@ def test_task_failure_allows_only_caution_tip_and_trajectory() -> None:
     assert policy.should_generate is True
     assert policy.outcome_class is MemoryOutcomeClass.TASK_FAILURE
     assert policy.polarity is MemoryPolarity.CAUTION
-    assert policy.allowed_tiers == (MemoryTier.TIP, MemoryTier.TRAJECTORY)
+    assert policy.allowed_tiers == (MemoryTier.TIP,)
 
 
 def test_incomplete_or_unevaluated_episode_skips_memory() -> None:

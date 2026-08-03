@@ -32,7 +32,7 @@ Student LoRA 接收 forward KL 梯度。
 | --- | --- | --- |
 | `sel` | 一个 task | 存在候选 Memory，且至少一个候选有足够 attribution 证据 |
 | `act` | 一个成功 task | `reward=1` 且存在非空完整 trajectory |
-| `write` | 一个 task | 存在通过 future attribution 审计的 committed new Memory |
+| `write` | 一个 task | 存在通过 future attribution 审计的 LLM-generated committed new Memory；规则生成的 trajectory 不作为 writer target |
 | `maint` | 一个 maintenance round | 对应一次成功的 `MaintenanceCommitted` |
 
 `act` 的一条样本包含整个 task 的 action solution sequence，不能按 trajectory step

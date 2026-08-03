@@ -64,6 +64,7 @@ class TrajectoryStepEvidence(_EvidenceModel):
 
 class WriteProposalEvidence(_EvidenceModel):
     memory_id: str
+    generation_mode: Literal["llm", "rule"] = "llm"
     tier: MemoryTier
     tier_schema_version: Literal[2] = 2
     payload: dict[str, Any]
@@ -607,6 +608,29 @@ def _write_proposal(
         )
         if actual_steps != expected_steps:
             raise ValueError(f"trajectory proposal steps mismatch: {memory_id}")
+        if raw.get("generation_mode") == "rule":
+            expected_runtime_steps = tuple(
+                (
+                    str(step.observation).strip()[:500],
+                    str(step.next_observation).strip()[:500] or None,
+                    step.terminated,
+                    step.truncated,
+                )
+                for step in trajectory
+            )
+            actual_runtime_steps = tuple(
+                (
+                    step.observation,
+                    step.result,
+                    step.terminated,
+                    step.truncated,
+                )
+                for step in stored_payload.steps
+            )
+            if actual_runtime_steps != expected_runtime_steps:
+                raise ValueError(
+                    f"runtime trajectory proposal evidence mismatch: {memory_id}"
+                )
     content = _nonblank(raw, "content", "write proposal")
     if canonical_content(content) != canonical_content(
         render_tier_payload(tier, stored_payload)
@@ -622,6 +646,7 @@ def _write_proposal(
         raise ValueError(f"write proposal round is invalid: {memory_id}")
     return WriteProposalEvidence(
         memory_id=memory_id,
+        generation_mode=raw.get("generation_mode", "llm"),
         tier=tier,
         payload=stored_payload.model_dump(mode="json"),
         content=content,

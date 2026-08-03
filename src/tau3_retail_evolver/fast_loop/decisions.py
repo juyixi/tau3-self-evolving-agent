@@ -24,7 +24,6 @@ from tau3_retail_evolver.memory.tier_contracts import (
     SkillPayload,
     TipPayload,
     ToolPayload,
-    TrajectoryDraftPayload,
 )
 from tau3_retail_evolver.memory.types import MemoryTier
 
@@ -99,13 +98,8 @@ class ToolMemoryWrite(_MemoryWriteBase):
     payload: ToolPayload
 
 
-class TrajectoryMemoryWrite(_MemoryWriteBase):
-    tier: Literal[MemoryTier.TRAJECTORY]
-    payload: TrajectoryDraftPayload
-
-
 MemoryWrite = Annotated[
-    TipMemoryWrite | SkillMemoryWrite | ToolMemoryWrite | TrajectoryMemoryWrite,
+    TipMemoryWrite | SkillMemoryWrite | ToolMemoryWrite,
     Field(discriminator="tier"),
 ]
 

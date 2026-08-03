@@ -14,6 +14,11 @@ from tau3_retail_evolver.fast_loop.prompts import (
     build_write_prompt,
 )
 from tau3_retail_evolver.memory.retrieval import MemoryCandidate
+from tau3_retail_evolver.memory.tier_contracts import (
+    ToolCallExample,
+    ToolPayload,
+    render_tier_payload,
+)
 from tau3_retail_evolver.memory.types import MemoryItem, MemoryTier
 
 
@@ -82,6 +87,56 @@ def test_public_context_normalizes_official_tau2_tool_objects() -> None:
             },
         }
     ]
+
+
+def test_selected_tool_memory_is_injected_into_llm_tool_list_not_plain_context() -> None:
+    payload = ToolPayload(
+        tool_name="lookup_order",
+        purpose="Read the authoritative order state before any mutation.",
+        method="Call lookup_order once using the exact order ID supplied by the customer.",
+        preconditions=("The customer supplied an order ID.",),
+        argument_rules={"order_id": "Use the exact customer-supplied order ID."},
+        expected_effect="The current order record is returned.",
+        example=ToolCallExample(
+            name="lookup_order",
+            arguments={"order_id": "<customer_order_id>"},
+        ),
+    )
+    memory = MemoryItem(
+        id="memory-tool-1",
+        tier=MemoryTier.TOOL,
+        tier_schema_version=2,
+        payload=payload.model_dump(mode="json"),
+        content=render_tier_payload(MemoryTier.TOOL, payload),
+        retrieval_text="lookup order executable method",
+        source_task_ids=("train-task",),
+        created_round=1,
+        updated_round=1,
+    )
+    context = _public_context()
+    context["tools"] = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_order",
+                "description": "Look up an order.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"order_id": {"type": "string"}},
+                    "required": ["order_id"],
+                },
+            },
+        }
+    ]
+
+    prompt = build_action_prompt(**context, memories=(memory,))
+
+    assert prompt.payload["memories"] == []
+    tool_description = prompt.payload["tools"][0]["function"]["description"]
+    assert "Selected executable memory method (memory-tool-1)" in tool_description
+    assert payload.method in tool_description
+    assert "Use the exact customer-supplied order ID." in tool_description
+    assert 'lookup_order({"order_id": "<customer_order_id>"})' in tool_description
 
 
 def _diagnostic_item(index: int = 1, tier: str = "tip") -> dict[str, object]:
