@@ -36,20 +36,20 @@
 
 以下实现会被后续 fast loop、slow loop 或正式评测直接复用，继续保留：
 
-- `src/tau3_retail_evolver/config.py`
-- `src/tau3_retail_evolver/envs/base.py`
-- `src/tau3_retail_evolver/envs/runtime.py`
-- `src/tau3_retail_evolver/envs/split_guard.py`
-- `src/tau3_retail_evolver/envs/task_catalog.py`
-- `src/tau3_retail_evolver/envs/tau2_retail.py`
-- `src/tau3_retail_evolver/fast_loop/action_codec.py`
-- `src/tau3_retail_evolver/fast_loop/baseline_prompt.py`
-- `src/tau3_retail_evolver/fast_loop/baseline_runner.py`
-- `src/tau3_retail_evolver/fast_loop/events.py`
-- `src/tau3_retail_evolver/io/jsonl.py`
-- `src/tau3_retail_evolver/models/openai_compatible.py`
-- `src/tau3_retail_evolver/models/policy.py` 中的 `DecisionRequest`、`DecisionResponse` 和 `Policy`
-- `src/tau3_retail_evolver/runs/manifest.py`
+- `src/tau3_evolver/config.py`
+- `src/tau3_evolver/envs/base.py`
+- `src/tau3_evolver/envs/runtime.py`
+- `src/tau3_evolver/envs/split_guard.py`
+- `src/tau3_evolver/envs/task_catalog.py`
+- `src/tau3_evolver/envs/tau2_retail.py`
+- `src/tau3_evolver/fast_loop/action_codec.py`
+- `src/tau3_evolver/fast_loop/baseline_prompt.py`
+- `src/tau3_evolver/fast_loop/baseline_runner.py`
+- `src/tau3_evolver/fast_loop/events.py`
+- `src/tau3_evolver/io/jsonl.py`
+- `src/tau3_evolver/models/openai_compatible.py`
+- `src/tau3_evolver/models/policy.py` 中的 `DecisionRequest`、`DecisionResponse` 和 `Policy`
+- `src/tau3_evolver/runs/manifest.py`
 - `scripts/run_baseline.py`
 - `external/tau2-bench.commit`
 
@@ -71,7 +71,7 @@ python -m tools.preflight.check_tau2_retail --split train --task-id 0
 
 ### 移入测试支持目录
 
-`ScriptedPolicy` 只在单元测试中使用，不属于可部署 policy API。它从 `src/tau3_retail_evolver/models/policy.py` 及模型公开导出中移除，迁移到：
+`ScriptedPolicy` 只在单元测试中使用，不属于可部署 policy API。它从 `src/tau3_evolver/models/policy.py` 及模型公开导出中移除，迁移到：
 
 ```text
 tests/support/policy.py
@@ -81,7 +81,7 @@ tests/support/policy.py
 
 ### 删除无行为包装层
 
-`src/tau3_retail_evolver/envs/factory.py` 仅被一个单元测试引用，函数只是直接构造 `Tau2RetailEnv`，没有提供生命周期、配置或依赖边界。该文件删除，测试直接构造 `Tau2RetailEnv`。
+`src/tau3_evolver/envs/factory.py` 仅被一个单元测试引用，函数只是直接构造 `Tau2RetailEnv`，没有提供生命周期、配置或依赖边界。该文件删除，测试直接构造 `Tau2RetailEnv`。
 
 ### 保留持续回归测试
 

@@ -7,16 +7,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from tau3_retail_evolver.memory.operations import (
+from tau3_evolver.memory.operations import (
     DeleteCommand,
     LookupCommand,
     MemoryOperations,
     MergeCommand,
 )
-from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
-from tau3_retail_evolver.memory.repository import MemoryRepository
-from tau3_retail_evolver.memory.tier_contracts import TipPayload, render_tier_payload
-from tau3_retail_evolver.memory.types import MemoryStatus, MemoryTier, stable_memory_id
+from tau3_evolver.memory.read_only import ReadOnlyMemoryRepository
+from tau3_evolver.memory.repository import MemoryRepository
+from tau3_evolver.memory.tier_contracts import TipPayload, render_tier_payload
+from tau3_evolver.memory.types import MemoryStatus, MemoryTier, stable_memory_id
 
 
 def _seed(repository: MemoryRepository):

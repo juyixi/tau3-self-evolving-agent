@@ -27,7 +27,7 @@
 ### Task 1: Strict Evaluation Configuration
 
 **Files:**
-- Modify: `src/tau3_retail_evolver/config.py`
+- Modify: `src/tau3_evolver/config.py`
 - Modify: `configs/default.yaml`
 - Test: `tests/unit/test_config.py`
 
@@ -59,15 +59,15 @@ Expected: all configuration tests PASS.
 - [ ] **Step 5: Commit Task 1**
 
 ```powershell
-git add configs/default.yaml src/tau3_retail_evolver/config.py tests/unit/test_config.py
+git add configs/default.yaml src/tau3_evolver/config.py tests/unit/test_config.py
 git commit -m "feat: configure nl assertion evaluator"
 ```
 
 ### Task 2: Tau2 Evaluator Binding
 
 **Files:**
-- Create: `src/tau3_retail_evolver/evaluation/__init__.py`
-- Create: `src/tau3_retail_evolver/evaluation/tau2_nl_assertions.py`
+- Create: `src/tau3_evolver/evaluation/__init__.py`
+- Create: `src/tau3_evolver/evaluation/tau2_nl_assertions.py`
 - Create: `tests/unit/evaluation/test_tau2_nl_assertions.py`
 
 **Interfaces:**
@@ -83,7 +83,7 @@ Cover successful binding against a `ModuleType` test double, missing and whitesp
 
 Run: `python -m pytest tests/unit/evaluation/test_tau2_nl_assertions.py -q`
 
-Expected: collection FAIL because `tau3_retail_evolver.evaluation.tau2_nl_assertions` does not exist.
+Expected: collection FAIL because `tau3_evolver.evaluationuation.tau2_nl_assertions` does not exist.
 
 - [ ] **Step 3: Implement the minimal binding module**
 
@@ -98,7 +98,7 @@ Expected: all binding tests PASS.
 - [ ] **Step 5: Commit Task 2**
 
 ```powershell
-git add src/tau3_retail_evolver/evaluation tests/unit/evaluation
+git add src/tau3_evolver/evaluation tests/unit/evaluation
 git commit -m "feat: bind tau2 nl assertion evaluator"
 ```
 
@@ -106,7 +106,7 @@ git commit -m "feat: bind tau2 nl assertion evaluator"
 
 **Files:**
 - Modify: `scripts/run_baseline.py`
-- Modify: `src/tau3_retail_evolver/runs/manifest.py`
+- Modify: `src/tau3_evolver/runs/manifest.py`
 - Modify: `tests/unit/scripts/test_run_baseline.py`
 - Modify: manifest unit tests discovered under `tests/unit/runs/`
 
@@ -152,7 +152,7 @@ Expected: only planned files plus the pre-existing unstaged `docs/superpowers/pl
 - [ ] **Step 7: Commit Task 3**
 
 ```powershell
-git add scripts/run_baseline.py src/tau3_retail_evolver/runs/manifest.py tests/unit/scripts/test_run_baseline.py tests/unit/runs
+git add scripts/run_baseline.py src/tau3_evolver/runs/manifest.py tests/unit/scripts/test_run_baseline.py tests/unit/runs
 git commit -m "feat: use openrouter for tau2 nl evaluation"
 ```
 

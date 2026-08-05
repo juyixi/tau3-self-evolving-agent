@@ -22,8 +22,8 @@
 ### Task 1: Typed Lifecycle Decisions And Public Prompts
 
 **Files:**
-- Create: `src/tau3_retail_evolver/fast_loop/decisions.py`
-- Create: `src/tau3_retail_evolver/fast_loop/prompts.py`
+- Create: `src/tau3_evolver/fast_loop/decisions.py`
+- Create: `src/tau3_evolver/fast_loop/prompts.py`
 - Test: `tests/unit/fast_loop/test_decisions.py`
 - Test: `tests/unit/fast_loop/test_prompts.py`
 
@@ -62,16 +62,16 @@ Expected: all Task 1 tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/fast_loop/decisions.py src/tau3_retail_evolver/fast_loop/prompts.py tests/unit/fast_loop/test_decisions.py tests/unit/fast_loop/test_prompts.py
+git add src/tau3_evolver/fast_loop/decisions.py src/tau3_evolver/fast_loop/prompts.py tests/unit/fast_loop/test_decisions.py tests/unit/fast_loop/test_prompts.py
 git commit -m "feat: add typed fast-loop lifecycle decisions"
 ```
 
 ### Task 2: Episode Fast-Loop Runner And Attribution Evidence
 
 **Files:**
-- Create: `src/tau3_retail_evolver/fast_loop/runner.py`
-- Modify: `src/tau3_retail_evolver/fast_loop/events.py`
-- Modify: `src/tau3_retail_evolver/fast_loop/__init__.py`
+- Create: `src/tau3_evolver/fast_loop/runner.py`
+- Modify: `src/tau3_evolver/fast_loop/events.py`
+- Modify: `src/tau3_evolver/fast_loop/__init__.py`
 - Test: `tests/unit/fast_loop/test_runner.py`
 
 **Interfaces:**
@@ -112,14 +112,14 @@ Expected: all runner and baseline tests pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/fast_loop tests/unit/fast_loop/test_runner.py
+git add src/tau3_evolver/fast_loop tests/unit/fast_loop/test_runner.py
 git commit -m "feat: add opd evolver fast-loop runner"
 ```
 
 ### Task 3: Periodic Memory Maintenance
 
 **Files:**
-- Create: `src/tau3_retail_evolver/fast_loop/maintenance.py`
+- Create: `src/tau3_evolver/fast_loop/maintenance.py`
 - Test: `tests/unit/fast_loop/test_maintenance.py`
 
 **Interfaces:**
@@ -151,7 +151,7 @@ Expected: all maintenance tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/fast_loop/maintenance.py tests/unit/fast_loop/test_maintenance.py
+git add src/tau3_evolver/fast_loop/maintenance.py tests/unit/fast_loop/test_maintenance.py
 git commit -m "feat: add periodic memory maintenance"
 ```
 

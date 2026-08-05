@@ -102,9 +102,9 @@ Expected: no active command or import remains; historical mention is allowed onl
 - Modify: `tests/unit/scripts/test_run_baseline.py`
 - Modify: `tests/unit/fast_loop/test_baseline_runner.py`
 - Modify: `tests/unit/envs/test_tau2_retail_adapter.py`
-- Modify: `src/tau3_retail_evolver/models/policy.py`
-- Modify: `src/tau3_retail_evolver/models/__init__.py`
-- Delete: `src/tau3_retail_evolver/envs/factory.py`
+- Modify: `src/tau3_evolver/models/policy.py`
+- Modify: `src/tau3_evolver/models/__init__.py`
+- Delete: `src/tau3_evolver/envs/factory.py`
 
 **Interfaces:**
 - Production retains: `DecisionRequest`, `DecisionResponse`, and abstract `Policy`.
@@ -152,7 +152,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from tau3_retail_evolver.models.policy import DecisionRequest, DecisionResponse, Policy
+from tau3_evolver.models.policy import DecisionRequest, DecisionResponse, Policy
 
 
 class ScriptedPolicy(Policy):

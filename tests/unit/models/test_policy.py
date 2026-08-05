@@ -6,32 +6,27 @@ from typing import Any
 
 import pytest
 
-from tau3_retail_evolver.models import openai_compatible
-from tau3_retail_evolver.envs.base import ResetResult, StepResult
-from tau3_retail_evolver.fast_loop.decisions import (
+from tau3_evolver.models import openai_compatible
+from tau3_evolver.agent.decisions import (
     ActionDecision,
     MaintenanceDecision,
     SelectionDecision,
     WriteDecision,
     parse_decision,
 )
-from tau3_retail_evolver.fast_loop.events import RunContext, RunMode
-from tau3_retail_evolver.fast_loop.prompts import (
+from tau3_evolver.agent.prompts import (
     LifecyclePrompt,
     build_action_prompt,
     build_maintenance_prompt,
     build_selection_prompt,
     build_write_prompt,
 )
-from tau3_retail_evolver.fast_loop.runner import FastLoopConfig, run_fast_loop_episode
-from tau3_retail_evolver.memory.repository import MemoryRepository
-from tau3_retail_evolver.memory.retrieval import Retriever
-from tau3_retail_evolver.models.openai_compatible import (
+from tau3_evolver.models.openai_compatible import (
     OpenAICompatibleFastLoopPolicy,
     OpenAICompatibleHttpClient,
     OpenAICompatibleQwenPolicy,
 )
-from tau3_retail_evolver.models.policy import DecisionRequest, DecisionResponse
+from tau3_evolver.models.policy import DecisionRequest, DecisionResponse
 from tests.support.policy import ScriptedPolicy
 
 
@@ -689,117 +684,6 @@ def test_fast_loop_action_repair_retains_tools_and_converts_structured_action() 
         '{"action":"{\\"arguments\\":{\\"order_id\\":\\"123\\"},'
         '\\"name\\":\\"find_order\\"}"}'
     )
-
-
-def test_fast_loop_runner_repairs_codec_invalid_action_before_environment_step(
-    tmp_path: Any,
-) -> None:
-    invalid_action = _canonical(
-        {"action": _canonical({"name": "unknown", "arguments": {}})}
-    )
-    repaired_tool_call = [
-        {
-            "type": "function",
-            "function": {"name": "find_order", "arguments": {"order_id": "123"}},
-        }
-    ]
-    client = ScriptedClient(
-        [
-            _completion('{"memory_ids":[]}'),
-            _completion(invalid_action),
-            _completion(None, tool_calls=repaired_tool_call),
-            _completion('{"memories":[]}'),
-        ]
-    )
-    policy = OpenAICompatibleFastLoopPolicy(
-        client=client,
-        temperature=0.7,
-        top_p=0.9,
-    )
-
-    class OneStepEnvironment:
-        def __init__(self) -> None:
-            self.actions: list[str] = []
-
-        def reset(self, *, seed: int) -> ResetResult:
-            return ResetResult(
-                observation="Please find order 123.",
-                info={
-                    "policy": {"rule": "Verify the order first."},
-                    "tools": _public_context()["tools"],
-                },
-            )
-
-        def step(self, action: str) -> StepResult:
-            self.actions.append(action)
-            return StepResult(
-                observation="Order found.",
-                reward=1.0,
-                done=True,
-                terminated=True,
-                truncated=False,
-                info={
-                    "reward_info": '{"reward":1.0}',
-                    "simulation_run": '{"status":"complete"}',
-                },
-            )
-
-        def close(self) -> None:
-            pass
-
-    class EmptyEmbeddingProvider:
-        model_revision = "empty@1"
-        dimension = 2
-
-        def embed(self, text: str) -> tuple[float, ...]:
-            return (1.0, 0.0)
-
-        def embed_batch(self, texts: list[str]) -> list[tuple[float, ...]]:
-            return [(1.0, 0.0) for _ in texts]
-
-    class EventCollector:
-        def __init__(self) -> None:
-            self.events: list[dict[str, Any]] = []
-
-        def append(self, event: dict[str, Any]) -> None:
-            self.events.append(event)
-
-    environment = OneStepEnvironment()
-    events = EventCollector()
-    run_fast_loop_episode(
-        task_id="runner-repair-test",
-        task_instruction="Help the customer find an order.",
-        environment=environment,
-        policy=policy,
-        repository=MemoryRepository(tmp_path / "memory"),
-        retriever=Retriever(EmptyEmbeddingProvider()),
-        config=FastLoopConfig(max_episode_steps=1),
-        context=RunContext(
-            run_id="task4a-review",
-            iteration=1,
-            split="train",
-            model_revision="Qwen/Qwen3.5-9B",
-            adapter_revision=None,
-            memory_snapshot_id=None,
-            seed=7,
-            event_writer=events,
-            mode=RunMode.LEARN,
-        ),
-    )
-
-    expected_action = '{"arguments":{"order_id":"123"},"name":"find_order"}'
-    assert environment.actions == [expected_action]
-    action_calls = [call for call in client.calls if call["tools"]]
-    assert len(action_calls) == 2
-    repair_request = json.loads(action_calls[1]["messages"][1]["content"])
-    invalid_wrapper = json.loads(repair_request["invalid_output"])
-    assert invalid_wrapper == {"invalid_action_output": invalid_action}
-    assert "unknown" in repair_request["invalid_output"]
-    assert len(client.calls) == 4
-    assert client.completions == []
-    serialized_events = _canonical(events.events)
-    assert "unknown" not in serialized_events
-    assert "invalid_action_output" not in serialized_events
 
 
 @pytest.mark.parametrize(

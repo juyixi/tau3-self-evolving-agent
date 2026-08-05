@@ -5,12 +5,12 @@ import json
 import pytest
 import torch
 
-from tau3_retail_evolver.slow_loop.alignment import (
+from tau3_evolver.slow_loop.alignment import (
     build_aligned_batch,
     render_public_prompt,
     render_teacher_prompt,
 )
-from tau3_retail_evolver.slow_loop.examples import OPDExample
+from tau3_evolver.slow_loop.examples import OPDExample
 
 
 class ToyTokenizer:

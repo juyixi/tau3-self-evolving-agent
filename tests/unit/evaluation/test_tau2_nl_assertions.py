@@ -3,8 +3,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from tau3_retail_evolver.config import NLAssertionsConfig
-from tau3_retail_evolver.evaluation.tau2_nl_assertions import bind_tau2_nl_assertions
+from tau3_evolver.config import NLAssertionsConfig
+from tau3_evolver.evaluation.tau2_nl_assertions import bind_tau2_nl_assertions
 
 
 _TAU2_EVALUATOR_MODULE = "tau2.evaluator.evaluator_nl_assertions"

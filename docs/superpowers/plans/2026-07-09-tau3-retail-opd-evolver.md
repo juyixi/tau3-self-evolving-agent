@@ -37,24 +37,24 @@
 - `.gitignore`: excludes caches, local envs, checkpoints, and `runs/`.
 - `README.md`: user-facing setup and OPD-Evolver mapping notes.
 - `configs/default.yaml`: defaults copied from the spec.
-- `src/tau3_retail_evolver/config.py`: typed configuration loader with CLI override support.
-- `src/tau3_retail_evolver/envs/base.py`: tau3 retail adapter protocol and shared task/result types.
-- `src/tau3_retail_evolver/envs/mock_retail.py`: deterministic mock retail environment for tests.
-- `src/tau3_retail_evolver/envs/tau3_retail.py`: import-backed real tau3 adapter with a helpful dependency error.
-- `src/tau3_retail_evolver/memory/types.py`: memory item, candidate, selection, and tier types.
-- `src/tau3_retail_evolver/memory/store.py`: in-memory four-tier memory store used by tests and rollout orchestration.
-- `src/tau3_retail_evolver/memory/retrieval.py`: deterministic lexical retriever with an embedding hook boundary.
-- `src/tau3_retail_evolver/memory/formatting.py`: memory context formatter for prompts.
-- `src/tau3_retail_evolver/models/policy.py`: policy protocol, generation request/response, fake policy.
-- `src/tau3_retail_evolver/models/qwen.py`: Qwen + LoRA loader wrapper isolated from unit tests.
-- `src/tau3_retail_evolver/fast_loop/events.py`: JSON-serializable rollout, write, and maintenance events.
-- `src/tau3_retail_evolver/fast_loop/prompts.py`: selection, action, writing, and maintenance prompt builders.
-- `src/tau3_retail_evolver/fast_loop/runner.py`: Algorithm 1 fast-loop orchestration.
-- `src/tau3_retail_evolver/slow_loop/attribution.py`: outcome-calibrated memory value computation.
-- `src/tau3_retail_evolver/slow_loop/examples.py`: `z_k`/`h_k` OPD example construction.
-- `src/tau3_retail_evolver/slow_loop/loss.py`: token-level KL distillation utilities.
-- `src/tau3_retail_evolver/slow_loop/train.py`: LoRA OPD trainer entry point with dry-run mode.
-- `src/tau3_retail_evolver/io/jsonl.py`: JSONL read/write helpers.
+- `src/tau3_evolver/config.py`: typed configuration loader with CLI override support.
+- `src/tau3_evolver/envs/base.py`: tau3 retail adapter protocol and shared task/result types.
+- `src/tau3_evolver/envs/mock_retail.py`: deterministic mock retail environment for tests.
+- `src/tau3_evolver/envs/tau3_retail.py`: import-backed real tau3 adapter with a helpful dependency error.
+- `src/tau3_evolver/memory/types.py`: memory item, candidate, selection, and tier types.
+- `src/tau3_evolver/memory/store.py`: in-memory four-tier memory store used by tests and rollout orchestration.
+- `src/tau3_evolver/memory/retrieval.py`: deterministic lexical retriever with an embedding hook boundary.
+- `src/tau3_evolver/memory/formatting.py`: memory context formatter for prompts.
+- `src/tau3_evolver/models/policy.py`: policy protocol, generation request/response, fake policy.
+- `src/tau3_evolver/models/qwen.py`: Qwen + LoRA loader wrapper isolated from unit tests.
+- `src/tau3_evolver/fast_loop/events.py`: JSON-serializable rollout, write, and maintenance events.
+- `src/tau3_evolver/fast_loop/prompts.py`: selection, action, writing, and maintenance prompt builders.
+- `src/tau3_evolver/fast_loop/runner.py`: Algorithm 1 fast-loop orchestration.
+- `src/tau3_evolver/slow_loop/attribution.py`: outcome-calibrated memory value computation.
+- `src/tau3_evolver/slow_loop/examples.py`: `z_k`/`h_k` OPD example construction.
+- `src/tau3_evolver/slow_loop/loss.py`: token-level KL distillation utilities.
+- `src/tau3_evolver/slow_loop/train.py`: LoRA OPD trainer entry point with dry-run mode.
+- `src/tau3_evolver/io/jsonl.py`: JSONL read/write helpers.
 - `scripts/run_rollout.py`: fast-loop CLI.
 - `scripts/build_attribution.py`: attribution CLI.
 - `scripts/build_opd_dataset.py`: slow-loop dataset CLI.
@@ -71,8 +71,8 @@
 - Create: `.gitignore`
 - Create: `README.md`
 - Create: `configs/default.yaml`
-- Create: `src/tau3_retail_evolver/__init__.py`
-- Create: `src/tau3_retail_evolver/config.py`
+- Create: `src/tau3_evolver/__init__.py`
+- Create: `src/tau3_evolver/config.py`
 - Create: `tests/test_config.py`
 
 **Interfaces:**
@@ -87,7 +87,7 @@ Create `tests/test_config.py`:
 ```python
 from pathlib import Path
 
-from tau3_retail_evolver.config import load_config
+from tau3_evolver.config import load_config
 
 
 def test_default_config_matches_opd_evolver_defaults():
@@ -120,7 +120,7 @@ def test_override_updates_nested_value():
 
 Run: `pytest tests/test_config.py -v`
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'tau3_retail_evolver'` or missing config file.
+Expected: FAIL with `ModuleNotFoundError: No module named 'tau3_evolver'` or missing config file.
 
 - [ ] **Step 3: Add package metadata and defaults**
 
@@ -132,7 +132,7 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tau3-retail-evolver"
+name = "tau3-evolver"
 version = "0.1.0"
 description = "Tau3 retail OPD-Evolver training project"
 requires-python = ">=3.12"
@@ -211,7 +211,7 @@ tau3:
   adapter: mock
 ```
 
-Create `src/tau3_retail_evolver/__init__.py`:
+Create `src/tau3_evolver/__init__.py`:
 
 ```python
 __all__ = ["__version__"]
@@ -240,7 +240,7 @@ executor OPD training patterns.
 
 - [ ] **Step 4: Implement typed config loading**
 
-Create `src/tau3_retail_evolver/config.py`:
+Create `src/tau3_evolver/config.py`:
 
 ```python
 from __future__ import annotations
@@ -373,7 +373,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pyproject.toml .gitignore README.md configs/default.yaml src/tau3_retail_evolver/__init__.py src/tau3_retail_evolver/config.py tests/test_config.py
+git add pyproject.toml .gitignore README.md configs/default.yaml src/tau3_evolver/__init__.py src/tau3_evolver/config.py tests/test_config.py
 git commit -m "feat: add project config foundation"
 ```
 
@@ -382,10 +382,10 @@ git commit -m "feat: add project config foundation"
 ### Task 2: Tau3 Retail Adapter Boundary
 
 **Files:**
-- Create: `src/tau3_retail_evolver/envs/__init__.py`
-- Create: `src/tau3_retail_evolver/envs/base.py`
-- Create: `src/tau3_retail_evolver/envs/mock_retail.py`
-- Create: `src/tau3_retail_evolver/envs/tau3_retail.py`
+- Create: `src/tau3_evolver/envs/__init__.py`
+- Create: `src/tau3_evolver/envs/base.py`
+- Create: `src/tau3_evolver/envs/mock_retail.py`
+- Create: `src/tau3_evolver/envs/tau3_retail.py`
 - Create: `tests/test_envs.py`
 
 **Interfaces:**
@@ -399,9 +399,9 @@ git commit -m "feat: add project config foundation"
 Create `tests/test_envs.py`:
 
 ```python
-from tau3_retail_evolver.envs.base import RetailTask
-from tau3_retail_evolver.envs.mock_retail import MockRetailEnv
-from tau3_retail_evolver.envs.tau3_retail import make_tau3_retail_env
+from tau3_evolver.envs.base import RetailTask
+from tau3_evolver.envs.mock_retail import MockRetailEnv
+from tau3_evolver.envs.tau3_retail import make_tau3_retail_env
 
 
 def test_mock_retail_success_path():
@@ -439,11 +439,11 @@ def test_tau3_adapter_reports_missing_dependency():
 
 Run: `pytest tests/test_envs.py -v`
 
-Expected: FAIL with missing `tau3_retail_evolver.envs`.
+Expected: FAIL with missing `tau3_evolver.envs`.
 
 - [ ] **Step 3: Implement adapter protocol and mock environment**
 
-Create `src/tau3_retail_evolver/envs/base.py`:
+Create `src/tau3_evolver/envs/base.py`:
 
 ```python
 from __future__ import annotations
@@ -486,14 +486,14 @@ class RetailEnv(Protocol):
         ...
 ```
 
-Create `src/tau3_retail_evolver/envs/mock_retail.py`:
+Create `src/tau3_evolver/envs/mock_retail.py`:
 
 ```python
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from tau3_retail_evolver.envs.base import RetailTask, StepResult
+from tau3_evolver.envs.base import RetailTask, StepResult
 
 
 class MockRetailEnv:
@@ -532,7 +532,7 @@ class MockRetailEnv:
         return bool(done and reward > 0 and info.get("success") is True)
 ```
 
-Create `src/tau3_retail_evolver/envs/tau3_retail.py`:
+Create `src/tau3_evolver/envs/tau3_retail.py`:
 
 ```python
 from __future__ import annotations
@@ -554,10 +554,10 @@ def make_tau3_retail_env(**kwargs: Any):
     )
 ```
 
-Create `src/tau3_retail_evolver/envs/__init__.py`:
+Create `src/tau3_evolver/envs/__init__.py`:
 
 ```python
-from tau3_retail_evolver.envs.base import RetailEnv, RetailTask, StepResult
+from tau3_evolver.envs.base import RetailEnv, RetailTask, StepResult
 
 __all__ = ["RetailEnv", "RetailTask", "StepResult"]
 ```
@@ -571,7 +571,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/envs tests/test_envs.py
+git add src/tau3_evolver/envs tests/test_envs.py
 git commit -m "feat: add tau3 retail environment boundary"
 ```
 
@@ -580,11 +580,11 @@ git commit -m "feat: add tau3 retail environment boundary"
 ### Task 3: Four-Tier Memory Store And Retrieval
 
 **Files:**
-- Create: `src/tau3_retail_evolver/memory/__init__.py`
-- Create: `src/tau3_retail_evolver/memory/types.py`
-- Create: `src/tau3_retail_evolver/memory/store.py`
-- Create: `src/tau3_retail_evolver/memory/retrieval.py`
-- Create: `src/tau3_retail_evolver/memory/formatting.py`
+- Create: `src/tau3_evolver/memory/__init__.py`
+- Create: `src/tau3_evolver/memory/types.py`
+- Create: `src/tau3_evolver/memory/store.py`
+- Create: `src/tau3_evolver/memory/retrieval.py`
+- Create: `src/tau3_evolver/memory/formatting.py`
 - Create: `tests/test_memory.py`
 
 **Interfaces:**
@@ -599,10 +599,10 @@ git commit -m "feat: add tau3 retail environment boundary"
 Create `tests/test_memory.py`:
 
 ```python
-from tau3_retail_evolver.memory.formatting import format_selected_memories
-from tau3_retail_evolver.memory.retrieval import retrieve_candidates
-from tau3_retail_evolver.memory.store import InMemoryMemoryStore
-from tau3_retail_evolver.memory.types import MemoryItem, MemorySelection
+from tau3_evolver.memory.formatting import format_selected_memories
+from tau3_evolver.memory.retrieval import retrieve_candidates
+from tau3_evolver.memory.store import InMemoryMemoryStore
+from tau3_evolver.memory.types import MemoryItem, MemorySelection
 
 
 def test_retrieval_groups_candidates_by_tier_and_scores_text_overlap():
@@ -646,11 +646,11 @@ def test_merge_replaces_old_items_with_new_item():
 
 Run: `pytest tests/test_memory.py -v`
 
-Expected: FAIL with missing `tau3_retail_evolver.memory`.
+Expected: FAIL with missing `tau3_evolver.memory`.
 
 - [ ] **Step 3: Implement memory types and store**
 
-Create `src/tau3_retail_evolver/memory/types.py`:
+Create `src/tau3_evolver/memory/types.py`:
 
 ```python
 from __future__ import annotations
@@ -687,7 +687,7 @@ class MemorySelection:
     selected: list[MemoryItem]
 ```
 
-Create `src/tau3_retail_evolver/memory/store.py`:
+Create `src/tau3_evolver/memory/store.py`:
 
 ```python
 from __future__ import annotations
@@ -695,7 +695,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 
-from tau3_retail_evolver.memory.types import MemoryItem
+from tau3_evolver.memory.types import MemoryItem
 
 
 class InMemoryMemoryStore:
@@ -731,7 +731,7 @@ class InMemoryMemoryStore:
 
 - [ ] **Step 4: Implement retrieval and formatting**
 
-Create `src/tau3_retail_evolver/memory/retrieval.py`:
+Create `src/tau3_evolver/memory/retrieval.py`:
 
 ```python
 from __future__ import annotations
@@ -739,8 +739,8 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from tau3_retail_evolver.memory.store import InMemoryMemoryStore
-from tau3_retail_evolver.memory.types import MemoryCandidate
+from tau3_evolver.memory.store import InMemoryMemoryStore
+from tau3_evolver.memory.types import MemoryCandidate
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+")
 
@@ -771,14 +771,14 @@ def _lexical_score(query: str, text: str) -> float:
     return len(query_tokens & text_tokens) / len(query_tokens | text_tokens)
 ```
 
-Create `src/tau3_retail_evolver/memory/formatting.py`:
+Create `src/tau3_evolver/memory/formatting.py`:
 
 ```python
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from tau3_retail_evolver.memory.types import MemoryItem
+from tau3_evolver.memory.types import MemoryItem
 
 
 def format_selected_memories(items: Sequence[MemoryItem]) -> str:
@@ -787,10 +787,10 @@ def format_selected_memories(items: Sequence[MemoryItem]) -> str:
     return "\n".join(f"[{item.tier}] {item.memory_id}: {item.text}" for item in items)
 ```
 
-Create `src/tau3_retail_evolver/memory/__init__.py`:
+Create `src/tau3_evolver/memory/__init__.py`:
 
 ```python
-from tau3_retail_evolver.memory.types import MemoryCandidate, MemoryItem, MemorySelection
+from tau3_evolver.memory.types import MemoryCandidate, MemoryItem, MemorySelection
 
 __all__ = ["MemoryCandidate", "MemoryItem", "MemorySelection"]
 ```
@@ -804,7 +804,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/memory tests/test_memory.py
+git add src/tau3_evolver/memory tests/test_memory.py
 git commit -m "feat: add four-tier memory primitives"
 ```
 
@@ -813,10 +813,10 @@ git commit -m "feat: add four-tier memory primitives"
 ### Task 4: Policy Boundary And Prompt Builders
 
 **Files:**
-- Create: `src/tau3_retail_evolver/models/__init__.py`
-- Create: `src/tau3_retail_evolver/models/policy.py`
-- Create: `src/tau3_retail_evolver/models/qwen.py`
-- Create: `src/tau3_retail_evolver/fast_loop/prompts.py`
+- Create: `src/tau3_evolver/models/__init__.py`
+- Create: `src/tau3_evolver/models/policy.py`
+- Create: `src/tau3_evolver/models/qwen.py`
+- Create: `src/tau3_evolver/fast_loop/prompts.py`
 - Create: `tests/test_policy_prompts.py`
 
 **Interfaces:**
@@ -831,9 +831,9 @@ git commit -m "feat: add four-tier memory primitives"
 Create `tests/test_policy_prompts.py`:
 
 ```python
-from tau3_retail_evolver.fast_loop.prompts import build_action_prompt, build_selection_prompt
-from tau3_retail_evolver.memory.types import MemoryCandidate, MemoryItem
-from tau3_retail_evolver.models.policy import FakePolicy, GenerationRequest
+from tau3_evolver.fast_loop.prompts import build_action_prompt, build_selection_prompt
+from tau3_evolver.memory.types import MemoryCandidate, MemoryItem
+from tau3_evolver.models.policy import FakePolicy, GenerationRequest
 
 
 def test_fake_policy_returns_scripted_response_by_purpose():
@@ -879,7 +879,7 @@ Expected: FAIL with missing model or prompt modules.
 
 - [ ] **Step 3: Implement policy boundary**
 
-Create `src/tau3_retail_evolver/models/policy.py`:
+Create `src/tau3_evolver/models/policy.py`:
 
 ```python
 from __future__ import annotations
@@ -920,15 +920,15 @@ class FakePolicy:
         return GenerationResponse(text=text, metadata={"policy": "fake", "purpose": request.purpose})
 ```
 
-Create `src/tau3_retail_evolver/models/qwen.py`:
+Create `src/tau3_evolver/models/qwen.py`:
 
 ```python
 from __future__ import annotations
 
 from pathlib import Path
 
-from tau3_retail_evolver.config import LoraConfig, ModelConfig
-from tau3_retail_evolver.models.policy import GenerationRequest, GenerationResponse
+from tau3_evolver.config import LoraConfig, ModelConfig
+from tau3_evolver.models.policy import GenerationRequest, GenerationResponse
 
 
 class QwenPolicy:
@@ -971,25 +971,25 @@ def load_qwen_policy(
     return QwenPolicy(model=model, tokenizer=tokenizer)
 ```
 
-Create `src/tau3_retail_evolver/models/__init__.py`:
+Create `src/tau3_evolver/models/__init__.py`:
 
 ```python
-from tau3_retail_evolver.models.policy import GenerationRequest, GenerationResponse, Policy
+from tau3_evolver.models.policy import GenerationRequest, GenerationResponse, Policy
 
 __all__ = ["GenerationRequest", "GenerationResponse", "Policy"]
 ```
 
 - [ ] **Step 4: Implement prompt builders**
 
-Create `src/tau3_retail_evolver/fast_loop/prompts.py`:
+Create `src/tau3_evolver/fast_loop/prompts.py`:
 
 ```python
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from tau3_retail_evolver.memory.formatting import format_selected_memories
-from tau3_retail_evolver.memory.types import MemoryCandidate, MemoryItem
+from tau3_evolver.memory.formatting import format_selected_memories
+from tau3_evolver.memory.types import MemoryCandidate, MemoryItem
 
 
 def build_selection_prompt(task_instruction: str, candidates_by_tier: Mapping[str, Sequence[MemoryCandidate]]) -> str:
@@ -1058,7 +1058,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/models src/tau3_retail_evolver/fast_loop/prompts.py tests/test_policy_prompts.py
+git add src/tau3_evolver/models src/tau3_evolver/fast_loop/prompts.py tests/test_policy_prompts.py
 git commit -m "feat: add policy and prompt boundaries"
 ```
 
@@ -1067,11 +1067,11 @@ git commit -m "feat: add policy and prompt boundaries"
 ### Task 5: Fast Loop Rollout Logging
 
 **Files:**
-- Create: `src/tau3_retail_evolver/fast_loop/__init__.py`
-- Create: `src/tau3_retail_evolver/fast_loop/events.py`
-- Create: `src/tau3_retail_evolver/fast_loop/runner.py`
-- Create: `src/tau3_retail_evolver/io/__init__.py`
-- Create: `src/tau3_retail_evolver/io/jsonl.py`
+- Create: `src/tau3_evolver/fast_loop/__init__.py`
+- Create: `src/tau3_evolver/fast_loop/events.py`
+- Create: `src/tau3_evolver/fast_loop/runner.py`
+- Create: `src/tau3_evolver/io/__init__.py`
+- Create: `src/tau3_evolver/io/jsonl.py`
 - Create: `tests/test_fast_loop.py`
 
 **Interfaces:**
@@ -1087,14 +1087,14 @@ Create `tests/test_fast_loop.py`:
 ```python
 from pathlib import Path
 
-from tau3_retail_evolver.config import MemoryConfig, RolloutConfig
-from tau3_retail_evolver.envs.base import RetailTask
-from tau3_retail_evolver.envs.mock_retail import MockRetailEnv
-from tau3_retail_evolver.fast_loop.runner import run_fast_loop
-from tau3_retail_evolver.io.jsonl import read_jsonl
-from tau3_retail_evolver.memory.store import InMemoryMemoryStore
-from tau3_retail_evolver.memory.types import MemoryItem
-from tau3_retail_evolver.models.policy import FakePolicy
+from tau3_evolver.config import MemoryConfig, RolloutConfig
+from tau3_evolver.envs.base import RetailTask
+from tau3_evolver.envs.mock_retail import MockRetailEnv
+from tau3_evolver.fast_loop.runner import run_fast_loop
+from tau3_evolver.io.jsonl import read_jsonl
+from tau3_evolver.memory.store import InMemoryMemoryStore
+from tau3_evolver.memory.types import MemoryItem
+from tau3_evolver.models.policy import FakePolicy
 
 
 def test_fast_loop_logs_candidates_selection_and_return(tmp_path: Path):
@@ -1132,7 +1132,7 @@ Expected: FAIL with missing fast-loop runner or JSONL helpers.
 
 - [ ] **Step 3: Implement JSONL helpers and event dataclasses**
 
-Create `src/tau3_retail_evolver/io/jsonl.py`:
+Create `src/tau3_evolver/io/jsonl.py`:
 
 ```python
 from __future__ import annotations
@@ -1163,15 +1163,15 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in handle if line.strip()]
 ```
 
-Create `src/tau3_retail_evolver/io/__init__.py`:
+Create `src/tau3_evolver/io/__init__.py`:
 
 ```python
-from tau3_retail_evolver.io.jsonl import append_jsonl, read_jsonl, write_jsonl
+from tau3_evolver.io.jsonl import append_jsonl, read_jsonl, write_jsonl
 
 __all__ = ["append_jsonl", "read_jsonl", "write_jsonl"]
 ```
 
-Create `src/tau3_retail_evolver/fast_loop/events.py`:
+Create `src/tau3_evolver/fast_loop/events.py`:
 
 ```python
 from __future__ import annotations
@@ -1206,7 +1206,7 @@ class RunResult:
 
 - [ ] **Step 4: Implement fast-loop runner**
 
-Create `src/tau3_retail_evolver/fast_loop/runner.py`:
+Create `src/tau3_evolver/fast_loop/runner.py`:
 
 ```python
 from __future__ import annotations
@@ -1214,15 +1214,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from tau3_retail_evolver.config import MemoryConfig, RolloutConfig
-from tau3_retail_evolver.envs.base import RetailEnv, RetailTask
-from tau3_retail_evolver.fast_loop.events import RolloutEvent, RunResult
-from tau3_retail_evolver.fast_loop.prompts import build_action_prompt, build_selection_prompt, build_writing_prompt
-from tau3_retail_evolver.io.jsonl import append_jsonl
-from tau3_retail_evolver.memory.retrieval import retrieve_candidates
-from tau3_retail_evolver.memory.store import InMemoryMemoryStore
-from tau3_retail_evolver.memory.types import MemoryCandidate, MemoryItem
-from tau3_retail_evolver.models.policy import GenerationRequest, Policy
+from tau3_evolver.config import MemoryConfig, RolloutConfig
+from tau3_evolver.envs.base import RetailEnv, RetailTask
+from tau3_evolver.fast_loop.events import RolloutEvent, RunResult
+from tau3_evolver.fast_loop.prompts import build_action_prompt, build_selection_prompt, build_writing_prompt
+from tau3_evolver.io.jsonl import append_jsonl
+from tau3_evolver.memory.retrieval import retrieve_candidates
+from tau3_evolver.memory.store import InMemoryMemoryStore
+from tau3_evolver.memory.types import MemoryCandidate, MemoryItem
+from tau3_evolver.models.policy import GenerationRequest, Policy
 
 
 def run_fast_loop(
@@ -1338,10 +1338,10 @@ def _write_memories(
     return written_ids
 ```
 
-Create `src/tau3_retail_evolver/fast_loop/__init__.py`:
+Create `src/tau3_evolver/fast_loop/__init__.py`:
 
 ```python
-from tau3_retail_evolver.fast_loop.runner import run_fast_loop
+from tau3_evolver.fast_loop.runner import run_fast_loop
 
 __all__ = ["run_fast_loop"]
 ```
@@ -1355,7 +1355,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/fast_loop src/tau3_retail_evolver/io tests/test_fast_loop.py
+git add src/tau3_evolver/fast_loop src/tau3_evolver/io tests/test_fast_loop.py
 git commit -m "feat: add fast loop rollout logging"
 ```
 
@@ -1364,8 +1364,8 @@ git commit -m "feat: add fast loop rollout logging"
 ### Task 6: Outcome-Calibrated Attribution
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/__init__.py`
-- Create: `src/tau3_retail_evolver/slow_loop/attribution.py`
+- Create: `src/tau3_evolver/slow_loop/__init__.py`
+- Create: `src/tau3_evolver/slow_loop/attribution.py`
 - Create: `tests/test_attribution.py`
 
 **Interfaces:**
@@ -1378,7 +1378,7 @@ git commit -m "feat: add fast loop rollout logging"
 Create `tests/test_attribution.py`:
 
 ```python
-from tau3_retail_evolver.slow_loop.attribution import compute_memory_scores
+from tau3_evolver.slow_loop.attribution import compute_memory_scores
 
 
 def test_selected_memory_gets_positive_score_when_selected_returns_are_higher():
@@ -1429,7 +1429,7 @@ Expected: FAIL with missing `slow_loop`.
 
 - [ ] **Step 3: Implement attribution calculation**
 
-Create `src/tau3_retail_evolver/slow_loop/attribution.py`:
+Create `src/tau3_evolver/slow_loop/attribution.py`:
 
 ```python
 from __future__ import annotations
@@ -1507,10 +1507,10 @@ def _mean(values: list[float]) -> float:
     return sum(values) / len(values)
 ```
 
-Create `src/tau3_retail_evolver/slow_loop/__init__.py`:
+Create `src/tau3_evolver/slow_loop/__init__.py`:
 
 ```python
-from tau3_retail_evolver.slow_loop.attribution import MemoryScore, compute_memory_scores
+from tau3_evolver.slow_loop.attribution import MemoryScore, compute_memory_scores
 
 __all__ = ["MemoryScore", "compute_memory_scores"]
 ```
@@ -1524,7 +1524,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/slow_loop tests/test_attribution.py
+git add src/tau3_evolver/slow_loop tests/test_attribution.py
 git commit -m "feat: add outcome calibrated attribution"
 ```
 
@@ -1533,7 +1533,7 @@ git commit -m "feat: add outcome calibrated attribution"
 ### Task 7: Slow-Loop OPD Example Construction
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/examples.py`
+- Create: `src/tau3_evolver/slow_loop/examples.py`
 - Create: `tests/test_examples.py`
 
 **Interfaces:**
@@ -1546,8 +1546,8 @@ git commit -m "feat: add outcome calibrated attribution"
 Create `tests/test_examples.py`:
 
 ```python
-from tau3_retail_evolver.slow_loop.attribution import MemoryScore
-from tau3_retail_evolver.slow_loop.examples import build_opd_examples
+from tau3_evolver.slow_loop.attribution import MemoryScore
+from tau3_evolver.slow_loop.examples import build_opd_examples
 
 
 def test_builds_selection_action_writing_examples():
@@ -1587,7 +1587,7 @@ Expected: FAIL with missing `slow_loop.examples`.
 
 - [ ] **Step 3: Implement OPD example construction**
 
-Create `src/tau3_retail_evolver/slow_loop/examples.py`:
+Create `src/tau3_evolver/slow_loop/examples.py`:
 
 ```python
 from __future__ import annotations
@@ -1595,7 +1595,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from tau3_retail_evolver.slow_loop.attribution import MemoryScore
+from tau3_evolver.slow_loop.attribution import MemoryScore
 
 
 @dataclass(frozen=True)
@@ -1688,7 +1688,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/slow_loop/examples.py tests/test_examples.py
+git add src/tau3_evolver/slow_loop/examples.py tests/test_examples.py
 git commit -m "feat: build slow loop opd examples"
 ```
 
@@ -1697,8 +1697,8 @@ git commit -m "feat: build slow loop opd examples"
 ### Task 8: Token-Level KL Loss And LoRA Training Entry Point
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/loss.py`
-- Create: `src/tau3_retail_evolver/slow_loop/train.py`
+- Create: `src/tau3_evolver/slow_loop/loss.py`
+- Create: `src/tau3_evolver/slow_loop/train.py`
 - Create: `tests/test_loss.py`
 - Create: `tests/test_train_dry_run.py`
 
@@ -1715,7 +1715,7 @@ Create `tests/test_loss.py`:
 ```python
 import torch
 
-from tau3_retail_evolver.slow_loop.loss import token_kl_loss
+from tau3_evolver.slow_loop.loss import token_kl_loss
 
 
 def test_token_kl_loss_is_zero_for_identical_logits():
@@ -1741,9 +1741,9 @@ Create `tests/test_train_dry_run.py`:
 ```python
 from pathlib import Path
 
-from tau3_retail_evolver.config import load_config
-from tau3_retail_evolver.io.jsonl import write_jsonl
-from tau3_retail_evolver.slow_loop.train import run_lora_opd_training
+from tau3_evolver.config import load_config
+from tau3_evolver.io.jsonl import write_jsonl
+from tau3_evolver.slow_loop.train import run_lora_opd_training
 
 
 def test_training_dry_run_reads_examples_and_reports_lora_defaults(tmp_path: Path):
@@ -1778,7 +1778,7 @@ Expected: FAIL with missing `loss.py` and `train.py`.
 
 - [ ] **Step 3: Implement KL loss**
 
-Create `src/tau3_retail_evolver/slow_loop/loss.py`:
+Create `src/tau3_evolver/slow_loop/loss.py`:
 
 ```python
 from __future__ import annotations
@@ -1805,7 +1805,7 @@ def token_kl_loss(
 
 - [ ] **Step 4: Implement training dry run and dependency-gated trainer**
 
-Create `src/tau3_retail_evolver/slow_loop/train.py`:
+Create `src/tau3_evolver/slow_loop/train.py`:
 
 ```python
 from __future__ import annotations
@@ -1813,8 +1813,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from tau3_retail_evolver.config import ProjectConfig
-from tau3_retail_evolver.io.jsonl import read_jsonl
+from tau3_evolver.config import ProjectConfig
+from tau3_evolver.io.jsonl import read_jsonl
 
 
 @dataclass(frozen=True)
@@ -1896,7 +1896,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/tau3_retail_evolver/slow_loop/loss.py src/tau3_retail_evolver/slow_loop/train.py tests/test_loss.py tests/test_train_dry_run.py
+git add src/tau3_evolver/slow_loop/loss.py src/tau3_evolver/slow_loop/train.py tests/test_loss.py tests/test_train_dry_run.py
 git commit -m "feat: add opd loss and lora training entry point"
 ```
 
@@ -1976,9 +1976,9 @@ from __future__ import annotations
 
 import argparse
 
-from tau3_retail_evolver.config import load_config
-from tau3_retail_evolver.io.jsonl import read_jsonl, write_jsonl
-from tau3_retail_evolver.slow_loop.attribution import compute_memory_scores
+from tau3_evolver.config import load_config
+from tau3_evolver.io.jsonl import read_jsonl, write_jsonl
+from tau3_evolver.slow_loop.attribution import compute_memory_scores
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2006,9 +2006,9 @@ from __future__ import annotations
 
 import argparse
 
-from tau3_retail_evolver.io.jsonl import read_jsonl, write_jsonl
-from tau3_retail_evolver.slow_loop.attribution import MemoryScore
-from tau3_retail_evolver.slow_loop.examples import build_opd_examples
+from tau3_evolver.io.jsonl import read_jsonl, write_jsonl
+from tau3_evolver.slow_loop.attribution import MemoryScore
+from tau3_evolver.slow_loop.examples import build_opd_examples
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2041,13 +2041,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from tau3_retail_evolver.config import load_config
-from tau3_retail_evolver.envs.base import RetailTask
-from tau3_retail_evolver.envs.mock_retail import MockRetailEnv
-from tau3_retail_evolver.fast_loop.runner import run_fast_loop
-from tau3_retail_evolver.memory.store import InMemoryMemoryStore
-from tau3_retail_evolver.memory.types import MemoryItem
-from tau3_retail_evolver.models.policy import FakePolicy
+from tau3_evolver.config import load_config
+from tau3_evolver.envs.base import RetailTask
+from tau3_evolver.envs.mock_retail import MockRetailEnv
+from tau3_evolver.fast_loop.runner import run_fast_loop
+from tau3_evolver.memory.store import InMemoryMemoryStore
+from tau3_evolver.memory.types import MemoryItem
+from tau3_evolver.models.policy import FakePolicy
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2079,8 +2079,8 @@ from __future__ import annotations
 
 import argparse
 
-from tau3_retail_evolver.config import load_config
-from tau3_retail_evolver.slow_loop.train import run_lora_opd_training
+from tau3_evolver.config import load_config
+from tau3_evolver.slow_loop.train import run_lora_opd_training
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2168,7 +2168,7 @@ This creates:
 ## Real tau3 retail integration
 
 The real retail harness should be connected behind
-`tau3_retail_evolver.envs.tau3_retail.make_tau3_retail_env`. The OPD code only
+`tau3_evolver.envs.tau3_retail.make_tau3_retail_env`. The OPD code only
 depends on the adapter protocol, so rollout, attribution, example construction,
 and LoRA training do not need to change when the real tau3 retail package is
 available.
@@ -2219,11 +2219,11 @@ Create `docs/opd_evolver_mapping.md`:
 
 ## Paper-To-Project Mapping
 
-- Fast loop Algorithm 1 lines 1-12 maps to `tau3_retail_evolver.fast_loop.runner`.
-- Four memory tiers map to `tau3_retail_evolver.memory`.
-- Outcome-calibrated attribution maps to `tau3_retail_evolver.slow_loop.attribution`.
-- Unified hindsight self-distillation maps to `tau3_retail_evolver.slow_loop.examples`, `loss`, and `train`.
-- Tau3 retail-specific environment behavior is isolated in `tau3_retail_evolver.envs`.
+- Fast loop Algorithm 1 lines 1-12 maps to `tau3_evolver.fast_loop.runner`.
+- Four memory tiers map to `tau3_evolver.memory`.
+- Outcome-calibrated attribution maps to `tau3_evolver.slow_loop.attribution`.
+- Unified hindsight self-distillation maps to `tau3_evolver.slow_loop.examples`, `loss`, and `train`.
+- Tau3 retail-specific environment behavior is isolated in `tau3_evolver.envs`.
 
 ## Official Repository Reference Scope
 

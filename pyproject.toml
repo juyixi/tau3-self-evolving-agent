@@ -3,15 +3,18 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tau3-retail-evolver"
+name = "tau3-evolver"
 version = "0.1.0"
-description = "Retail OPD evolver configuration"
+description = "Benchmark-agnostic Tau3 memory and OPD evolver"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "pydantic>=2.10,<3",
     "PyYAML>=6.0,<7",
     "audioop-lts>=0.2.2,<1; python_version >= '3.13'",
 ]
+
+[project.scripts]
+tau3 = "tau3_evolver.cli:main"
 
 [project.optional-dependencies]
 training = [
@@ -27,7 +30,7 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 markers = [
     "opd_gpu_smoke: trains one cached Qwen3.5 example when RUN_OPD_GPU_SMOKE=1",
-    "tau2_integration: runs the real Tau2 retail checkout when RUN_TAU2_INTEGRATION=1",
+    "tau2_integration: prepares real Tau2 benchmark runtimes when RUN_TAU2_INTEGRATION=1",
 ]
 
 [tool.setuptools.packages.find]

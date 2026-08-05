@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from tau3_retail_evolver.models.policy import DecisionRequest, DecisionResponse, Policy
+from tau3_evolver.models.policy import DecisionRequest, DecisionResponse, Policy
 
 
 class ScriptedPolicy(Policy):

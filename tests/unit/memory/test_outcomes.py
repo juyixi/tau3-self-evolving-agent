@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from tau3_retail_evolver.memory.outcomes import (
+from tau3_evolver.memory.outcomes import (
     MemoryOutcomeClass,
     MemoryPolarity,
     classify_episode_memory,
     memory_outcome_labels,
 )
-from tau3_retail_evolver.memory.types import MemoryItem, MemoryTier
+from tau3_evolver.memory.types import MemoryItem, MemoryTier
 
 
 def test_success_allows_positive_memory_tiers() -> None:

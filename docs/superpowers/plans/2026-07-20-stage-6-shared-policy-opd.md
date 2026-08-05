@@ -32,7 +32,7 @@
 
 **Files:**
 - Modify: `pyproject.toml`
-- Modify: `src/tau3_retail_evolver/config.py`
+- Modify: `src/tau3_evolver/config.py`
 - Modify: `configs/default.yaml`
 - Modify: `tests/unit/test_config.py`
 
@@ -86,7 +86,7 @@ Commit: `feat: configure stage 6 opd training`
 ### Task 2: Deterministic OPD Prompt Encoding and Prefix Alignment
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/alignment.py`
+- Create: `src/tau3_evolver/slow_loop/alignment.py`
 - Create: `tests/unit/slow_loop/test_alignment.py`
 
 **Interfaces:**
@@ -138,8 +138,8 @@ Commit: `feat: align public and privileged opd prefixes`
 ### Task 3: Forward KL and Shared-Model OPD Step
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/loss.py`
-- Create: `src/tau3_retail_evolver/slow_loop/opd_step.py`
+- Create: `src/tau3_evolver/slow_loop/loss.py`
+- Create: `src/tau3_evolver/slow_loop/opd_step.py`
 - Create: `tests/unit/slow_loop/test_loss.py`
 - Create: `tests/unit/slow_loop/test_opd_step.py`
 
@@ -192,9 +192,9 @@ Commit: `feat: add shared policy forward kl step`
 ### Task 4: Qwen3.5 and Zero-Impact PEFT Loader
 
 **Files:**
-- Create: `src/tau3_retail_evolver/models/qwen35.py`
-- Create: `src/tau3_retail_evolver/models/lora.py`
-- Modify: `src/tau3_retail_evolver/models/__init__.py`
+- Create: `src/tau3_evolver/models/qwen35.py`
+- Create: `src/tau3_evolver/models/lora.py`
+- Modify: `src/tau3_evolver/models/__init__.py`
 - Create: `tests/unit/models/test_lora_config.py`
 - Create: `tests/integration/test_qwen35_loader.py`
 
@@ -232,7 +232,7 @@ Commit: `feat: load qwen35 with zero impact lora`
 ### Task 5: Online Generator, Trainer, Adapter Checkpoint, and Resume
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/trainer.py`
+- Create: `src/tau3_evolver/slow_loop/trainer.py`
 - Create: `tests/unit/slow_loop/test_trainer.py`
 
 **Interfaces:**

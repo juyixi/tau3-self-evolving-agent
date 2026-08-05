@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from tau3_retail_evolver.slow_loop.attribution import MemoryGroupScore, MemoryScore
-from tau3_retail_evolver.slow_loop.evidence import (
+from tau3_evolver.slow_loop.attribution import MemoryGroupScore, MemoryScore
+from tau3_evolver.slow_loop.evidence import (
     EpisodeEvidence,
     EvidenceLedger,
     MaintenanceEvidence,
@@ -16,21 +16,21 @@ from tau3_retail_evolver.slow_loop.evidence import (
     TrajectoryStepEvidence,
     WriteProposalEvidence,
 )
-from tau3_retail_evolver.slow_loop.examples import (
+from tau3_evolver.slow_loop.examples import (
     audit_example_boundaries,
     build_action_examples,
     build_maintenance_examples,
     build_selection_examples,
     build_writing_examples,
 )
-from tau3_retail_evolver.memory.tier_contracts import (
+from tau3_evolver.memory.tier_contracts import (
     SkillPayload,
     SkillStep,
     TipPayload,
     materialize_rule_trajectory_memory,
     render_tier_payload,
 )
-from tau3_retail_evolver.memory.types import MemoryTier, stable_memory_id
+from tau3_evolver.memory.types import MemoryTier, stable_memory_id
 
 
 def _candidate(memory_id: str, tier: str, rank: int) -> MemoryCandidateEvidence:
@@ -81,17 +81,16 @@ def _episode(
     return EpisodeEvidence(
         episode_id=episode_id,
         run_id="run-a",
-        source_event_start=1,
-        source_event_end=8,
-        source_event_sha256="e" * 64,
-        iteration=3,
+        source_episode_row=1,
+        source_episode_sha256="e" * 64,
+        memory_generation=3,
         task_id=f"task-{episode_id}",
         task_group=group,
         model_revision="model-a",
         adapter_revision="adapter-a",
-        tau2_commit="c" * 40,
+        runtime_revision="c" * 40,
         split_hash="d" * 64,
-        memory_agent_id="retail",
+        memory_namespace="retail",
         memory_snapshot_id="snapshot-a",
         seed=17,
         policy="Follow public retail policy.",
@@ -103,7 +102,6 @@ def _episode(
         selected_memory_ids=selected_ids,
         trajectory=trajectory or (_step("lookup_order(order_id='1')", reward),),
         terminal_evaluation={},
-        simulation_result={},
         final_reward=reward,
         terminated=True,
         truncated=False,
@@ -119,12 +117,12 @@ def _ledger(
     maintenance: tuple[MaintenanceEvidence, ...] = (),
 ) -> EvidenceLedger:
     return EvidenceLedger(
-        iteration=3,
+        memory_generation=3,
         model_revision="model-a",
         adapter_revision="adapter-a",
-        tau2_commit="c" * 40,
+        runtime_revision="c" * 40,
         split_hash="d" * 64,
-        memory_agent_id="retail",
+        memory_namespace="retail",
         source_run_ids=("run-a",),
         episodes=episodes,
         maintenance=maintenance,
@@ -386,7 +384,7 @@ def _maintenance_fixture():
         source_event_start=9,
         source_event_end=11,
         source_event_sha256="f" * 64,
-        iteration=3,
+        memory_generation=3,
         maintenance_round=1,
         trigger_task_index=30,
         period=30,

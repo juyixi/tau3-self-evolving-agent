@@ -11,19 +11,19 @@ import pytest
 import torch
 from torch import nn
 
-from tau3_retail_evolver.config import LoraConfig, ModelConfig, TrainingConfig
+from tau3_evolver.config import LoraConfig, ModelConfig, TrainingConfig
 
 
 def _lora_module() -> Any:
-    spec = importlib.util.find_spec("tau3_retail_evolver.models.lora")
+    spec = importlib.util.find_spec("tau3_evolver.models.lora")
     assert spec is not None, "the LoRA adapter lifecycle module must exist"
-    return importlib.import_module("tau3_retail_evolver.models.lora")
+    return importlib.import_module("tau3_evolver.models.lora")
 
 
 def _qwen35_module() -> Any:
-    spec = importlib.util.find_spec("tau3_retail_evolver.models.qwen35")
+    spec = importlib.util.find_spec("tau3_evolver.models.qwen35")
     assert spec is not None, "the Qwen3.5 loader module must exist"
-    return importlib.import_module("tau3_retail_evolver.models.qwen35")
+    return importlib.import_module("tau3_evolver.models.qwen35")
 
 
 class RecordingLoraConfig:

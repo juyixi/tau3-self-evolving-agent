@@ -24,8 +24,8 @@
 
 **Files:**
 - Modify: `configs/default.yaml`
-- Modify: `src/tau3_retail_evolver/config.py`
-- Modify: `src/tau3_retail_evolver/fast_loop/prompts.py`
+- Modify: `src/tau3_evolver/config.py`
+- Modify: `src/tau3_evolver/fast_loop/prompts.py`
 - Modify: `tests/unit/test_config.py`
 - Modify: `tests/unit/fast_loop/test_prompts.py`
 
@@ -97,14 +97,14 @@ Expected: PASS。
 - [ ] **Step 7: 提交 Task 1**
 
 ```bash
-git add configs/default.yaml src/tau3_retail_evolver/config.py src/tau3_retail_evolver/fast_loop/prompts.py tests/unit/test_config.py tests/unit/fast_loop/test_prompts.py
+git add configs/default.yaml src/tau3_evolver/config.py src/tau3_evolver/fast_loop/prompts.py tests/unit/test_config.py tests/unit/fast_loop/test_prompts.py
 git commit -m "feat: add strict memory feature switch"
 ```
 
 ### Task 2: Episode Runner 的完整 Memory Bypass
 
 **Files:**
-- Modify: `src/tau3_retail_evolver/fast_loop/runner.py`
+- Modify: `src/tau3_evolver/fast_loop/runner.py`
 - Modify: `tests/unit/fast_loop/test_runner.py`
 
 **Interfaces:**
@@ -179,7 +179,7 @@ Expected: PASS。
 - [ ] **Step 7: 提交 Task 2**
 
 ```bash
-git add src/tau3_retail_evolver/fast_loop/runner.py tests/unit/fast_loop/test_runner.py
+git add src/tau3_evolver/fast_loop/runner.py tests/unit/fast_loop/test_runner.py
 git commit -m "feat: bypass memory lifecycle in fast loop"
 ```
 

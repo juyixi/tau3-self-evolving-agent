@@ -17,9 +17,9 @@ def test_qwen35_shared_policy_is_zero_impact_and_reloads_its_adapter(tmp_path: P
     import peft
     import torch
 
-    from tau3_retail_evolver.config import LoraConfig, ModelConfig, TrainingConfig
-    from tau3_retail_evolver.models.lora import save_adapter_checkpoint
-    from tau3_retail_evolver.models.qwen35 import (
+    from tau3_evolver.config import LoraConfig, ModelConfig, TrainingConfig
+    from tau3_evolver.models.lora import save_adapter_checkpoint
+    from tau3_evolver.models.qwen35 import (
         load_qwen35_tokenizer,
         load_shared_qwen35_policy,
     )

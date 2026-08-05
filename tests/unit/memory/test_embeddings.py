@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from tau3_retail_evolver.config import MemoryConfig
-from tau3_retail_evolver.memory.embeddings import (
+from tau3_evolver.config import MemoryConfig
+from tau3_evolver.memory.embeddings import (
     CachedEmbeddingProvider,
     JsonEmbeddingCache,
     LocalQwenEmbeddingProvider,

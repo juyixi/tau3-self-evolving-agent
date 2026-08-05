@@ -27,15 +27,15 @@
 
 **Create:**
 
-- `src/tau3_retail_evolver/slow_loop/__init__.py` - public Stage 5 package boundary.
-- `src/tau3_retail_evolver/slow_loop/task_grouping.py` - privileged Retail task metadata to anonymous group signatures.
-- `src/tau3_retail_evolver/slow_loop/source_runs.py` - immutable source-run loading, hashing, and policy/snapshot lineage.
-- `src/tau3_retail_evolver/slow_loop/evidence.py` - schema-2 event state machine and normalized evidence models.
-- `src/tau3_retail_evolver/slow_loop/attribution.py` - Eq.11-Eq.12 scoring and diagnostics.
-- `src/tau3_retail_evolver/slow_loop/examples.py` - Eq.13 `sel/act/write/maint` builders.
-- `src/tau3_retail_evolver/slow_loop/leakage.py` - recursive public/privileged and credential guards.
-- `src/tau3_retail_evolver/slow_loop/dataset.py` - deterministic artifact writing, manifest, atomic publication, and audit orchestration.
-- `src/tau3_retail_evolver/slow_loop/audit.py` - independent dataset audit.
+- `src/tau3_evolver/slow_loop/__init__.py` - public Stage 5 package boundary.
+- `src/tau3_evolver/slow_loop/task_grouping.py` - privileged Retail task metadata to anonymous group signatures.
+- `src/tau3_evolver/slow_loop/source_runs.py` - immutable source-run loading, hashing, and policy/snapshot lineage.
+- `src/tau3_evolver/slow_loop/evidence.py` - schema-2 event state machine and normalized evidence models.
+- `src/tau3_evolver/slow_loop/attribution.py` - Eq.11-Eq.12 scoring and diagnostics.
+- `src/tau3_evolver/slow_loop/examples.py` - Eq.13 `sel/act/write/maint` builders.
+- `src/tau3_evolver/slow_loop/leakage.py` - recursive public/privileged and credential guards.
+- `src/tau3_evolver/slow_loop/dataset.py` - deterministic artifact writing, manifest, atomic publication, and audit orchestration.
+- `src/tau3_evolver/slow_loop/audit.py` - independent dataset audit.
 - `scripts/build_opd_dataset.py` - build CLI.
 - `scripts/audit_opd_dataset.py` - audit CLI.
 - `tests/unit/slow_loop/test_task_grouping.py`
@@ -51,12 +51,12 @@
 
 **Modify:**
 
-- `src/tau3_retail_evolver/config.py` - typed Slow Loop data configuration.
+- `src/tau3_evolver/config.py` - typed Slow Loop data configuration.
 - `configs/default.yaml` - declared Stage 5 defaults.
-- `src/tau3_retail_evolver/fast_loop/events.py` - event schema 2.
-- `src/tau3_retail_evolver/fast_loop/maintenance.py` - remove privileged usage diagnostics from student/public maintenance input.
+- `src/tau3_evolver/fast_loop/events.py` - event schema 2.
+- `src/tau3_evolver/fast_loop/maintenance.py` - remove privileged usage diagnostics from student/public maintenance input.
 - `scripts/run_fast_loop.py` - real task signatures and Memory namespace provenance.
-- `src/tau3_retail_evolver/io/jsonl.py` - strict JSONL iteration shared by Stage 5.
+- `src/tau3_evolver/io/jsonl.py` - strict JSONL iteration shared by Stage 5.
 - Existing config, Fast Loop, manifest, and script tests affected by schema/config changes.
 - `docs/stage-4-fast-loop-validation.md` - schema-2 five-task deferred validation command and Stage 6 gate.
 
@@ -65,13 +65,13 @@
 ### Task 1: Schema 2, Slow Loop Config, and Retail Task Grouping
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/__init__.py`
-- Create: `src/tau3_retail_evolver/slow_loop/task_grouping.py`
+- Create: `src/tau3_evolver/slow_loop/__init__.py`
+- Create: `src/tau3_evolver/slow_loop/task_grouping.py`
 - Create: `tests/unit/slow_loop/test_task_grouping.py`
-- Modify: `src/tau3_retail_evolver/config.py`
+- Modify: `src/tau3_evolver/config.py`
 - Modify: `configs/default.yaml`
-- Modify: `src/tau3_retail_evolver/fast_loop/events.py`
-- Modify: `src/tau3_retail_evolver/fast_loop/maintenance.py`
+- Modify: `src/tau3_evolver/fast_loop/events.py`
+- Modify: `src/tau3_evolver/fast_loop/maintenance.py`
 - Modify: `scripts/run_fast_loop.py`
 - Modify: `tests/unit/test_config.py`
 - Modify: `tests/unit/fast_loop/test_maintenance.py`
@@ -211,7 +211,7 @@ Expected: PASS.
 - [x] **Step 8: Commit Task 1**
 
 ```bash
-git add configs/default.yaml src/tau3_retail_evolver/config.py src/tau3_retail_evolver/slow_loop src/tau3_retail_evolver/fast_loop/events.py src/tau3_retail_evolver/fast_loop/maintenance.py scripts/run_fast_loop.py tests/unit/slow_loop/test_task_grouping.py tests/unit/test_config.py tests/unit/fast_loop/test_maintenance.py tests/unit/scripts/test_run_fast_loop.py
+git add configs/default.yaml src/tau3_evolver/config.py src/tau3_evolver/slow_loop src/tau3_evolver/fast_loop/events.py src/tau3_evolver/fast_loop/maintenance.py scripts/run_fast_loop.py tests/unit/slow_loop/test_task_grouping.py tests/unit/test_config.py tests/unit/fast_loop/test_maintenance.py tests/unit/scripts/test_run_fast_loop.py
 git commit -m "feat: add stage 5 task grouping provenance"
 ```
 
@@ -220,9 +220,9 @@ git commit -m "feat: add stage 5 task grouping provenance"
 ### Task 2: Strict Source Run Loader and JSONL Reader
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/source_runs.py`
+- Create: `src/tau3_evolver/slow_loop/source_runs.py`
 - Create: `tests/unit/slow_loop/test_source_runs.py`
-- Modify: `src/tau3_retail_evolver/io/jsonl.py`
+- Modify: `src/tau3_evolver/io/jsonl.py`
 - Modify: `tests/unit/io/test_jsonl.py`
 
 **Interfaces:**
@@ -343,7 +343,7 @@ Expected: PASS.
 - [x] **Step 8: Commit Task 2**
 
 ```bash
-git add src/tau3_retail_evolver/io/jsonl.py src/tau3_retail_evolver/slow_loop/source_runs.py tests/unit/io/test_jsonl.py tests/unit/slow_loop/test_source_runs.py
+git add src/tau3_evolver/io/jsonl.py src/tau3_evolver/slow_loop/source_runs.py tests/unit/io/test_jsonl.py tests/unit/slow_loop/test_source_runs.py
 git commit -m "feat: validate stage 5 source run lineage"
 ```
 
@@ -352,7 +352,7 @@ git commit -m "feat: validate stage 5 source run lineage"
 ### Task 3: Event-to-Evidence Ledger
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/evidence.py`
+- Create: `src/tau3_evolver/slow_loop/evidence.py`
 - Create: `tests/unit/slow_loop/test_evidence.py`
 
 **Interfaces:**
@@ -467,7 +467,7 @@ Expected: PASS.
 - [x] **Step 7: Commit Task 3**
 
 ```bash
-git add src/tau3_retail_evolver/slow_loop/evidence.py tests/unit/slow_loop/test_evidence.py
+git add src/tau3_evolver/slow_loop/evidence.py tests/unit/slow_loop/test_evidence.py
 git commit -m "feat: materialize stage 5 evidence ledger"
 ```
 
@@ -476,7 +476,7 @@ git commit -m "feat: materialize stage 5 evidence ledger"
 ### Task 4: Paper-Exact Memory Attribution
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/attribution.py`
+- Create: `src/tau3_evolver/slow_loop/attribution.py`
 - Create: `tests/unit/slow_loop/test_attribution.py`
 
 **Interfaces:**
@@ -575,7 +575,7 @@ Expected: PASS.
 - [x] **Step 6: Commit Task 4**
 
 ```bash
-git add src/tau3_retail_evolver/slow_loop/attribution.py tests/unit/slow_loop/test_attribution.py
+git add src/tau3_evolver/slow_loop/attribution.py tests/unit/slow_loop/test_attribution.py
 git commit -m "feat: compute outcome calibrated memory attribution"
 ```
 
@@ -584,8 +584,8 @@ git commit -m "feat: compute outcome calibrated memory attribution"
 ### Task 5: Leakage Guard and Four Eq.13 Example Builders
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/leakage.py`
-- Create: `src/tau3_retail_evolver/slow_loop/examples.py`
+- Create: `src/tau3_evolver/slow_loop/leakage.py`
+- Create: `src/tau3_evolver/slow_loop/examples.py`
 - Create: `tests/unit/slow_loop/test_leakage.py`
 - Create: `tests/unit/slow_loop/test_examples.py`
 
@@ -726,7 +726,7 @@ Expected: PASS.
 - [x] **Step 9: Commit Task 5**
 
 ```bash
-git add src/tau3_retail_evolver/slow_loop/leakage.py src/tau3_retail_evolver/slow_loop/examples.py tests/unit/slow_loop/test_leakage.py tests/unit/slow_loop/test_examples.py
+git add src/tau3_evolver/slow_loop/leakage.py src/tau3_evolver/slow_loop/examples.py tests/unit/slow_loop/test_leakage.py tests/unit/slow_loop/test_examples.py
 git commit -m "feat: build four privileged opd views"
 ```
 
@@ -735,8 +735,8 @@ git commit -m "feat: build four privileged opd views"
 ### Task 6: Deterministic Dataset Publication, Manifest, Auditor, and CLIs
 
 **Files:**
-- Create: `src/tau3_retail_evolver/slow_loop/dataset.py`
-- Create: `src/tau3_retail_evolver/slow_loop/audit.py`
+- Create: `src/tau3_evolver/slow_loop/dataset.py`
+- Create: `src/tau3_evolver/slow_loop/audit.py`
 - Create: `scripts/build_opd_dataset.py`
 - Create: `scripts/audit_opd_dataset.py`
 - Create: `tests/unit/slow_loop/test_dataset.py`
@@ -851,7 +851,7 @@ Expected: PASS.
 - [x] **Step 9: Commit Task 6**
 
 ```bash
-git add src/tau3_retail_evolver/slow_loop/dataset.py src/tau3_retail_evolver/slow_loop/audit.py scripts/build_opd_dataset.py scripts/audit_opd_dataset.py tests/unit/slow_loop/test_dataset.py tests/unit/scripts/test_build_opd_dataset.py tests/unit/scripts/test_audit_opd_dataset.py
+git add src/tau3_evolver/slow_loop/dataset.py src/tau3_evolver/slow_loop/audit.py scripts/build_opd_dataset.py scripts/audit_opd_dataset.py tests/unit/slow_loop/test_dataset.py tests/unit/scripts/test_build_opd_dataset.py tests/unit/scripts/test_audit_opd_dataset.py
 git commit -m "feat: publish and audit stage 5 opd datasets"
 ```
 

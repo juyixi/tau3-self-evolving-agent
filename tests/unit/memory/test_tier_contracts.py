@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from tau3_retail_evolver.memory.repository import MemoryRepository
-from tau3_retail_evolver.memory.tier_contracts import (
+from tau3_evolver.memory.repository import MemoryRepository
+from tau3_evolver.memory.tier_contracts import (
     SkillPayload,
     SkillStep,
     TipPayload,
@@ -18,7 +18,7 @@ from tau3_retail_evolver.memory.tier_contracts import (
     render_tier_payload,
     validate_tool_payload_against_tools,
 )
-from tau3_retail_evolver.memory.types import MemoryItem, MemoryTier, stable_memory_id
+from tau3_evolver.memory.types import MemoryItem, MemoryTier, stable_memory_id
 
 
 TOOLS = (

@@ -82,7 +82,7 @@
 - 创建：`pyproject.toml`
 - 创建：`.gitignore`
 - 创建：`configs/default.yaml`
-- 创建：`src/tau3_retail_evolver/config.py`
+- 创建：`src/tau3_evolver/config.py`
 - 测试：`tests/unit/test_config.py`
 
 **接口：**
@@ -100,9 +100,9 @@
 ### 任务 1.2：Tau2 Runtime 探测、任务目录与 Split Guard
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/envs/runtime.py`
-- 创建：`src/tau3_retail_evolver/envs/task_catalog.py`
-- 创建：`src/tau3_retail_evolver/envs/split_guard.py`
+- 创建：`src/tau3_evolver/envs/runtime.py`
+- 创建：`src/tau3_evolver/envs/task_catalog.py`
+- 创建：`src/tau3_evolver/envs/split_guard.py`
 - 测试：`tests/unit/envs/test_task_catalog.py`
 - 测试 fixture：`tests/fixtures/tau2_retail/split_tasks.json`
 
@@ -122,9 +122,9 @@
 ### 任务 1.3：Gymnasium 适配器
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/envs/base.py`
-- 创建：`src/tau3_retail_evolver/envs/tau2_retail.py`
-- 创建：`src/tau3_retail_evolver/envs/factory.py`
+- 创建：`src/tau3_evolver/envs/base.py`
+- 创建：`src/tau3_evolver/envs/tau2_retail.py`
+- 创建：`src/tau3_evolver/envs/factory.py`
 - 测试：`tests/unit/envs/test_tau2_retail_adapter.py`
 
 **接口：**
@@ -167,10 +167,10 @@
 ### 任务 2.1：Policy、Prompt 与 Action 边界
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/models/policy.py`
-- 创建：`src/tau3_retail_evolver/models/openai_compatible.py`
-- 创建：`src/tau3_retail_evolver/fast_loop/action_codec.py`
-- 创建：`src/tau3_retail_evolver/fast_loop/baseline_prompt.py`
+- 创建：`src/tau3_evolver/models/policy.py`
+- 创建：`src/tau3_evolver/models/openai_compatible.py`
+- 创建：`src/tau3_evolver/fast_loop/action_codec.py`
+- 创建：`src/tau3_evolver/fast_loop/baseline_prompt.py`
 - 测试：`tests/unit/models/test_policy.py`
 - 测试：`tests/unit/fast_loop/test_action_codec.py`
 
@@ -189,10 +189,10 @@
 ### 任务 2.2：Episode Schema、Manifest 与 Baseline Runner
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/io/jsonl.py`
-- 创建：`src/tau3_retail_evolver/runs/manifest.py`
-- 创建：`src/tau3_retail_evolver/fast_loop/events.py`
-- 创建：`src/tau3_retail_evolver/fast_loop/baseline_runner.py`
+- 创建：`src/tau3_evolver/io/jsonl.py`
+- 创建：`src/tau3_evolver/runs/manifest.py`
+- 创建：`src/tau3_evolver/fast_loop/events.py`
+- 创建：`src/tau3_evolver/fast_loop/baseline_runner.py`
 - 创建：`scripts/run_baseline.py`
 - 测试：`tests/unit/fast_loop/test_baseline_runner.py`
 
@@ -226,9 +226,9 @@
 ### 任务 3.1：Memory 类型与 JSON Repository
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/memory/types.py`
-- 创建：`src/tau3_retail_evolver/memory/repository.py`
-- 创建：`src/tau3_retail_evolver/memory/json_store.py`
+- 创建：`src/tau3_evolver/memory/types.py`
+- 创建：`src/tau3_evolver/memory/repository.py`
+- 创建：`src/tau3_evolver/memory/json_store.py`
 - 测试：`tests/unit/memory/test_repository.py`
 
 **接口：**
@@ -246,8 +246,8 @@
 ### 任务 3.2：检索与候选日志
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/memory/retrieval.py`
-- 创建：`src/tau3_retail_evolver/memory/embeddings.py`
+- 创建：`src/tau3_evolver/memory/retrieval.py`
+- 创建：`src/tau3_evolver/memory/embeddings.py`
 - 测试：`tests/unit/memory/test_retrieval.py`
 
 **接口：**
@@ -264,8 +264,8 @@
 ### 任务 3.3：Lookup、Merge、Delete 与 Snapshot 隔离
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/memory/operations.py`
-- 创建：`src/tau3_retail_evolver/memory/read_only.py`
+- 创建：`src/tau3_evolver/memory/operations.py`
+- 创建：`src/tau3_evolver/memory/read_only.py`
 - 测试：`tests/unit/memory/test_operations.py`
 
 - [ ] 编写失败测试，覆盖结构化 lookup、同层级 merge、拒绝跨层级 merge、soft delete、provenance 合并、无效批次不修改原文件，以及只读 snapshot 拒绝修改。
@@ -284,8 +284,8 @@
 ### 任务 4.1：带类型的生命周期决策与 Prompt
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/fast_loop/decisions.py`
-- 创建：`src/tau3_retail_evolver/fast_loop/prompts.py`
+- 创建：`src/tau3_evolver/fast_loop/decisions.py`
+- 创建：`src/tau3_evolver/fast_loop/prompts.py`
 - 测试：`tests/unit/fast_loop/test_decisions.py`
 - 测试：`tests/unit/fast_loop/test_prompts.py`
 
@@ -302,8 +302,8 @@
 ### 任务 4.2：Episode 快循环 Runner
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/fast_loop/runner.py`
-- 修改：`src/tau3_retail_evolver/fast_loop/events.py`
+- 创建：`src/tau3_evolver/fast_loop/runner.py`
+- 修改：`src/tau3_evolver/fast_loop/events.py`
 - 测试：`tests/unit/fast_loop/test_runner.py`
 
 **接口：**
@@ -319,7 +319,7 @@
 ### 任务 4.3：周期性维护
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/fast_loop/maintenance.py`
+- 创建：`src/tau3_evolver/fast_loop/maintenance.py`
 - 测试：`tests/unit/fast_loop/test_maintenance.py`
 
 - [ ] 编写失败测试，证明每完成 30 个 train 任务运行一次 maintenance；其只接收有边界的 repository diagnostics，按层级原子应用 lookup/merge/delete，并记录完整 maintenance 轨迹。
@@ -345,7 +345,7 @@
 ### 任务 5.1：Retail 任务分组
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/slow_loop/task_grouping.py`
+- 创建：`src/tau3_evolver/slow_loop/task_grouping.py`
 - 测试：`tests/unit/slow_loop/test_task_grouping.py`
 
 - [x] 编写失败测试，确保移除只读 lookup tool，规范化并排序所需 action 名称，为语义等价的 action set 生成相同 group，并且绝不包含 evaluator 参数或 expected value。
@@ -356,7 +356,7 @@
 ### 任务 5.2：严格对应论文的 Memory Attribution
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/slow_loop/attribution.py`
+- 创建：`src/tau3_evolver/slow_loop/attribution.py`
 - 测试：`tests/unit/slow_loop/test_attribution.py`
 
 **接口：**
@@ -377,8 +377,8 @@
 ### 任务 5.3：四类 Hindsight Builder
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/slow_loop/examples.py`
-- 创建：`src/tau3_retail_evolver/slow_loop/leakage.py`
+- 创建：`src/tau3_evolver/slow_loop/examples.py`
+- 创建：`src/tau3_evolver/slow_loop/leakage.py`
 - 测试：`tests/unit/slow_loop/test_examples.py`
 
 **接口：**
@@ -416,8 +416,8 @@
 ### 任务 6.1：Qwen3.5 与 PEFT Loader
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/models/qwen35.py`
-- 创建：`src/tau3_retail_evolver/models/lora.py`
+- 创建：`src/tau3_evolver/models/qwen35.py`
+- 创建：`src/tau3_evolver/models/lora.py`
 - 测试：`tests/unit/models/test_lora_config.py`
 - 集成测试：`tests/integration/test_qwen35_loader.py`
 
@@ -430,8 +430,8 @@
 ### 任务 6.2：前缀对齐与 Token KL
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/slow_loop/alignment.py`
-- 创建：`src/tau3_retail_evolver/slow_loop/loss.py`
+- 创建：`src/tau3_evolver/slow_loop/alignment.py`
+- 创建：`src/tau3_evolver/slow_loop/loss.py`
 - 测试：`tests/unit/slow_loop/test_alignment.py`
 - 测试：`tests/unit/slow_loop/test_loss.py`
 
@@ -448,7 +448,7 @@
 ### 任务 6.3：共享模型 Teacher/Student Step
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/slow_loop/opd_step.py`
+- 创建：`src/tau3_evolver/slow_loop/opd_step.py`
 - 测试：`tests/unit/slow_loop/test_opd_step.py`
 
 - [x] 构建一个可观测的小型 causal model，并编写失败测试，确认两次 forward 使用同一个 Python model object 和 parameter storage。
@@ -461,7 +461,7 @@
 ### 任务 6.4：Trainer、Checkpoint 与 GPU Smoke
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/slow_loop/trainer.py`
+- 创建：`src/tau3_evolver/slow_loop/trainer.py`
 - 创建：`scripts/train_opd_lora.py`
 - 测试：`tests/unit/slow_loop/test_trainer.py`
 - 集成测试：`tests/integration/test_opd_gpu_smoke.py`
@@ -484,9 +484,9 @@
 ### 任务 7.1：Iteration 状态机
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/pipeline/state.py`
-- 创建：`src/tau3_retail_evolver/pipeline/iteration.py`
-- 创建：`src/tau3_retail_evolver/pipeline/executor.py`
+- 创建：`src/tau3_evolver/pipeline/state.py`
+- 创建：`src/tau3_evolver/pipeline/iteration.py`
+- 创建：`src/tau3_evolver/pipeline/executor.py`
 - 创建：`scripts/run_iteration.py`
 - 测试：`tests/unit/pipeline/test_iteration.py`
 
@@ -505,7 +505,7 @@
 ### 任务 7.2：Curriculum 与 Sampling 控制
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/pipeline/sampling.py`
+- 创建：`src/tau3_evolver/pipeline/sampling.py`
 - 测试：`tests/unit/pipeline/test_sampling.py`
 
 - [x] 根据已记录 seed 实现确定性的 train task 排序/打乱。
@@ -532,8 +532,8 @@
 ### 任务 8.1：评测隔离
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/eval/guard.py`
-- 创建：`src/tau3_retail_evolver/eval/runner.py`
+- 创建：`src/tau3_evolver/eval/guard.py`
+- 创建：`src/tau3_evolver/eval/runner.py`
 - 测试：`tests/unit/eval/test_guard.py`
 - 测试：`tests/unit/eval/test_evaluation_runner.py`
 
@@ -550,7 +550,7 @@
 ### 任务 8.2：官方指标与可复现 CLI
 
 **文件：**
-- 创建：`src/tau3_retail_evolver/eval/metrics.py`
+- 创建：`src/tau3_evolver/eval/metrics.py`
 - 创建：`scripts/evaluate_retail.py`
 - 测试：`tests/unit/eval/test_metrics.py`
 
@@ -566,8 +566,8 @@
 
 **文件：**
 - 创建：`scripts/compare_evaluations.py`
-- 创建：`src/tau3_retail_evolver/eval/experiment.py`
-- 创建：`src/tau3_retail_evolver/eval/visualization.py`
+- 创建：`src/tau3_evolver/eval/experiment.py`
+- 创建：`src/tau3_evolver/eval/visualization.py`
 - 创建：`scripts/build_stage8_report.py`
 - 创建：`docs/evaluation_protocol.md`
 - 修改：`README.md`

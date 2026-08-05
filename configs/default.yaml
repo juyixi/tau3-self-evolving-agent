@@ -1,8 +1,5 @@
 tau2:
   repo_path: external/tau2-bench
-  domain: retail
-  train_split: train
-  eval_split: test
   user_llm: deepseek/deepseek-v4-pro
   user_llm_args:
       thinking:
@@ -12,6 +9,17 @@ tau2:
   solo_mode: false
 model:
   base_model: Qwen/Qwen3.5-9B
+  serving_base_url: http://127.0.0.1:8000/v1
+  served_model_name: Qwen/Qwen3.5-9B
+  api_key_env: QWEN_API_KEY
+  max_tokens: 8192
+  request_timeout_s: 600.0
+  generation_settings:
+    chat_template_kwargs:
+      enable_thinking: true
+    top_k: 20
+    presence_penalty: 1.5
+    parallel_tool_calls: false
 lora:
   use_peft: true
   lora_r: 32
@@ -21,9 +29,10 @@ rollout:
   temperature: 1.0
   top_p: 0.95
   max_episode_steps: 40
+execution:
+  max_concurrency: 3
+  seed: 42
 memory:
-  enabled: true
-  agent_id: retail
   tiers: [trajectory, tip, skill, tool]
   retrieve_top_k: 50
   teacher_memory_cap: 20
@@ -77,9 +86,6 @@ training:
   num_train_epochs: 3
   generation_max_new_tokens: 512
   loss_type: forward_kl
-pipeline:
-  iteration_task_count: 74
-  shuffle_train_tasks: true
 evaluation:
   nl_assertions:
     model: deepseek/deepseek-v4-pro

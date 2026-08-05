@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from tau3_retail_evolver.memory.repository import MemoryRepository
-from tau3_retail_evolver.memory.types import MEMORY_TIERS, MemoryStatus, MemoryTier
-import tau3_retail_evolver.memory.json_store as json_store
+from tau3_evolver.memory.repository import MemoryRepository
+from tau3_evolver.memory.types import MEMORY_TIERS, MemoryStatus, MemoryTier
+import tau3_evolver.memory.json_store as json_store
 
 
 def _add_memory_in_process(

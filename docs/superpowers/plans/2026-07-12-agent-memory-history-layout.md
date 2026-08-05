@@ -25,8 +25,8 @@
 ### Task 1: Validate Agent Namespace and Resolve History Paths
 
 **Files:**
-- Create: `src/tau3_retail_evolver/memory/paths.py`
-- Modify: `src/tau3_retail_evolver/config.py`
+- Create: `src/tau3_evolver/memory/paths.py`
+- Modify: `src/tau3_evolver/config.py`
 - Modify: `configs/default.yaml`
 - Modify: `.gitignore`
 - Modify: `tests/unit/test_config.py`
@@ -81,7 +81,7 @@ Expected: FAIL because `MemoryConfig` has no `agent_id` field or rejects the new
 
 - [ ] **Step 3: Implement configuration validation**
 
-In `src/tau3_retail_evolver/config.py`, add `_AGENT_ID` beside the existing environment-variable regex and replace `MemoryConfig` with:
+In `src/tau3_evolver/config.py`, add `_AGENT_ID` beside the existing environment-variable regex and replace `MemoryConfig` with:
 
 ```python
 _AGENT_ID = re.compile(r"^[a-z0-9_-]+$")
@@ -137,7 +137,7 @@ from pathlib import Path
 
 import pytest
 
-from tau3_retail_evolver.memory.paths import (
+from tau3_evolver.memory.paths import (
     evaluation_quarantine_root,
     project_root,
     training_memory_root,
@@ -223,11 +223,11 @@ Run:
 python -m pytest tests/unit/memory/test_paths.py -q --basetemp=.pytest-tmp/history-paths-red
 ```
 
-Expected: collection ERROR because `tau3_retail_evolver.memory.paths` does not exist.
+Expected: collection ERROR because `tau3_evolver.memory.paths` does not exist.
 
 - [ ] **Step 6: Implement the centralized resolver**
 
-Create `src/tau3_retail_evolver/memory/paths.py`:
+Create `src/tau3_evolver/memory/paths.py`:
 
 ```python
 from __future__ import annotations
@@ -284,7 +284,7 @@ Expected: all selected tests PASS.
 - [ ] **Step 8: Commit Task 1**
 
 ```powershell
-git add .gitignore configs/default.yaml src/tau3_retail_evolver/config.py src/tau3_retail_evolver/memory/paths.py tests/unit/test_config.py tests/unit/memory/test_paths.py
+git add .gitignore configs/default.yaml src/tau3_evolver/config.py src/tau3_evolver/memory/paths.py tests/unit/test_config.py tests/unit/memory/test_paths.py
 git commit -m "feat: add agent memory history paths"
 ```
 
@@ -293,8 +293,8 @@ git commit -m "feat: add agent memory history paths"
 ### Task 2: Open Persistent Training Memory Through One Factory
 
 **Files:**
-- Create: `src/tau3_retail_evolver/memory/factory.py`
-- Modify: `src/tau3_retail_evolver/memory/__init__.py`
+- Create: `src/tau3_evolver/memory/factory.py`
+- Modify: `src/tau3_evolver/memory/__init__.py`
 - Create: `tests/unit/memory/test_factory.py`
 
 **Interfaces:**
@@ -311,8 +311,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tau3_retail_evolver.config import MemoryConfig
-from tau3_retail_evolver.memory.factory import open_training_memory
+from tau3_evolver.config import MemoryConfig
+from tau3_evolver.memory.factory import open_training_memory
 
 
 def test_same_agent_accumulates_memory_across_repository_reopens(tmp_path: Path) -> None:
@@ -354,20 +354,20 @@ Run:
 python -m pytest tests/unit/memory/test_factory.py -q --basetemp=.pytest-tmp/history-factory-red
 ```
 
-Expected: collection ERROR because `tau3_retail_evolver.memory.factory` does not exist.
+Expected: collection ERROR because `tau3_evolver.memory.factory` does not exist.
 
 - [ ] **Step 3: Implement the factory without accepting `run_id`**
 
-Create `src/tau3_retail_evolver/memory/factory.py`:
+Create `src/tau3_evolver/memory/factory.py`:
 
 ```python
 from __future__ import annotations
 
 from pathlib import Path
 
-from tau3_retail_evolver.config import MemoryConfig
-from tau3_retail_evolver.memory.paths import training_memory_root
-from tau3_retail_evolver.memory.repository import MemoryRepository
+from tau3_evolver.config import MemoryConfig
+from tau3_evolver.memory.paths import training_memory_root
+from tau3_evolver.memory.repository import MemoryRepository
 
 
 def open_training_memory(
@@ -378,16 +378,16 @@ def open_training_memory(
     return MemoryRepository(training_memory_root(config.agent_id, root=root))
 ```
 
-Replace `src/tau3_retail_evolver/memory/__init__.py` with:
+Replace `src/tau3_evolver/memory/__init__.py` with:
 
 ```python
 """Four-tier JSON memory storage and retrieval."""
 
-from tau3_retail_evolver.memory.embeddings import build_embedding_provider
-from tau3_retail_evolver.memory.factory import open_training_memory
-from tau3_retail_evolver.memory.repository import MemoryRepository
-from tau3_retail_evolver.memory.read_only import ReadOnlyMemoryRepository
-from tau3_retail_evolver.memory.types import (
+from tau3_evolver.memory.embeddings import build_embedding_provider
+from tau3_evolver.memory.factory import open_training_memory
+from tau3_evolver.memory.repository import MemoryRepository
+from tau3_evolver.memory.read_only import ReadOnlyMemoryRepository
+from tau3_evolver.memory.types import (
     MEMORY_TIERS,
     MemoryItem,
     MemorySnapshot,
@@ -423,7 +423,7 @@ Expected: all selected tests PASS and all writes remain beneath `tmp_path/histor
 - [ ] **Step 5: Commit Task 2**
 
 ```powershell
-git add src/tau3_retail_evolver/memory/__init__.py src/tau3_retail_evolver/memory/factory.py tests/unit/memory/test_factory.py
+git add src/tau3_evolver/memory/__init__.py src/tau3_evolver/memory/factory.py tests/unit/memory/test_factory.py
 git commit -m "feat: open persistent agent memory"
 ```
 

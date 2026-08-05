@@ -1,0 +1,620 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from functools import partial
+import json
+from math import isfinite
+from time import monotonic
+from typing import Any, Protocol
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+from tau3_evolver.agent.action_codec import Tau2ActionCodec
+from tau3_evolver.agent.tool_schemas import build_baseline_prompt
+from tau3_evolver.agent.decisions import (
+    MaintenanceDecision,
+    SelectionDecision,
+    WriteDecision,
+)
+from tau3_evolver.agent.prompts import LifecyclePrompt
+from tau3_evolver.agent.policy import LifecycleResponse
+from tau3_evolver.models.policy import DecisionRequest, DecisionResponse, Policy
+
+
+class OpenAICompatibleClient(Protocol):
+    """Small adapter surface for an OpenAI-compatible Qwen endpoint client."""
+
+    def create_chat_completion(
+        self,
+        *,
+        messages: Sequence[Mapping[str, str]],
+        tools: Sequence[Mapping[str, Any]],
+        temperature: float,
+        top_p: float,
+        response_format: Mapping[str, Any] | None = None,
+        request_generation_settings: Mapping[str, Any] | None = None,
+    ) -> object: ...
+
+
+HttpTransport = Callable[[str, dict[str, str], bytes], tuple[int, bytes]]
+QwenToolCallParser = Callable[[object], str | None]
+
+_SELECTION_SYSTEM = (
+    "You are the experience selector in OPD-Evolver's fast loop. Turn the noisy "
+    "retrieved candidates into the smallest actionable memory context for the current "
+    "task. Judge each candidate by direct applicability and expected causal utility, "
+    "not by topical similarity or retrieval rank alone. Select a memory only when it "
+    "supports a concrete decision, procedure, or tool use, or prevents a plausible "
+    "failure under the current task and policy. Prefer complementary, non-redundant "
+    "evidence across tiers. Treat trajectories as analogous evidence, not scripts to "
+    "replay. Select caution memories only when their failure mode is relevant. Exclude "
+    "generic, contradictory, redundant, or merely related memories, and select nothing "
+    "when no candidate is likely to help. Return exactly one strict JSON object matching "
+    'SelectionDecision: {"memory_ids":[...]}. Use only candidate IDs from the user '
+    "payload. Do not use tools or include any other text."
+)
+_ACTION_SYSTEM = (
+    "You are the experience-grounded executor in OPD-Evolver's fast loop. Your goal is "
+    "to solve the current task, not to demonstrate memory use. The current task, "
+    "official policy, tools, observation, and interaction history are authoritative; "
+    "selected memories are fallible prior experience that must be adapted to the current "
+    "state. Use relevant memories to form an efficient multi-turn strategy internally, "
+    "but emit only the single best next Tau2 action. Choose an action that makes concrete "
+    "progress while respecting preconditions and policy constraints. Verify authoritative "
+    "state before irreversible changes, and verify all required effects and the true "
+    "success condition before stopping. Use only available native tools with arguments "
+    "grounded in the current context; executable methods embedded in tool descriptions "
+    "are guidance for those native tools. Adapt trajectories rather than replaying them "
+    "blindly. Use caution memories only to avoid or correct their relevant failure mode. "
+    "Use at most one provided tool call, or return a valid Tau2 text action. Do not expose "
+    "or invent hidden data."
+)
+_WRITE_SYSTEM = (
+    "You are the experience writer in OPD-Evolver's fast loop. Transform the completed "
+    "episode, reward, and grounded feedback into compact future-facing knowledge; do not "
+    "summarize or restate the trajectory. Identify the causal behavior that produced the "
+    "outcome, then write only knowledge that is specific, actionable, supported by the "
+    "evidence, and reusable on similar future tasks. Exclude task-specific identifiers, "
+    "incidental observations, generic advice, unsupported explanations, duplicate lessons, "
+    "and invented tools. Split independent lessons into separate memories and choose the "
+    "lowest sufficient tier: a tip is one atomic gotcha, constraint, or heuristic; a skill "
+    "is one reusable methodological workflow with at least two ordered steps; a tool is a "
+    "self-contained executable invocation method for exactly one native tool present in "
+    "the supplied schemas. A tool memory must include its method, preconditions, complete "
+    "argument-binding rules, expected effect, and a valid example call. The runtime records "
+    "the observed trajectory directly, so never propose trajectory memory. On success, "
+    "extract what causally worked. On task failure, follow memory_outcome and write only "
+    "caution tips that name the failure trigger, root cause supported by evidence, and "
+    "corrective behavior; never turn failed behavior into a success recipe. Return no "
+    "memories when the episode contains no durable reusable lesson. Return exactly one "
+    "strict JSON object matching WriteDecision. Use this shape: "
+    '{"memories":[{"tier":"tip","payload":{"condition":"optional condition",'
+    '"guidance":"one atomic rule","rationale":"optional rationale","scope":[]},'
+    '"retrieval_text":"optional retrieval query","metadata":{}}]}. '
+    'Use {"memories":[]} when no durable lesson passes these criteria. Write retrieval_text '
+    "as a concise future retrieval cue when provided. Content is rendered by the runtime "
+    "and must not be returned. Attribution fields are not allowed. "
+    'When trajectory_format is "final_observation_plus_actions_v1", observation contains '
+    "the complete cumulative transcript and trajectory contains its ordered action and "
+    "outcome metadata without repeated observations. "
+    "Do not use tools, Markdown fences, or include any other text."
+)
+_MAINTENANCE_SYSTEM = (
+    "You are the experience manager in OPD-Evolver's fast loop. Maintain a growing memory "
+    "repository for maximum downstream usefulness, not for stylistic uniformity or minimum "
+    "size. Use the supplied repository diagnostics to preserve distinct actionable "
+    "experience, consolidate semantic redundancy, and retire knowledge that would mislead "
+    "future execution. Priority order is a review cue, not proof that an item should change. "
+    "Judge incremental utility from the available content, tier, status, and repository "
+    "context. When evidence is insufficient, keep the memory. Capacity pressure alone does "
+    "not justify deleting unique useful knowledge; satisfy required tip reduction by "
+    "removing or consolidating the least incremental value first. Return exactly one strict "
+    'JSON object matching MaintenanceDecision: {"reviews":[...],"commands":[...]}. Apply '
+    "these operational rules: 1. Review priority candidates first. Every reviewed Memory "
+    "ID appears exactly once with disposition keep, merge, or retire and a concrete, "
+    "evidence-grounded reason. 2. Merge only genuinely redundant Memories from the same "
+    "tier, preserving their reusable substance in one concise result. Put all merged IDs "
+    "in one merge command and mark those reviews as merge. Never merge trajectory memories: "
+    "they are immutable runtime evidence. Never also delete a merge source. 3. Retire only "
+    "clearly obsolete, incorrect, contradicted, or redundant Memories whose continued "
+    "presence would add noise or risk. Mark deleted IDs as retire and explain why. 4. "
+    "Commands may reference only IDs present in diagnostics. Do not repeat an ID across "
+    "commands or mix lookup commands with merge or delete commands. 5. The runtime owns "
+    "updated_round and typed payload fields; omit them and return only semantic merge "
+    "content or delete reasons. 6. When requires_tip_reduction is true, reduce redundant "
+    "or low-incremental-value tips toward tip_capacity. Otherwise commands may be empty. "
+    'Use {"reviews":[],"commands":[]} only when there is genuinely nothing safe to review. '
+    "Use only the supplied diagnostics and command schemas. Do not call tools, use Markdown, "
+    "or include any text outside the JSON object."
+)
+_SYSTEM_INSTRUCTIONS = {
+    "selection": _SELECTION_SYSTEM,
+    "action": _ACTION_SYSTEM,
+    "write": _WRITE_SYSTEM,
+    "maintenance": _MAINTENANCE_SYSTEM,
+}
+_NON_ACTION_DECISIONS = {
+    "selection": SelectionDecision,
+    "write": WriteDecision,
+    "maintenance": MaintenanceDecision,
+}
+_MAX_INVALID_OUTPUT_REPR_CHARS = 4_096
+
+
+class OpenAICompatibleHttpClient:
+    """Concrete stdlib client for Qwen endpoints implementing OpenAI chat completions."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str,
+        max_tokens: int | None = None,
+        generation_settings: Mapping[str, Any] | None = None,
+        request_timeout_s: float = 120.0,
+        transport: HttpTransport | None = None,
+    ) -> None:
+        if not base_url:
+            raise ValueError("base_url is required")
+        if not model:
+            raise ValueError("model is required")
+        if not api_key:
+            raise ValueError("api_key is required")
+        if (
+            isinstance(request_timeout_s, bool)
+            or not isinstance(request_timeout_s, (int, float))
+            or not isfinite(request_timeout_s)
+            or request_timeout_s <= 0
+        ):
+            raise ValueError("request timeout must be finite and positive")
+        self._endpoint = f"{base_url.rstrip('/')}/chat/completions"
+        self._model = model
+        self._api_key = api_key
+        self._max_tokens = max_tokens
+        self._generation_settings = dict(generation_settings or {})
+        reserved = {
+            "model",
+            "messages",
+            "tools",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "response_format",
+        }
+        if reserved.intersection(self._generation_settings):
+            raise ValueError("generation settings must not override chat completion fields")
+        self._transport = (
+            transport
+            if transport is not None
+            else partial(_stdlib_transport, timeout=float(request_timeout_s))
+        )
+
+    def __repr__(self) -> str:
+        return f"OpenAICompatibleHttpClient(model={self._model!r})"
+
+    def create_chat_completion(
+        self,
+        *,
+        messages: Sequence[Mapping[str, str]],
+        tools: Sequence[Mapping[str, Any]],
+        temperature: float,
+        top_p: float,
+        response_format: Mapping[str, Any] | None = None,
+        request_generation_settings: Mapping[str, Any] | None = None,
+    ) -> object:
+        request_settings = dict(request_generation_settings or {})
+        reserved = {
+            "model",
+            "messages",
+            "tools",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "response_format",
+        }
+        if reserved.intersection(request_settings):
+            raise ValueError(
+                "request generation settings must not override chat completion fields"
+            )
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": list(messages),
+            "temperature": temperature,
+            "top_p": top_p,
+            **self._generation_settings,
+            **request_settings,
+        }
+        if tools:
+            payload["tools"] = list(tools)
+        if response_format is not None:
+            payload["response_format"] = dict(response_format)
+        if self._max_tokens is not None:
+            payload["max_tokens"] = self._max_tokens
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        try:
+            status, response_body = self._transport(self._endpoint, headers, body)
+        except Exception:
+            raise RuntimeError("OpenAI-compatible endpoint request failed") from None
+        if not 200 <= status < 300:
+            detail = _http_error_detail(response_body)
+            message = f"OpenAI-compatible endpoint returned HTTP {status}"
+            if detail:
+                message = f"{message}: {detail}"
+            raise RuntimeError(message)
+        try:
+            response = json.loads(response_body)
+        except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("OpenAI-compatible endpoint returned invalid JSON") from error
+        if not isinstance(response, Mapping):
+            raise RuntimeError("OpenAI-compatible endpoint returned a non-object response")
+        return dict(response)
+
+
+class OpenAICompatibleQwenPolicy(Policy):
+    """Generate Tau2 actions through an OpenAI-compatible Qwen endpoint client."""
+
+    def __init__(
+        self,
+        *,
+        client: OpenAICompatibleClient,
+        tool_call_parser: QwenToolCallParser | None = None,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        self._client = client
+        self._tool_call_parser = tool_call_parser
+        self._clock = clock
+
+    def generate(self, request: DecisionRequest) -> DecisionResponse:
+        prompt = build_baseline_prompt(request.observation, request.reset_info, request.history)
+        started_at = self._clock()
+        completion = self._client.create_chat_completion(
+            messages=list(prompt.messages),
+            tools=list(prompt.tools),
+            temperature=request.temperature,
+            top_p=request.top_p,
+        )
+        latency_s = self._clock() - started_at
+
+        parser = self._tool_call_parser or parse_openai_qwen_tool_call
+        tool_call = parser(completion)
+        if tool_call is not None and not isinstance(tool_call, str):
+            raise ValueError("Qwen tool-call parser must return text or None")
+        raw_output = _raw_output(completion)
+        parsed_action = Tau2ActionCodec.decode(tool_call or raw_output, _tool_names(prompt.tools))
+        prompt_tokens, completion_tokens = _completion_token_usage(completion)
+        return DecisionResponse(
+            raw_output=raw_output,
+            parsed_action=parsed_action,
+            sampling_params={"temperature": request.temperature, "top_p": request.top_p},
+            latency_s=latency_s,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+
+class OpenAICompatibleFastLoopPolicy:
+    """Adapt an OpenAI-compatible Qwen client to the audited fast-loop policy."""
+
+    def __init__(
+        self,
+        *,
+        client: OpenAICompatibleClient,
+        temperature: float,
+        top_p: float,
+        clock: Callable[[], float] = monotonic,
+        tool_call_parser: QwenToolCallParser | None = None,
+    ) -> None:
+        if not isfinite(temperature) or not isfinite(top_p):
+            raise ValueError("fast-loop sampling values must be finite")
+        self._client = client
+        self._temperature = temperature
+        self._top_p = top_p
+        self._clock = clock
+        self._tool_call_parser = tool_call_parser
+
+    def __repr__(self) -> str:
+        return (
+            "OpenAICompatibleFastLoopPolicy("
+            f"temperature={self._temperature!r}, top_p={self._top_p!r})"
+        )
+
+    def generate(self, prompt: LifecyclePrompt) -> LifecycleResponse:
+        public_request = dict(prompt.payload)
+        if prompt.kind == "maintenance":
+            public_request["command_schemas"] = list(prompt.command_schemas)
+        return self._complete(
+            prompt,
+            system_instruction=_SYSTEM_INSTRUCTIONS[prompt.kind],
+            user_content=_canonical_json(public_request),
+        )
+
+    def repair(
+        self,
+        prompt: LifecyclePrompt,
+        raw_output: str,
+        error: str,
+    ) -> LifecycleResponse:
+        repair_request = {
+            "prompt": prompt.model_dump(mode="json"),
+            "invalid_output": raw_output,
+            "validation_error": error,
+        }
+        return self._complete(
+            prompt,
+            system_instruction=(
+                f"Repair the invalid {prompt.kind} response. "
+                f"{_SYSTEM_INSTRUCTIONS[prompt.kind]}"
+            ),
+            user_content=_canonical_json(repair_request),
+        )
+
+    def _complete(
+        self,
+        prompt: LifecyclePrompt,
+        *,
+        system_instruction: str,
+        user_content: str,
+    ) -> LifecycleResponse:
+        tools = prompt.payload["tools"] if prompt.kind == "action" else []
+        started_at = self._clock()
+        try:
+            request: dict[str, Any] = {
+                "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": user_content},
+                ],
+                "tools": tools,
+                "temperature": self._temperature,
+                "top_p": self._top_p,
+                "response_format": (
+                    _decision_response_format(prompt.kind)
+                    if prompt.kind != "action"
+                    else None
+                ),
+            }
+            if prompt.kind == "maintenance":
+                request["request_generation_settings"] = {
+                    "chat_template_kwargs": {"enable_thinking": False}
+                }
+            completion = self._client.create_chat_completion(**request)
+        except Exception:
+            raise RuntimeError("OpenAI-compatible fast-loop policy request failed") from None
+        latency_s = max(0.0, self._clock() - started_at)
+        if prompt.kind == "action":
+            raw_output = self._action_output(completion, tools)
+        else:
+            raw_output = _fast_loop_non_action_output(completion)
+        prompt_tokens, completion_tokens = _completion_token_usage(completion)
+        return LifecycleResponse(
+            raw_output=raw_output,
+            sampling_params={
+                "temperature": self._temperature,
+                "top_p": self._top_p,
+            },
+            latency_s=latency_s,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    def _action_output(
+        self,
+        completion: object,
+        tools: Sequence[Mapping[str, Any]],
+    ) -> str:
+        raw_output: str | None = None
+        try:
+            raw_output = _fast_loop_action_raw_output(completion)
+            parser = self._tool_call_parser or parse_openai_qwen_tool_call
+            tool_call = parser(completion)
+            if tool_call is not None and not isinstance(tool_call, str):
+                raise ValueError("Qwen tool-call parser must return text or None")
+            action = Tau2ActionCodec.decode(tool_call or raw_output, _tool_names(tools))
+        except Exception:
+            return _canonical_json(
+                {
+                    "invalid_action_output": (
+                        raw_output
+                        if raw_output is not None
+                        else _safe_completion_output(completion)
+                    )
+                }
+            )
+        return _canonical_json({"action": action})
+
+
+def _decision_response_format(kind: str) -> dict[str, Any]:
+    decision_type = _NON_ACTION_DECISIONS[kind]
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": f"{kind}_decision",
+            "schema": decision_type.model_json_schema(),
+            "strict": True,
+        },
+    }
+
+
+def parse_openai_qwen_tool_call(completion: object) -> str | None:
+    """Consume the standard structured tool calls emitted by Qwen server parsers."""
+    message = _assistant_message(completion)
+    if message is None or "tool_calls" not in message:
+        return None
+
+    tool_calls = message["tool_calls"]
+    if tool_calls is None:
+        return None
+    if not isinstance(tool_calls, Sequence) or isinstance(tool_calls, (str, bytes)):
+        raise ValueError("structured tool calls must be a sequence")
+    if not tool_calls:
+        return None
+    if len(tool_calls) != 1:
+        raise ValueError("structured responses must contain exactly one tool call")
+
+    tool_call = tool_calls[0]
+    if not isinstance(tool_call, Mapping):
+        raise ValueError("structured tool call must be an object")
+    function = tool_call.get("function")
+    if not isinstance(function, Mapping):
+        raise ValueError("structured tool call must contain a function")
+    name = function.get("name")
+    if not isinstance(name, str):
+        raise ValueError("structured tool call must contain a function name")
+    arguments = _structured_arguments(function.get("arguments"))
+    return json.dumps({"name": name, "arguments": arguments}, sort_keys=True, separators=(",", ":"))
+
+
+def _structured_arguments(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError("structured tool call arguments must be JSON") from error
+    if not isinstance(value, Mapping):
+        raise ValueError("structured tool call arguments must be an object")
+    return value
+
+
+def _raw_output(completion: object) -> str:
+    message = _assistant_message(completion)
+    if message is not None and _has_structured_tool_calls(message):
+        try:
+            return json.dumps(message, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError) as error:
+            raise ValueError("structured assistant message must be JSON serializable") from error
+    if message is not None:
+        content = message.get("content")
+    elif isinstance(completion, Mapping):
+        content = completion.get("content")
+    else:
+        content = getattr(completion, "content", None)
+    if not isinstance(content, str):
+        raise ValueError("Qwen completion has no text content")
+    return content
+
+
+def _completion_token_usage(
+    completion: object,
+) -> tuple[int | None, int | None]:
+    usage = (
+        completion.get("usage")
+        if isinstance(completion, Mapping)
+        else getattr(completion, "usage", None)
+    )
+    if usage is None:
+        return None, None
+    values = []
+    for field in ("prompt_tokens", "completion_tokens"):
+        value = (
+            usage.get(field)
+            if isinstance(usage, Mapping)
+            else getattr(usage, field, None)
+        )
+        if type(value) is not int or value < 0:
+            raise ValueError(f"completion usage {field} must be a non-negative integer")
+        values.append(value)
+    return values[0], values[1]
+
+
+def _fast_loop_action_raw_output(completion: object) -> str:
+    message = _assistant_message(completion)
+    if message is not None and message.get("tool_calls") not in (None, []):
+        try:
+            return _canonical_json(message)
+        except (TypeError, ValueError) as error:
+            raise ValueError("structured assistant message must be JSON serializable") from error
+    return _raw_output(completion)
+
+
+def _safe_completion_output(completion: object) -> str:
+    try:
+        return _canonical_json(completion)
+    except Exception:
+        try:
+            rendered = repr(completion)
+        except Exception:
+            rendered = f"<unrepresentable {type(completion).__name__}>"
+        return rendered[:_MAX_INVALID_OUTPUT_REPR_CHARS]
+
+
+def _fast_loop_non_action_output(completion: object) -> str:
+    try:
+        message = _assistant_message(completion)
+        if message is not None and _has_rejected_tool_calls(message):
+            return _canonical_json(message)
+        return _raw_output(completion)
+    except Exception:
+        return _canonical_json(
+            {"invalid_lifecycle_output": "model response could not be decoded"}
+        )
+
+
+def _has_rejected_tool_calls(message: Mapping[str, Any]) -> bool:
+    if "tool_calls" not in message or message["tool_calls"] is None:
+        return False
+    tool_calls = message["tool_calls"]
+    return not (isinstance(tool_calls, list) and not tool_calls)
+
+
+def _has_structured_tool_calls(message: Mapping[str, Any]) -> bool:
+    tool_calls = message.get("tool_calls")
+    return (
+        isinstance(tool_calls, Sequence)
+        and not isinstance(tool_calls, (str, bytes))
+        and bool(tool_calls)
+    )
+
+
+def _assistant_message(completion: object) -> Mapping[str, Any] | None:
+    if not isinstance(completion, Mapping) or "choices" not in completion:
+        return None
+    choices = completion["choices"]
+    if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)) or not choices:
+        raise ValueError("OpenAI-compatible response must contain a choice")
+    choice = choices[0]
+    if not isinstance(choice, Mapping):
+        raise ValueError("OpenAI-compatible choice must be an object")
+    message = choice.get("message")
+    if not isinstance(message, Mapping):
+        raise ValueError("OpenAI-compatible choice must contain an assistant message")
+    return message
+
+
+def _tool_names(tools: Sequence[Mapping[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for tool in tools:
+        function = tool.get("function")
+        name = function.get("name") if isinstance(function, Mapping) else tool.get("name")
+        if isinstance(name, str):
+            names.add(name)
+    return names
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _http_error_detail(response_body: bytes, *, limit: int = 1_024) -> str:
+    if not response_body:
+        return ""
+    return response_body.decode("utf-8", errors="replace").strip()[:limit]
+
+
+def _stdlib_transport(
+    url: str,
+    headers: dict[str, str],
+    body: bytes,
+    *,
+    timeout: float,
+) -> tuple[int, bytes]:
+    request = Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.status, response.read()
+    except HTTPError as error:
+        return error.code, error.read()

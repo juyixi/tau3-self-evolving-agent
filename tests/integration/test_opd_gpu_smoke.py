@@ -20,7 +20,7 @@ pytestmark = [
 
 
 def _write_one_example_dataset(root: Path, model_revision: str) -> None:
-    from tau3_retail_evolver.slow_loop.examples import (
+    from tau3_evolver.slow_loop.examples import (
         OPD_DATASET_SCHEMA_VERSION,
         OPD_SAMPLE_UNIT_CONTRACT,
         OPDExample,
@@ -72,17 +72,17 @@ def test_cached_qwen35_trains_one_example_with_adapter_only_update(tmp_path: Pat
     import peft
     import torch
 
-    from tau3_retail_evolver.config import (
+    from tau3_evolver.config import (
         LoraConfig,
         ModelConfig,
         RolloutConfig,
         TrainingConfig,
     )
-    from tau3_retail_evolver.models.qwen35 import (
+    from tau3_evolver.models.qwen35 import (
         load_qwen35_tokenizer,
         load_shared_qwen35_policy,
     )
-    from tau3_retail_evolver.slow_loop.trainer import OPDTrainer, TrainingRequest
+    from tau3_evolver.slow_loop.training import OPDTrainer, TrainingRequest
 
     assert torch.cuda.is_available(), "RUN_OPD_GPU_SMOKE=1 requires CUDA"
     assert torch.cuda.is_bf16_supported(), "RUN_OPD_GPU_SMOKE=1 requires BF16 CUDA"

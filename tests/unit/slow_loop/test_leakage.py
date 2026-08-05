@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tau3_retail_evolver.slow_loop.leakage import (
+from tau3_evolver.slow_loop.leakage import (
     audit_artifact_payload,
     audit_public_input,
     normalized_key,

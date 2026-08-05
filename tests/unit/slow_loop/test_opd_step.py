@@ -6,9 +6,9 @@ import pytest
 import torch
 from torch import nn
 
-from tau3_retail_evolver.slow_loop.alignment import AlignedOPDBatch
-from tau3_retail_evolver.slow_loop import opd_step
-from tau3_retail_evolver.slow_loop.opd_step import shared_policy_opd_step
+from tau3_evolver.slow_loop.alignment import AlignedOPDBatch
+from tau3_evolver.slow_loop import opd_step
+from tau3_evolver.slow_loop.opd_step import shared_policy_opd_step
 
 
 class RecordingCausalModel(nn.Module):

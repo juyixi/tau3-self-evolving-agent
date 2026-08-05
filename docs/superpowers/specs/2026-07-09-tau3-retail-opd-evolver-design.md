@@ -242,15 +242,15 @@ LoRA：
 
 - `configs/`
   - 模型、LoRA、rollout、memory、tau3 retail 和 OPD 训练配置。
-- `src/tau3_retail_evolver/envs/`
+- `src/tau3_evolver/envs/`
   - Tau3 retail 适配器接口、mock 适配器和真实 tau2-backed 适配器。
-- `src/tau3_retail_evolver/memory/`
+- `src/tau3_evolver/memory/`
   - 四层记忆存储、检索、格式化、评分和维护操作。
-- `src/tau3_retail_evolver/fast_loop/`
+- `src/tau3_evolver/fast_loop/`
   - Retail rollout、选择、执行、写入、维护编排和日志。
-- `src/tau3_retail_evolver/slow_loop/`
+- `src/tau3_evolver/slow_loop/`
   - 归因、后见信息构造、OPD 样本构建和 token 级蒸馏训练。
-- `src/tau3_retail_evolver/models/`
+- `src/tau3_evolver/models/`
   - Qwen 模型加载、LoRA 加载与保存、tokenizer 处理，以及教师和学生调用封装。
 - `scripts/`
   - rollout、归因、OPD 训练、评测和端到端 iteration 的单命令入口。

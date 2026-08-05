@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tau3_retail_evolver.slow_loop.loss import token_forward_kl
+from tau3_evolver.slow_loop.loss import token_forward_kl
 
 
 def test_token_forward_kl_matches_the_hand_computed_full_vocabulary_value() -> None:

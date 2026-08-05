@@ -5,15 +5,15 @@ import math
 
 import pytest
 
-from tau3_retail_evolver.memory.types import MemoryTier
-from tau3_retail_evolver.memory.tier_contracts import (
+from tau3_evolver.memory.types import MemoryTier
+from tau3_evolver.memory.tier_contracts import (
     SkillPayload,
     SkillStep,
     TipPayload,
     render_tier_payload,
 )
-from tau3_retail_evolver.slow_loop.attribution import compute_memory_scores
-from tau3_retail_evolver.slow_loop.evidence import (
+from tau3_evolver.slow_loop.attribution import compute_memory_scores
+from tau3_evolver.slow_loop.evidence import (
     EpisodeEvidence,
     EvidenceLedger,
     MemoryCandidateEvidence,
@@ -83,17 +83,16 @@ def _episode(
     return EpisodeEvidence(
         episode_id=episode_id,
         run_id="run-a",
-        source_event_start=1,
-        source_event_end=8,
-        source_event_sha256="e" * 64,
-        iteration=3,
+        source_episode_row=1,
+        source_episode_sha256="e" * 64,
+        memory_generation=3,
         task_id=episode_id,
         task_group=group,
         model_revision="model-a",
         adapter_revision="adapter-a",
-        tau2_commit="c" * 40,
+        runtime_revision="c" * 40,
         split_hash="d" * 64,
-        memory_agent_id="retail",
+        memory_namespace="retail",
         memory_snapshot_id="snapshot-a",
         seed=17,
         policy="public policy",
@@ -105,7 +104,6 @@ def _episode(
         selected_memory_ids=selected_ids,
         trajectory=(),
         terminal_evaluation={},
-        simulation_result={},
         final_reward=reward,
         terminated=True,
         truncated=False,
@@ -118,12 +116,12 @@ def _episode(
 
 def _ledger(episodes: list[EpisodeEvidence]) -> EvidenceLedger:
     return EvidenceLedger(
-        iteration=3,
+        memory_generation=3,
         model_revision="model-a",
         adapter_revision="adapter-a",
-        tau2_commit="c" * 40,
+        runtime_revision="c" * 40,
         split_hash="d" * 64,
-        memory_agent_id="retail",
+        memory_namespace="retail",
         source_run_ids=("run-a",),
         episodes=tuple(episodes),
         maintenance=(),

@@ -1,324 +1,168 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
-from tau3_retail_evolver.slow_loop.source_runs import load_source_runs
+from tau3_evolver.artifacts.jsonl import JsonlWriter
+from tau3_evolver.artifacts.run import episode_artifact_metadata, write_run_record
+from tau3_evolver.memory.paths import training_memory_root
+from tau3_evolver.memory.repository import MemoryRepository
+from tau3_evolver.slow_loop.evidence import build_evidence
+from tau3_evolver.slow_loop.source_runs import load_source_runs
 
 
-GROUP = f"retail-actions-v1:{'a' * 64}"
-
-
-def _write_source_run(
-    root: Path,
-    run_id: str,
-    *,
-    task_id: str,
-    before: int,
-    input_snapshot: str,
-    output_snapshot: str,
-    adapter_revision: str | None = "adapter-a",
-) -> Path:
-    run_path = root / run_id
-    events_path = run_path / "rollouts" / "events.jsonl"
-    events_path.parent.mkdir(parents=True)
-    manifest = {
-        "schema_version": 2,
-        "run_id": run_id,
-        "iteration": 3,
-        "model_revision": "model-a",
-        "adapter_revision": adapter_revision,
-        "memory_snapshot_id": input_snapshot,
-        "tau2_commit": "c" * 40,
-        "split": "train",
-        "split_hash": "d" * 64,
-        "task_ids": [task_id],
-        "seed": 17,
-        "environment_options": {"domain": "retail"},
-        "rollout_options": {
-            "memory_enabled": True,
-            "memory_agent_id": "retail",
-        },
-    }
-    summary = {
-        "run_id": run_id,
-        "episode_count": 1,
-        "completed_train_tasks_before": before,
-        "completed_train_tasks_after": before + 1,
-        "input_memory_snapshot_id": input_snapshot,
-        "output_memory_snapshot_id": output_snapshot,
-        "memory_enabled": True,
-        "successful_task_ids": [task_id],
-        "maintenance_rounds_executed": [],
-        "total_terminal_reward": 1.0,
-    }
-    common = {
-        "schema_version": 2,
-        "run_id": run_id,
-        "iteration": 3,
-        "split": "train",
-        "mode": "learn",
-        "task_id": task_id,
-        "task_group": GROUP,
-        "model_revision": "model-a",
-        "adapter_revision": adapter_revision,
-        "memory_snapshot_id": input_snapshot,
-        "seed": 17,
-    }
-    events = [
-        {**common, "event_type": "EpisodeStarted"},
-        {**common, "event_type": "MemoryCandidatesRetrieved", "candidates": []},
-        {**common, "event_type": "MemorySelected", "selected_memory_ids": []},
-        {**common, "event_type": "DecisionMade", "turn": 0},
-        {**common, "event_type": "EnvironmentStepped", "turn": 0},
+def _source_run(root: Path, *, benchmark: str = "retail", run_id: str = "run-1") -> Path:
+    memory = MemoryRepository(training_memory_root(benchmark, root=root))
+    input_snapshot = memory.snapshot().memory_snapshot_id
+    output_snapshot = memory.snapshot().memory_snapshot_id
+    run = root / "runs" / run_id
+    run.mkdir(parents=True)
+    episodes = run / "episodes.jsonl"
+    JsonlWriter(episodes).append(
         {
-            **common,
-            "event_type": "EpisodeFinished",
-            "steps": 1,
-            "final_reward": 1.0,
-        },
-        {**common, "event_type": "MemoryWriteProposed", "proposals": []},
+        "schema_version": 1,
+            "task_id": "1",
+            "task_group": benchmark,
+            "seed": 7,
+            "status": "completed",
+            "task": {
+                "initial_observation": "start",
+                "policy": {},
+                "tools": [],
+            },
+            "trajectory": [
+                {
+                    "turn": 0,
+                    "observation": "start",
+                    "action": "done",
+                    "next_observation": "done",
+                    "reward": 1.0,
+                    "done": True,
+                    "terminated": True,
+                    "truncated": False,
+                    "public_info": {},
+                    "decision": {},
+                }
+            ],
+            "outcome": {
+                "final_reward": 1.0,
+                "steps": 1,
+                "terminal_evaluation": {},
+                "truncated": False,
+                "project_truncated": False,
+                "parse_error_count": 0,
+                "response_parse_error_count": 0,
+                "response_count": 1,
+                "agent_prompt_tokens": None,
+                "agent_completion_tokens": None,
+            },
+            "memory": {
+                "enabled": True,
+                "retrieval": {
+                    "query_hash": "a" * 64,
+                    "retriever_revision": "embed",
+                    "candidates": [],
+                },
+                "selected_memory_ids": [],
+                "selection": {},
+                "writes": [],
+                "write_audit": {},
+            },
+        }
+    )
+    write_run_record(
+        run / "run.json",
         {
-            **common,
-            "event_type": "MemoryWriteCommitted",
-            "written_memory_ids": [],
-            "replayed_memory_ids": [],
+            "run_id": run_id,
+            "status": "completed",
+            "execution": {
+                "benchmark": benchmark,
+                "mode": "train",
+                "split": "train",
+                "split_hash": "split-hash",
+                "planned_task_count": 1,
+            },
+            "runtime": {
+                "source_root": "C:/tau2",
+                "package_version": "0.1",
+                "git_commit": None,
+            },
+            "policy": {
+                "model_revision": "Qwen/Qwen3.5-9B",
+                "checkpoint": None,
+            },
+            "memory": {
+                "enabled": True,
+                "generation": 1,
+                "source_namespace": benchmark,
+                "input_snapshot_id": input_snapshot,
+                "output_snapshot_id": output_snapshot,
+                "cross_domain": False,
+            },
+            "config": {},
+            "summary": {
+                "metrics": {
+                    "task_count": 1,
+                    "completed_count": 1,
+                    "failure_count": 0,
+                    "mean_reward": 1.0,
+                    "pass_rate": 1.0,
+                }
+            },
+            "artifacts": {"episodes": episode_artifact_metadata(episodes)},
         },
-    ]
-    (run_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    (run_path / "fast_loop_summary.json").write_text(
-        json.dumps(summary), encoding="utf-8"
     )
-    events_path.write_text(
-        "".join(f"{json.dumps(event)}\n" for event in events), encoding="utf-8"
-    )
-    return run_path
+    return run
 
 
-def _memory_root(tmp_path: Path, *snapshot_ids: str) -> Path:
-    root = tmp_path / "history" / "agents" / "retail" / "memory"
-    for snapshot_id in snapshot_ids:
-        (root / "snapshots" / snapshot_id).mkdir(parents=True)
-    return root
-
-
-def _catalog(*task_ids: str) -> SimpleNamespace:
-    return SimpleNamespace(task_ids=lambda split: task_ids, split_sha256="d" * 64)
-
-
-def _rewrite(path: Path, mutator: Any) -> None:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    mutator(payload)
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-
-def test_source_runs_require_same_policy_and_continuous_snapshots(
-    tmp_path: Path,
-) -> None:
-    first = _write_source_run(
-        tmp_path, "run-a", task_id="1", before=0, input_snapshot="s0", output_snapshot="s1"
-    )
-    second = _write_source_run(
-        tmp_path, "run-b", task_id="2", before=1, input_snapshot="s1", output_snapshot="s2"
-    )
+@pytest.mark.parametrize("benchmark", ("retail", "airline"))
+def test_loads_generic_two_file_source_run(tmp_path: Path, benchmark: str) -> None:
+    run = _source_run(tmp_path, benchmark=benchmark)
 
     loaded = load_source_runs(
-        [second, first],
-        catalog=_catalog("1", "2"),
-        memory_root=_memory_root(tmp_path, "s0", "s1", "s2"),
+        (run,),
+        benchmark=benchmark,
+        official_train_task_ids=("1", "2"),
+        split_hash="split-hash",
+        project_root=tmp_path,
     )
 
-    assert [run.run_id for run in loaded.runs] == ["run-a", "run-b"]
-    assert loaded.iteration == 3
-    assert loaded.model_revision == "model-a"
-    assert loaded.adapter_revision == "adapter-a"
-    assert loaded.memory_agent_id == "retail"
-    assert loaded.runs[0].manifest_sha256 != loaded.runs[0].events_sha256
-    with pytest.raises(TypeError):
-        loaded.runs[0].manifest["iteration"] = 4  # type: ignore[index]
-
-
-def test_source_run_accepts_recorded_task_failure_without_episode_evidence(
-    tmp_path: Path,
-) -> None:
-    run_path = _write_source_run(
-        tmp_path,
-        "run-a",
-        task_id="1",
-        before=0,
-        input_snapshot="s0",
-        output_snapshot="s0",
+    assert loaded.benchmark == benchmark
+    assert loaded.memory_generation == 1
+    assert loaded.memory_namespace == benchmark
+    assert not hasattr(loaded, "iteration")
+    assert loaded.runs[0].summary["episode_count"] == 1
+    evidence = build_evidence(
+        loaded,
+        memory_root=training_memory_root(benchmark, root=tmp_path),
     )
-    summary_path = run_path / "fast_loop_summary.json"
-    events_path = run_path / "rollouts" / "events.jsonl"
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary.update(
-        attempted_task_count=1,
-        episode_count=0,
-        successful_task_ids=[],
-        failed_task_count=1,
-        failed_task_ids=["1"],
-        completed_train_tasks_after=1,
-        total_terminal_reward=0.0,
-    )
-    event = json.loads(events_path.read_text(encoding="utf-8").splitlines()[0])
-    event.update(
-        event_type="TaskFailed",
-        error={"types": ["RuntimeError"], "fingerprint": "a" * 16},
-    )
-    summary_path.write_text(json.dumps(summary), encoding="utf-8")
-    events_path.write_text(f"{json.dumps(event)}\n", encoding="utf-8")
-
-    loaded = load_source_runs(
-        [run_path],
-        catalog=_catalog("1"),
-        memory_root=_memory_root(tmp_path, "s0"),
-    )
-
-    assert loaded.runs[0].summary["episode_count"] == 0
-    assert loaded.runs[0].summary["failed_task_ids"] == ("1",)
+    assert evidence.episodes[0].source_episode_row == 1
+    assert len(evidence.episodes[0].source_episode_sha256) == 64
 
 
-@pytest.mark.parametrize(
-    ("mutation", "message"),
-    [
-        ("test_split", "train split"),
-        ("memory_disabled", "memory-enabled"),
-        ("schema_1_event", "event schema"),
-        ("failure_event", "failure event"),
-        ("incomplete_lifecycle", "lifecycle"),
-        ("provenance_mismatch", "event provenance"),
-        ("snapshot_mismatch", "episode snapshot"),
-        ("invalid_event_type", "event type"),
-    ],
-)
-def test_source_run_fails_closed_on_invalid_artifacts(
-    tmp_path: Path,
-    mutation: str,
-    message: str,
-) -> None:
-    run_path = _write_source_run(
-        tmp_path, "run-a", task_id="1", before=0, input_snapshot="s0", output_snapshot="s1"
-    )
-    manifest_path = run_path / "manifest.json"
-    events_path = run_path / "rollouts" / "events.jsonl"
-    if mutation == "test_split":
-        _rewrite(manifest_path, lambda payload: payload.update(split="test"))
-    elif mutation == "memory_disabled":
-        _rewrite(
-            manifest_path,
-            lambda payload: payload["rollout_options"].update(memory_enabled=False),
-        )
-    else:
-        events = [json.loads(line) for line in events_path.read_text("utf-8").splitlines()]
-        if mutation == "schema_1_event":
-            events[0]["schema_version"] = 1
-        elif mutation == "failure_event":
-            events.append({**events[0], "event_type": "EpisodeFailed"})
-        elif mutation == "incomplete_lifecycle":
-            events = [event for event in events if event["event_type"] != "MemorySelected"]
-        elif mutation == "provenance_mismatch":
-            events[0]["model_revision"] = "other-model"
-        elif mutation == "snapshot_mismatch":
-            events[1]["memory_snapshot_id"] = "s1"
-        elif mutation == "invalid_event_type":
-            events[0]["event_type"] = ["EpisodeStarted"]
-        events_path.write_text(
-            "".join(f"{json.dumps(event)}\n" for event in events), encoding="utf-8"
-        )
+def test_rejects_source_for_a_different_benchmark(tmp_path: Path) -> None:
+    run = _source_run(tmp_path, benchmark="retail")
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match="benchmark"):
         load_source_runs(
-            [run_path],
-            catalog=_catalog("1"),
-            memory_root=_memory_root(tmp_path, "s0", "s1"),
+            (run,),
+            benchmark="airline",
+            official_train_task_ids=("1",),
+            split_hash="split-hash",
+            project_root=tmp_path,
         )
 
 
-@pytest.mark.parametrize(
-    ("mutation", "message"),
-    [
-        ("adapter_mismatch", "policy lineage"),
-        ("snapshot_gap", "snapshot continuity"),
-        ("task_range_gap", "task range continuity"),
-    ],
-)
-def test_source_run_set_fails_closed_on_invalid_lineage(
-    tmp_path: Path,
-    mutation: str,
-    message: str,
-) -> None:
-    first = _write_source_run(
-        tmp_path, "run-a", task_id="1", before=0, input_snapshot="s0", output_snapshot="s1"
-    )
-    second_before = 2 if mutation == "task_range_gap" else 1
-    second_input = "sx" if mutation == "snapshot_gap" else "s1"
-    second_adapter = "adapter-b" if mutation == "adapter_mismatch" else "adapter-a"
-    second = _write_source_run(
-        tmp_path,
-        "run-b",
-        task_id="2",
-        before=second_before,
-        input_snapshot=second_input,
-        output_snapshot="s2",
-        adapter_revision=second_adapter,
-    )
+def test_rejects_legacy_or_extra_run_artifacts(tmp_path: Path) -> None:
+    run = _source_run(tmp_path)
+    (run / "results.json").write_text("{}\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match="exactly run.json and episodes.jsonl"):
         load_source_runs(
-            [first, second],
-            catalog=_catalog("1", "2"),
-            memory_root=_memory_root(tmp_path, "s0", "s1", "s2", "sx"),
-        )
-
-
-def test_source_runs_allow_the_same_task_in_distinct_on_policy_passes(
-    tmp_path: Path,
-) -> None:
-    first = _write_source_run(
-        tmp_path,
-        "run-pass-1",
-        task_id="1",
-        before=0,
-        input_snapshot="s0",
-        output_snapshot="s1",
-    )
-    second = _write_source_run(
-        tmp_path,
-        "run-pass-2",
-        task_id="1",
-        before=1,
-        input_snapshot="s1",
-        output_snapshot="s2",
-    )
-
-    loaded = load_source_runs(
-        [first, second],
-        catalog=_catalog("1"),
-        memory_root=_memory_root(tmp_path, "s0", "s1", "s2"),
-    )
-
-    assert [run.run_id for run in loaded.runs] == ["run-pass-1", "run-pass-2"]
-    assert [run.manifest["task_ids"] for run in loaded.runs] == [("1",), ("1",)]
-
-
-def test_source_runs_reject_evaluation_quarantine_paths(tmp_path: Path) -> None:
-    run_path = _write_source_run(
-        tmp_path / "history" / "evaluations",
-        "run-a",
-        task_id="1",
-        before=0,
-        input_snapshot="s0",
-        output_snapshot="s1",
-    )
-
-    with pytest.raises(ValueError, match="evaluation quarantine"):
-        load_source_runs(
-            [run_path],
-            catalog=_catalog("1"),
-            memory_root=_memory_root(tmp_path, "s0", "s1"),
+            (run,),
+            benchmark="retail",
+            official_train_task_ids=("1",),
+            split_hash="split-hash",
+            project_root=tmp_path,
         )

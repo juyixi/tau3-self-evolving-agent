@@ -43,12 +43,18 @@ flowchart LR
     LoRA --> Rollout
 ```
 
-一次完整迭代形成以下闭环：
+在线执行与手动 Slow Loop 形成以下闭环：
 
 ```text
-train rollout -> Memory S1 -> Episode Evidence -> Attribution
-              -> OPD datasets -> LoRA C1 -> next iteration
+tau3 run --mode train -> Memory Snapshot + episodes.jsonl
+                      -> 手动构建并审计 OPD Dataset
+                      -> tau3 slow-loop -> LoRA Checkpoint
 ```
+
+每次在线运行只发布两个正式制品：`run.json` 保存运行级配置、lineage、Snapshot、
+聚合指标和制品哈希；`episodes.jsonl` 每个任务一行，保存标准化轨迹、终局评估及
+Memory 检索、选择和写入证据。Tau2 原始 Simulation、独立 Events、Results 和
+Evaluation 文件不重复发布。
 
 ## Fast Loop：让经验可积累、可检索、可治理
 
@@ -92,7 +98,14 @@ Fast Loop 为每个任务保留：
 E_t = (task, candidates, selected memories, trajectory, reward, memory delta)
 ```
 
-真实实验可能因模型服务、评估器或维护异常被分段续跑。Canonicalization 管线以 `(seed, task_id)` 为逻辑键去重，保留完整有效生命周期，排除基础设施故障和失败 Maintenance，同时记录原始 run、事件行范围、哈希、输入/输出 Snapshot 与纳入原因。原始 JSONL 不被改写。
+Slow Loop 以 `run.json + episodes.jsonl` 作为唯一 Source Run 契约。Loader 先校验
+Episode 文件哈希、Train Split、模型与 Memory Snapshot lineage，再把每个任务行直接
+转换为 `EpisodeEvidence`，不再从多条生命周期事件拼装任务，也不再依赖独立的
+Results 文件。
+
+OPD Dataset 先在临时目录构建，Audit 会重新检查来源、Schema、哈希、Snapshot、
+Attribution 和样本可重建性。只有审计通过的数据集才会被原子发布；训练启动前还会
+再次执行 Audit。
 
 ### Outcome-Calibrated Attribution
 
@@ -206,14 +219,15 @@ Airline 的端到端接入与实验协议维护在 [`airline` 分支](https://gi
 
 | 模块 | 职责 |
 | --- | --- |
-| `src/tau3_retail_evolver/envs/` | Tau2 环境适配、任务目录和 split guard |
-| `src/tau3_retail_evolver/memory/` | 四层 Memory、Embedding、MMR 检索、Snapshot 与原子写入 |
-| `src/tau3_retail_evolver/fast_loop/` | Memory 选择、Agent rollout、写入与 Maintenance |
-| `src/tau3_retail_evolver/slow_loop/` | Canonicalization、Evidence、归因、泄漏检查、OPD 数据与 KL |
-| `src/tau3_retail_evolver/models/` | Qwen3.5、OpenAI-compatible client 与 PEFT LoRA 生命周期 |
-| `src/tau3_retail_evolver/pipeline/` | Fast/Slow iteration 状态机、恢复和产物 promotion |
-| `src/tau3_retail_evolver/eval/` | 四组实验、指标聚合、受控对比与可视化 |
-| `scripts/` | Baseline、Fast Loop、数据构建/审计、训练和评测入口 |
+| `src/tau3_evolver/agent/` | Tau3 Agent、工具 Schema、决策和任务生命周期 |
+| `src/tau3_evolver/artifacts/` | `run.json`、`episodes.jsonl` 与凭证清理 |
+| `src/tau3_evolver/benchmarks/` | Retail / Airline 静态定义、Registry 与 Tau2 Runtime |
+| `src/tau3_evolver/execution/` | 类型化请求、权限、`run_domain` 批量执行与两文件落盘 |
+| `src/tau3_evolver/memory/` | 四层 Memory、Embedding、MMR 检索、Snapshot 与原子写入 |
+| `src/tau3_evolver/evaluation/` | 运行级指标和受控实验对比 |
+| `src/tau3_evolver/slow_loop/` | Source Run、Evidence、归因、Audit、OPD 数据与 KL |
+| `src/tau3_evolver/models/` | Qwen3.5、OpenAI-compatible client 与 PEFT LoRA 生命周期 |
+| `src/tau3_evolver/cli.py` | 唯一 `tau3` 程序及在线/离线命令域 |
 
 ## 设计与实验文档
 
