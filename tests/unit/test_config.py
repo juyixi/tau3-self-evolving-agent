@@ -30,6 +30,8 @@ def test_default_config_contains_runtime_not_task_routing() -> None:
     assert not hasattr(config.memory, "agent_id")
     assert config.execution.max_concurrency == 3
     assert config.execution.seed == 42
+    assert config.tau2.user_api_key_env == "DEEPSEEK_API_KEY"
+    assert config.evaluation.nl_assertions.api_key_env == "DEEPSEEK_API_KEY"
     assert not hasattr(config, "pipeline")
 
 

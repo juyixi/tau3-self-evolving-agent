@@ -604,6 +604,13 @@ can_use_test_split
 运行阶段、Memory 开关、Memory Source、Snapshot 和 Checkpoint 等实验语义必须
 显式出现在命令或 YAML 配置中，不能由隐藏环境变量改变。
 
+`tau3 run` 在解析 Benchmark、创建 run 目录或启动任务前，固定加载项目根目录的
+`.env`。已经存在的进程环境变量优先，`.env` 不覆盖它们。用户模拟器与 NL 断言
+评估器分别通过 `tau2.user_api_key_env` 和
+`evaluation.nl_assertions.api_key_env` 声明所需凭证；入口统一执行 fail-fast
+预检，缺失或空值时直接终止。密钥值不得进入 YAML、运行制品、日志或 Git，仓库只
+提交空值模板 `.env.example`。
+
 每次运行都必须把合并、校验后的最终配置写入运行目录，并在 Manifest 中记录
 配置来源、输入产物和关键 revision，保证实验可复现。
 

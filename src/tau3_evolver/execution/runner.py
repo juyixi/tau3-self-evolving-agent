@@ -11,6 +11,10 @@ from tau3_evolver.artifacts.run import episode_artifact_metadata, write_run_reco
 from tau3_evolver.benchmarks import PreparedBenchmark, benchmark_registry
 from tau3_evolver.config import ProjectConfig, load_config
 from tau3_evolver.execution.batch import run_batch
+from tau3_evolver.execution.environment import (
+    load_project_environment,
+    preflight_online_credentials,
+)
 from tau3_evolver.execution.request import ExecutionRequest
 from tau3_evolver.execution.results import BatchResult
 from tau3_evolver.evaluation.metrics import compute_reward_metrics
@@ -25,7 +29,9 @@ from tau3_evolver.models.openai_compatible import (
 
 
 def execute(request: ExecutionRequest) -> BatchResult:
+    environment = load_project_environment()
     config = load_config(request.config_path, request.overrides)
+    preflight_online_credentials(config, env_path=environment.path)
     prepared = benchmark_registry.resolve(request.benchmark.value).prepare(
         config, request.mode
     )

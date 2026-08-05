@@ -1,6 +1,7 @@
 tau2:
   repo_path: external/tau2-bench
   user_llm: deepseek/deepseek-v4-pro
+  user_api_key_env: DEEPSEEK_API_KEY
   user_llm_args:
       thinking:
         type: disabled

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import tau3_evolver.execution.runner as runner
 from tau3_evolver.agent.policy import EpisodeResult
 from tau3_evolver.benchmarks.types import PreparedBenchmark, RuntimeOrigin
@@ -19,6 +21,7 @@ def test_execute_publishes_only_run_and_episode_artifacts(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
     prepared = SimpleNamespace(
         name="retail",
         split_name="test",
@@ -103,6 +106,40 @@ def test_execute_publishes_only_run_and_episode_artifacts(
     assert run_record["execution"]["task_scope"] == "full"
     assert run_record["memory"]["destination_namespace"] is None
     assert "failures" not in run_record
+
+
+def test_execute_rejects_missing_online_credentials_before_benchmark_prepare(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    prepared = False
+
+    def resolve_benchmark(_benchmark: str):
+        nonlocal prepared
+        prepared = True
+        raise AssertionError("benchmark preparation must not start")
+
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        runner,
+        "load_project_environment",
+        lambda: SimpleNamespace(path=tmp_path / ".env", loaded_names=()),
+    )
+    monkeypatch.setattr(runner.benchmark_registry, "resolve", resolve_benchmark)
+    request = ExecutionRequest(
+        benchmark="retail",
+        mode="train",
+        memory_enabled=False,
+        run_id="missing-credentials",
+        output_root=tmp_path,
+        config_path=PROJECT_ROOT / "configs" / "default.yaml",
+    )
+
+    with pytest.raises(ValueError, match="DEEPSEEK_API_KEY"):
+        runner.execute(request)
+
+    assert not prepared
+    assert not (tmp_path / request.run_id).exists()
 
 
 def test_debug_selects_one_concurrency_sized_stable_batch() -> None:

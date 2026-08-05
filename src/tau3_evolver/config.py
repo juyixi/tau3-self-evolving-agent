@@ -21,8 +21,18 @@ class _ConfigModel(BaseModel):
 class Tau2Config(_ConfigModel):
     repo_path: Path
     user_llm: str
+    user_api_key_env: str = "DEEPSEEK_API_KEY"
     user_llm_args: dict[str, Any] = Field(default_factory=dict)
     solo_mode: bool = True
+
+    @field_validator("user_api_key_env")
+    @classmethod
+    def user_api_key_env_must_be_valid(cls, value: str) -> str:
+        if not _ENVIRONMENT_VARIABLE_NAME.fullmatch(value):
+            raise ValueError(
+                "user_api_key_env must be a valid environment variable name"
+            )
+        return value
 
 
 class ModelConfig(_ConfigModel):
