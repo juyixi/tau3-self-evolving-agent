@@ -97,8 +97,15 @@ def build_opd_dataset(request: DatasetBuildRequest) -> DatasetBuildResult:
         _write_json(temp_dataset_dir / "dataset_manifest.json", manifest)
         report = audit_dataset(temp_dataset_dir, project_root=project)
         if not report.passed:
-            codes = ", ".join(error.code for error in report.errors)
-            raise ValueError(f"dataset audit failed before publication: {codes}")
+            details = "; ".join(
+                f"{error.code}"
+                f"{f' [{error.artifact}]' if error.artifact else ''}: "
+                f"{error.message}"
+                for error in report.errors
+            )
+            raise ValueError(
+                f"dataset audit failed before publication: {details}"
+            )
         try:
             temp_build_root.rename(final_build_root)
             _fsync_directory(output_root)

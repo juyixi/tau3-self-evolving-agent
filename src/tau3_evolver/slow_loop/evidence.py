@@ -358,9 +358,9 @@ def _build_episode_record(
         candidates=candidates,
         selected_memory_ids=selected_ids,
         trajectory=trajectory,
-        terminal_evaluation=_json_mapping(
-            outcome.get("terminal_evaluation"), "terminal_evaluation"
-        ),
+        # Evaluator assertions and rubrics remain in the immutable Source Run for
+        # diagnosis, but never cross into a trainable Slow Loop artifact.
+        terminal_evaluation={},
         final_reward=final_reward,
         terminated=trajectory[-1].terminated,
         truncated=_strict_bool(outcome.get("truncated"), "truncated"),

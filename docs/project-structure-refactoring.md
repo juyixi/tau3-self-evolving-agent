@@ -701,6 +701,10 @@ Memory Snapshot lineage 是否一致；制品哈希、Schema、任务覆盖和�
 检索、选择和写入证据能否与 Snapshot 对应；Attribution 与 OPD Examples 能否重算；
 以及是否混入凭证、测试答案或其他禁止训练的数据。
 
+Source Run 可保留终局 evaluator 的诊断结果，但 Slow Loop Evidence 只继承可训练的
+`final_reward` 与公开轨迹；`nl_assertions`、rubric、golden action 等 evaluator 细节
+不得进入 Dataset，即使它们只准备提供给 Teacher 也不允许。
+
 通过结果不再单独发布 `audit_report.json`。Dataset Manifest 只记录审计契约版本和
 `passed: true`；失败详情直接返回调用者，并且失败的数据集不发布。每次开始训练前仍
 必须重新执行 Audit，不能仅信任已保存的通过标记。
