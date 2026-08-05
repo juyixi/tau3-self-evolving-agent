@@ -729,11 +729,15 @@ Maintenance 的触发方式。`memory.maintenance_period` 表示在线 train 任
 数量时，对 Memory 仓库执行一次整理并记录 Maintainer 证据；它不负责启动 Slow
 Loop，也不能触发权重训练。
 
-当前重构实现还有一个需要单独决策的缺口：`execution.runner` 尚未重新接入
-`run_due_maintenance`，因此 `memory.maintenance_period` 目前只是未生效的遗留配置，
-在线 train 不会产生 Maintainer 证据。Slow Loop 的手动边界不受影响；正式恢复
-`maint` 数据前，需要另行确定 Memory Maintenance 是保留在线周期触发，还是也改为
-显式手动触发，不能以默认周期暗中启动 Slow Loop。
+触发边界确定如下：Memory Maintenance 属于 Fast Loop，必须在启用 Memory 的 train
+执行中按 `memory.maintenance_period` 自动触发，持续整理经验并留下 Maintainer 证据；
+Slow Loop 始终由管理员手动启动。管理员根据经验积累程度决定何时构建 Dataset、执行
+Audit，并将经验内化为模型权重，Fast Loop 的维护周期不得自动启动任何 Slow Loop
+操作。
+
+当前重构实现仍有一个明确缺口：`execution.runner` 尚未重新接入
+`run_due_maintenance`，因此在线 train 暂时不会产生 Maintainer 证据。后续修复应把
+自动触发恢复在 Fast Loop 内部，不能为 Slow Loop 增加周期计数或后台调度器。
 
 ### Slow Loop 调试模式
 
