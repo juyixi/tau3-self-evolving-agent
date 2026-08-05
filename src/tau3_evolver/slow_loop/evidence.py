@@ -474,8 +474,8 @@ def _write_proposal(
         if raw.get("generation_mode") == "rule":
             expected_runtime_steps = tuple(
                 (
-                    str(step.observation).strip()[:500],
-                    str(step.next_observation).strip()[:500] or None,
+                    _runtime_step_text(step.observation),
+                    _runtime_step_text(step.next_observation),
                     step.terminated,
                     step.truncated,
                 )
@@ -518,6 +518,12 @@ def _write_proposal(
         source_task_ids=source_task_ids,
         created_round=created_round,
     )
+
+
+def _runtime_step_text(value: Any) -> str | None:
+    """Reproduce the runtime payload's normalize, bound, then revalidate order."""
+    normalized = str(value).strip()[:500].strip()
+    return normalized or None
 
 
 def _snapshot(

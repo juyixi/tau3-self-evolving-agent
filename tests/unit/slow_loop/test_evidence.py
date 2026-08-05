@@ -1,7 +1,11 @@
 import pytest
 from pydantic import ValidationError
 
-from tau3_evolver.slow_loop.evidence import EpisodeEvidence, EvidenceLedger
+from tau3_evolver.slow_loop.evidence import (
+    EpisodeEvidence,
+    EvidenceLedger,
+    _runtime_step_text,
+)
 
 
 def _episode(**overrides: object) -> EpisodeEvidence:
@@ -62,3 +66,9 @@ def test_evidence_lineage_uses_memory_generation_not_iteration() -> None:
 def test_evidence_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         _episode(iteration=1)
+
+
+def test_runtime_step_text_matches_payload_revalidation_after_bounding() -> None:
+    value = "x" * 499 + " " + "tail"
+
+    assert _runtime_step_text(value) == "x" * 499
