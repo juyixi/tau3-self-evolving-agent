@@ -121,6 +121,12 @@ def _select_execution_tasks(
     config: ProjectConfig,
 ) -> PreparedBenchmark:
     if request.debug:
+        if config.execution.max_concurrency < 2:
+            raise ValueError(
+                "debug runs require execution.max_concurrency to be at least 2"
+            )
+        if len(prepared.task_ids) < 2:
+            raise ValueError("debug runs require at least two benchmark tasks")
         return prepared.first_tasks(config.execution.max_concurrency)
     return prepared
 

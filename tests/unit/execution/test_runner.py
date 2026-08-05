@@ -178,19 +178,3 @@ def test_debug_selects_one_concurrency_sized_stable_batch() -> None:
     assert selected.task_ids == ("task-0", "task-1", "task-2")
     assert selected.task_catalog == tasks[:3]
     assert selected.split_hash == prepared.split_hash
-
-    single_task_config = config.model_copy(
-        update={
-            "execution": config.execution.model_copy(
-                update={"max_concurrency": 1}
-            )
-        }
-    )
-    single = runner._select_execution_tasks(
-        prepared,
-        request=request,
-        config=single_task_config,
-    )
-
-    assert single.task_ids == ("task-0",)
-    assert single.task_catalog == tasks[:1]

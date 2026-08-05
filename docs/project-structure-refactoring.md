@@ -139,8 +139,8 @@ tau3 run --benchmark retail --mode train --debug --memory \
 为开发期连通性和并发验证，统一入口额外提供 `--debug` 开关，但不重新开放按
 任务 ID 选择。Debug 按当前 mode 对应官方 split 的稳定顺序取前
 `execution.max_concurrency` 个任务（默认 3 个），并仍通过同一个 `run_domain`
-批量执行路径运行。将 `execution.max_concurrency` 设为 1 时可执行单任务连通性与
-Memory 注入调试；设为 2 或更大时同时覆盖并发调度。
+批量执行路径运行。`execution.max_concurrency` 小于 2 时拒绝启动，以保证该模式
+确实覆盖并发调度。
 
 Debug 可以搭配 `train` 或 `test`。搭配 `train --memory` 时允许积累经验，但默认
 Memory namespace 改为 `<benchmark>-debug`，例如 `retail-debug` 和
