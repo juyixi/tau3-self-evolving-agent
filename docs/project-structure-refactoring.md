@@ -177,6 +177,11 @@ default Memory namespace
 如果评估或 Slow Loop 存在 Benchmark 专属语义，静态定义还可以提供 evaluator
 binder 和 task group resolver，避免这些领域判断重新散落到通用流程中。
 
+Tau2 的自然语言断言评估属于上述 evaluator binder：`Tau2BenchmarkDefinition`
+将绑定器交给 `PreparedBenchmark`，通用执行器在 `run_domain` 启动前把项目的
+`evaluation.nl_assertions` 配置绑定到当前 Tau2 Runtime。这样任务主体、用户模拟器
+和终局断言评估统一受项目配置管理，不会回退到 Tau2 内置的 OpenAI 默认模型。
+
 静态定义不包含：
 
 ```text

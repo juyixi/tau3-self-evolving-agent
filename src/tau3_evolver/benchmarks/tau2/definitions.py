@@ -7,6 +7,7 @@ import json
 from tau3_evolver.benchmarks.tau2.runtime import Tau2Runtime
 from tau3_evolver.benchmarks.types import PreparedBenchmark, RuntimeOrigin
 from tau3_evolver.config import ProjectConfig
+from tau3_evolver.evaluation.tau2_nl_assertions import bind_tau2_nl_assertions
 from tau3_evolver.execution.request import ExecutionMode
 
 
@@ -64,6 +65,7 @@ class Tau2BenchmarkDefinition:
             ),
             default_memory_namespace=self.default_memory_namespace,
             task_group=self.task_group,
+            evaluator_binding=bind_tau2_nl_assertions,
         )
 
 

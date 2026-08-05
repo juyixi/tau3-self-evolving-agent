@@ -67,6 +67,8 @@ def run_batch(
     )
     agent_name = f"tau3_agent_{uuid.uuid4().hex}"
     with _REGISTRY_LOCK:
+        if prepared.evaluator_binding is not None:
+            prepared.evaluator_binding(project_config.evaluation.nl_assertions)
         prepared.registry.register_agent_factory(factory, agent_name)
         try:
             with tempfile.TemporaryDirectory(prefix="tau3-evolver-tau2-") as working:

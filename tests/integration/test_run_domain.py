@@ -39,11 +39,11 @@ class _Registry:
 
 def test_run_domain_receives_registered_tau3_factory_and_official_task_set(
     monkeypatch,
-    tmp_path: Path,
 ) -> None:
     registry = _Registry()
     created_agents: list[Any] = []
     received_config: list[Any] = []
+    received_evaluator_config: list[Any] = []
     tools = [
         SimpleNamespace(
             openai_schema={
@@ -96,6 +96,7 @@ def test_run_domain_receives_registered_tau3_factory_and_official_task_set(
         runtime_origin=RuntimeOrigin(Path("tau2"), "1", "commit"),
         default_memory_namespace="airline",
         task_group="airline",
+        evaluator_binding=received_evaluator_config.append,
     )
     request = ExecutionRequest(
         benchmark="airline",
@@ -140,6 +141,7 @@ def test_run_domain_receives_registered_tau3_factory_and_official_task_set(
     assert received_config[0].task_split_name == "test"
     assert received_config[0].task_ids == ["a", "b"]
     assert received_config[0].max_concurrency == 2
+    assert received_evaluator_config == [config.evaluation.nl_assertions]
     assert len(created_agents) == 2
     assert created_agents[0] is not created_agents[1]
     assert created_agents[0]._public_tools is not created_agents[1]._public_tools
