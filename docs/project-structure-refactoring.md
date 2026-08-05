@@ -611,6 +611,13 @@ can_use_test_split
 预检，缺失或空值时直接终止。密钥值不得进入 YAML、运行制品、日志或 Git，仓库只
 提交空值模板 `.env.example`。
 
+Qwen vLLM 服务统一通过 `python -m scripts.serve_qwen_vllm` 启动。该启动器从项目
+配置读取服务地址、served model name 和 `model.max_context_tokens`，并固定当前
+Qwen3.5-9B 上下文为 `131072` tokens；该字段使用静态类型约束，不能通过 `--set`
+缩小。运行 Manifest 同步记录这一配置，避免 Memory Selector 首次读取长 trajectory
+时因服务仍以 32K 上下文启动而失败。模型实际权重路径仍由部署时的
+`--model-path` 指定，不允许启动器隐式选择训练 checkpoint。
+
 每次运行都必须把合并、校验后的最终配置写入运行目录，并在 Manifest 中记录
 配置来源、输入产物和关键 revision，保证实验可复现。
 

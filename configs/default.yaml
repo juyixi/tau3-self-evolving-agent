@@ -12,6 +12,7 @@ model:
   base_model: Qwen/Qwen3.5-9B
   serving_base_url: http://127.0.0.1:8000/v1
   served_model_name: Qwen/Qwen3.5-9B
+  max_context_tokens: 131072
   api_key_env: QWEN_API_KEY
   max_tokens: 8192
   request_timeout_s: 600.0

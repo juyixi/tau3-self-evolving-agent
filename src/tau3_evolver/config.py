@@ -39,6 +39,7 @@ class ModelConfig(_ConfigModel):
     base_model: Literal["Qwen/Qwen3.5-9B"]
     serving_base_url: str = "http://127.0.0.1:8000/v1"
     served_model_name: str = "Qwen/Qwen3.5-9B"
+    max_context_tokens: Literal[131072] = 131072
     api_key_env: str = "QWEN_API_KEY"
     max_tokens: int = Field(default=8192, ge=1)
     request_timeout_s: float = Field(default=600.0, gt=0)
