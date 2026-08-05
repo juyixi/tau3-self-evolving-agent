@@ -321,12 +321,16 @@ def _audit_source_evidence(
         source_paths = tuple(
             _context_path(project, value) for value in raw_source_paths
         )
+        task_scope = context.get("task_scope", "full")
+        if task_scope not in {"full", "debug"}:
+            raise ValueError("source task scope is invalid")
         source_set = load_source_runs(
             source_paths,
             benchmark=benchmark,
             official_train_task_ids=train_task_ids,
             split_hash=split_hash,
             project_root=project,
+            task_scope=task_scope,
         )
         rebuilt = build_evidence(source_set, memory_root=memory_root)
     except (KeyError, OSError, TypeError, ValueError) as error:

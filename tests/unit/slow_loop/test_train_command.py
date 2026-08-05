@@ -50,6 +50,8 @@ def _write_dataset_manifest(
     *,
     model_revision: str = "model-commit-a",
     adapter_revision: str = "adapter-a",
+    examples_per_epoch: int = 4,
+    task_scope: str = "full",
 ) -> None:
     dataset_dir.mkdir(parents=True)
     (dataset_dir / "dataset_manifest.json").write_text(
@@ -62,9 +64,10 @@ def _write_dataset_manifest(
                     "model_revision": model_revision,
                     "adapter_revision": adapter_revision,
                 },
+                "source_context": {"task_scope": task_scope},
                 "artifacts": {
                     "datasets/sel.jsonl": {
-                        "line_count": 4,
+                        "line_count": examples_per_epoch,
                         "sha256": "a" * 64,
                     }
                 },
@@ -174,6 +177,7 @@ def test_dry_run_audits_lineage_resolves_settings_and_prints_canonical_json_with
         "adapter_revision": "adapter-a",
         "dataset_build_id": "dataset-a",
         "dataset_dir": str(dataset_dir.resolve()),
+        "debug": False,
         "dry_run": True,
         "examples_per_epoch": 4,
         "kind": "sel",
@@ -209,6 +213,29 @@ def test_dry_run_audits_lineage_resolves_settings_and_prints_canonical_json_with
         ensure_ascii=False,
         allow_nan=False,
     ) + "\n"
+
+
+def test_debug_preflight_allows_an_empty_kind_only_for_debug_dataset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    dataset_dir = tmp_path / "dataset"
+    _write_dataset_manifest(
+        dataset_dir,
+        examples_per_epoch=0,
+        task_scope="debug",
+    )
+    monkeypatch.setattr(train_opd_lora, "audit_dataset", lambda path: _passing_audit())
+
+    assert train_opd_lora.main(
+        _argv(dataset_dir, tmp_path / "output", "--debug", "--dry-run")
+    ) == 0
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["debug"] is True
+    assert summary["examples_per_epoch"] == 0
+    assert summary["total_examples"] == 0
 
 
 def test_preflight_requires_a_passing_stage5_audit(

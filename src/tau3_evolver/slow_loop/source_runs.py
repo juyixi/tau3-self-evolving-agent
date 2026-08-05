@@ -7,10 +7,13 @@ import json
 import math
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 from tau3_evolver.artifacts.jsonl import iter_jsonl_objects
 from tau3_evolver.memory.paths import training_memory_root
+
+
+ZERO_IMPACT_ADAPTER_REVISION = "zero-impact-init-v1"
 
 
 def reject_evaluation_artifact_for_training(path: Path) -> Path:
@@ -40,6 +43,11 @@ class SourceRun:
     @property
     def runtime_revision(self) -> str:
         return _runtime_revision(self.run["runtime"])
+
+    @property
+    def adapter_revision(self) -> str:
+        checkpoint = self.run["policy"].get("checkpoint")
+        return str(checkpoint or ZERO_IMPACT_ADAPTER_REVISION)
 
     @property
     def task_ids(self) -> tuple[str, ...]:
@@ -81,11 +89,12 @@ class SourceRunSet:
     runtime_revision: str
     split_hash: str
     memory_namespace: str
+    task_scope: Literal["full", "debug"]
     project_root: Path
 
     @property
-    def adapter_revision(self) -> str | None:
-        return self.checkpoint
+    def adapter_revision(self) -> str:
+        return str(self.checkpoint or ZERO_IMPACT_ADAPTER_REVISION)
 
 
 def load_source_runs(
@@ -95,6 +104,7 @@ def load_source_runs(
     official_train_task_ids: Sequence[str],
     split_hash: str,
     project_root: Path,
+    task_scope: Literal["full", "debug"] = "full",
 ) -> SourceRunSet:
     if not paths:
         raise ValueError("at least one source run path is required")
@@ -113,12 +123,17 @@ def load_source_runs(
             split_hash=split_hash,
             project_root=project_root.resolve(),
             task_offset=task_offset,
+            task_scope=task_scope,
         )
         loaded.append(run)
         task_offset += len(run.episodes)
     runs = tuple(loaded)
     _validate_run_set(runs)
     first = runs[0].run
+    first_memory = first["memory"]
+    memory_namespace = str(
+        first_memory.get("destination_namespace") or benchmark
+    )
     return SourceRunSet(
         runs=runs,
         benchmark=benchmark,
@@ -127,7 +142,8 @@ def load_source_runs(
         checkpoint=first["policy"].get("checkpoint"),
         runtime_revision=_runtime_revision(first["runtime"]),
         split_hash=str(first["execution"]["split_hash"]),
-        memory_namespace=benchmark,
+        memory_namespace=memory_namespace,
+        task_scope=task_scope,
         project_root=project_root.resolve(),
     )
 
@@ -140,6 +156,7 @@ def _load_source_run(
     split_hash: str,
     project_root: Path,
     task_offset: int,
+    task_scope: Literal["full", "debug"],
 ) -> SourceRun:
     if not path.is_dir():
         raise ValueError(f"source run directory does not exist: {path}")
@@ -161,6 +178,7 @@ def _load_source_run(
         split_hash=split_hash,
         episodes=episodes,
         episodes_path=episodes_path,
+        task_scope=task_scope,
     )
     _validate_snapshots(run, project_root=project_root)
     return SourceRun(
@@ -184,6 +202,7 @@ def _validate_run(
     split_hash: str,
     episodes: tuple[dict[str, Any], ...],
     episodes_path: Path,
+    task_scope: Literal["full", "debug"],
 ) -> None:
     if run.get("schema_version") != 1:
         raise ValueError(f"source run schema must be 1: {path}")
@@ -195,8 +214,13 @@ def _validate_run(
         raise ValueError(f"source run benchmark must be {benchmark}: {path}")
     if execution.get("mode") != "train" or execution.get("split") != "train":
         raise ValueError(f"source run must be a train execution: {path}")
-    if execution.get("task_scope", "full") != "full":
-        raise ValueError(f"debug runs cannot be used as Slow Loop sources: {path}")
+    actual_scope = execution.get("task_scope", "full")
+    if actual_scope != task_scope:
+        if actual_scope == "debug" and task_scope == "full":
+            raise ValueError(f"debug runs cannot be used as Slow Loop sources: {path}")
+        raise ValueError(
+            f"source run task scope must be {task_scope!r}: {path}"
+        )
     if execution.get("split_hash") != split_hash:
         raise ValueError(f"source run split hash does not match benchmark: {path}")
     if run.get("status") != "completed":
@@ -216,11 +240,22 @@ def _validate_run(
     if not _is_nonnegative_int(memory.get("generation")):
         raise ValueError(f"source Memory generation is invalid: {path}")
     source_namespace = _nonblank(memory, "source_namespace", "source Memory")
+    destination_namespace = memory.get("destination_namespace", benchmark)
+    expected_destination = (
+        f"{benchmark}-debug" if task_scope == "debug" else benchmark
+    )
+    if destination_namespace != expected_destination:
+        raise ValueError(
+            f"source destination Memory namespace must be "
+            f"{expected_destination!r}: {path}"
+        )
     if memory.get("input_snapshot_id") is None:
         raise ValueError(f"source run has no input Memory snapshot: {path}")
     if memory.get("output_snapshot_id") is None:
         raise ValueError(f"source run has no output Memory snapshot: {path}")
-    if memory.get("cross_domain") is not (source_namespace != benchmark):
+    if memory.get("cross_domain") is not (
+        source_namespace != destination_namespace
+    ):
         raise ValueError(f"source run cross-domain flag is inconsistent: {path}")
 
     _validate_episode_artifact(run, episodes, episodes_path=episodes_path)
@@ -314,7 +349,8 @@ def _validate_snapshots(run: Mapping[str, Any], *, project_root: Path) -> None:
     execution = run["execution"]
     memory = run["memory"]
     input_root = training_memory_root(memory["source_namespace"], root=project_root)
-    output_root = training_memory_root(execution["benchmark"], root=project_root)
+    output_namespace = memory.get("destination_namespace", execution["benchmark"])
+    output_root = training_memory_root(output_namespace, root=project_root)
     _require_snapshot(input_root, memory["input_snapshot_id"])
     _require_snapshot(output_root, memory["output_snapshot_id"])
 
@@ -334,6 +370,10 @@ def _validate_run_set(runs: tuple[SourceRun, ...]) -> None:
             run.run["policy"].get("checkpoint"),
             json.dumps(dict(run.run["runtime"]), sort_keys=True),
             run.run["execution"]["split_hash"],
+            run.run["execution"].get("task_scope", "full"),
+            run.run["memory"].get(
+                "destination_namespace", run.run["execution"]["benchmark"]
+            ),
         )
         for run in runs
     }

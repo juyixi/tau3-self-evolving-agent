@@ -36,6 +36,7 @@ class _Preflight:
     dataset_build_id: str
     resume_from: Path | None
     resume_adapter_path: Path | None
+    debug: bool
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -50,6 +51,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--adapter-revision", required=True)
     parser.add_argument("--kind", choices=OPD_KINDS, required=True)
     parser.add_argument("--resume-from", type=Path)
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Allow empty kinds only for a dataset built from debug-train sources.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
 
@@ -64,15 +70,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime = _load_training_runtime()
     _require_cuda_bf16(runtime.torch, preflight.config)
     _seed_training_rng(runtime.torch, preflight.config.training.seed)
+    load_revision = (
+        None
+        if Path(preflight.config.model.base_model).is_dir()
+        else preflight.model_revision
+    )
     tokenizer = runtime.load_qwen35_tokenizer(
         preflight.config.model.base_model,
-        revision=preflight.model_revision,
+        revision=load_revision,
     )
     model = runtime.load_shared_qwen35_policy(
         preflight.config.model,
         preflight.config.lora,
         preflight.config.training,
-        revision=preflight.model_revision,
+        revision=load_revision,
         adapter_path=preflight.resume_adapter_path,
     )
     model = model.to("cuda")
@@ -91,6 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             kind=preflight.kind,
             resume_from=preflight.resume_from,
             loaded_adapter_path=preflight.resume_adapter_path,
+            allow_empty_debug=preflight.debug,
         )
     )
     _print_json(
@@ -99,6 +111,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "kind": preflight.kind,
             "latest_checkpoint": str(result.latest_checkpoint),
             "optimizer_steps": result.optimizer_steps,
+            "debug_initialized_without_examples": result.completed_examples == 0,
             "output_dir": str(result.output_dir),
             "status": "complete",
         }
@@ -116,6 +129,16 @@ def _run_preflight(args: argparse.Namespace) -> _Preflight:
     report = audit_dataset(args.dataset_dir)
     _require_passing_audit(report)
     dataset_manifest = _read_json_object(dataset_dir / "dataset_manifest.json")
+    source_context = dataset_manifest.get("source_context")
+    task_scope = (
+        source_context.get("task_scope", "full")
+        if isinstance(source_context, Mapping)
+        else "full"
+    )
+    if args.debug is not (task_scope == "debug"):
+        raise ValueError(
+            "--debug must be used exactly for datasets built from debug-train sources"
+        )
     if dataset_manifest.get("dataset_schema_version") != OPD_DATASET_SCHEMA_VERSION:
         raise ValueError(
             f"OPD dataset schema version must be {OPD_DATASET_SCHEMA_VERSION}"
@@ -135,7 +158,7 @@ def _run_preflight(args: argparse.Namespace) -> _Preflight:
     if not isinstance(build_id, str) or not build_id:
         raise ValueError("dataset_build_id is missing")
     examples_per_epoch = _kind_example_count(dataset_manifest, args.kind)
-    if examples_per_epoch < 1:
+    if examples_per_epoch < 1 and not args.debug:
         raise ValueError(f"dataset contains no {args.kind} OPD examples")
 
     resume_from: Path | None = None
@@ -164,6 +187,7 @@ def _run_preflight(args: argparse.Namespace) -> _Preflight:
         dataset_build_id=build_id,
         resume_from=resume_from,
         resume_adapter_path=resume_adapter_path,
+        debug=args.debug,
     )
 
 
@@ -336,6 +360,7 @@ def _preflight_summary(preflight: _Preflight) -> dict[str, Any]:
         "adapter_revision": preflight.adapter_revision,
         "dataset_build_id": preflight.dataset_build_id,
         "dataset_dir": str(preflight.dataset_dir),
+        "debug": preflight.debug,
         "dry_run": True,
         "examples_per_epoch": preflight.examples_per_epoch,
         "kind": preflight.kind,

@@ -340,10 +340,12 @@ def _build_episode_record(
         task_id=task_id,
         task_group=canonicalize_task_group(str(row["task_group"])),
         model_revision=source_run.run["policy"]["model_revision"],
-        adapter_revision=source_run.run["policy"].get("checkpoint"),
+        adapter_revision=source_run.adapter_revision,
         runtime_revision=source_run.runtime_revision,
         split_hash=source_run.run["execution"]["split_hash"],
-        memory_namespace=source_run.run["execution"]["benchmark"],
+        memory_namespace=source_run.run["memory"].get(
+            "destination_namespace", source_run.run["execution"]["benchmark"]
+        ),
         memory_snapshot_id=snapshot_id,
         seed=row["seed"],
         policy=_json_copy(task.get("policy"), "policy"),

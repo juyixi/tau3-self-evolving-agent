@@ -19,7 +19,8 @@ def _source_run(
     run_id: str = "run-1",
     task_scope: str = "full",
 ) -> Path:
-    memory = MemoryRepository(training_memory_root(benchmark, root=root))
+    namespace = f"{benchmark}-debug" if task_scope == "debug" else benchmark
+    memory = MemoryRepository(training_memory_root(namespace, root=root))
     input_snapshot = memory.snapshot().memory_snapshot_id
     output_snapshot = memory.snapshot().memory_snapshot_id
     run = root / "runs" / run_id
@@ -102,7 +103,8 @@ def _source_run(
             "memory": {
                 "enabled": True,
                 "generation": 1,
-                "source_namespace": benchmark,
+                "source_namespace": namespace,
+                "destination_namespace": namespace,
                 "input_snapshot_id": input_snapshot,
                 "output_snapshot_id": output_snapshot,
                 "cross_domain": False,
@@ -138,6 +140,7 @@ def test_loads_generic_two_file_source_run(tmp_path: Path, benchmark: str) -> No
     assert loaded.benchmark == benchmark
     assert loaded.memory_generation == 1
     assert loaded.memory_namespace == benchmark
+    assert loaded.adapter_revision == "zero-impact-init-v1"
     assert not hasattr(loaded, "iteration")
     assert loaded.runs[0].summary["episode_count"] == 1
     evidence = build_evidence(
@@ -186,3 +189,19 @@ def test_rejects_debug_run_as_slow_loop_source(tmp_path: Path) -> None:
             split_hash="split-hash",
             project_root=tmp_path,
         )
+
+
+def test_explicit_debug_scope_loads_only_debug_memory(tmp_path: Path) -> None:
+    run = _source_run(tmp_path, task_scope="debug")
+
+    loaded = load_source_runs(
+        (run,),
+        benchmark="retail",
+        official_train_task_ids=("1",),
+        split_hash="split-hash",
+        project_root=tmp_path,
+        task_scope="debug",
+    )
+
+    assert loaded.task_scope == "debug"
+    assert loaded.memory_namespace == "retail-debug"

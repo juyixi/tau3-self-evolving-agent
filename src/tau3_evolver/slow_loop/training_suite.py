@@ -35,6 +35,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model-revision", required=True)
     parser.add_argument("--adapter-revision", required=True)
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Run an isolated smoke suite and initialize empty-kind adapters.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
 
@@ -45,6 +50,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     dataset_dir = Path(args.dataset_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
     dataset_manifest = _read_json(dataset_dir / "dataset_manifest.json")
+    source_context = dataset_manifest.get("source_context")
+    task_scope = (
+        source_context.get("task_scope", "full")
+        if isinstance(source_context, Mapping)
+        else "full"
+    )
+    if args.debug is not (task_scope == "debug"):
+        raise ValueError(
+            "--debug must be used exactly for datasets built from debug-train sources"
+        )
     if dataset_manifest.get("dataset_schema_version") != OPD_DATASET_SCHEMA_VERSION:
         raise ValueError(
             f"OPD dataset schema version must be {OPD_DATASET_SCHEMA_VERSION}"
@@ -73,7 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for kind in OPD_KINDS
     }
     empty = [kind for kind, count in counts.items() if count < 1]
-    if empty:
+    if empty and not args.debug:
         raise ValueError(
             "four-LoRA training requires nonempty datasets: " + ", ".join(empty)
         )
@@ -85,6 +100,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "dataset_schema_version": OPD_DATASET_SCHEMA_VERSION,
         "sample_unit_contract": OPD_SAMPLE_UNIT_CONTRACT,
         "source_lineage": expected_lineage,
+        "debug": args.debug,
+        "empty_kinds": empty,
         "num_train_epochs": config.training.num_train_epochs,
         "training_order": list(order),
         "kinds": {
@@ -128,6 +145,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             ]
             for override in args.overrides:
                 command.extend(("--set", override))
+            if args.debug:
+                command.append("--debug")
             resume = _latest_checkpoint(kind_output)
             if resume is not None:
                 command.extend(("--resume-from", str(resume)))
@@ -175,6 +194,8 @@ def _load_or_initialize_suite(
         "num_train_epochs",
         "training_order",
         "total_examples",
+        "debug",
+        "empty_kinds",
     ):
         if suite.get(field) != expected.get(field):
             raise ValueError(f"existing suite manifest {field} mismatch")
@@ -298,7 +319,8 @@ def _publish_bundle_manifest(
             raise ValueError(f"{kind} LoRA checkpoint is missing")
         if not isinstance(revision, str) or not revision:
             raise ValueError(f"{kind} LoRA revision is missing")
-        if type(count) is not int or count < 1:
+        minimum = 0 if suite.get("debug") is True else 1
+        if type(count) is not int or count < minimum:
             raise ValueError(f"{kind} completed example count is invalid")
         checkpoint = (output_dir / relative).resolve()
         try:
@@ -334,6 +356,8 @@ def _publish_bundle_manifest(
         "total_examples": suite.get("total_examples"),
         "num_train_epochs": suite.get("num_train_epochs"),
         "training_order": suite.get("training_order"),
+        "debug": suite.get("debug") is True,
+        "empty_kinds": suite.get("empty_kinds", []),
         "kinds": kinds,
     }
     if manifest["completed_examples"] != manifest["total_examples"]:

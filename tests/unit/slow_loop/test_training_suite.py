@@ -107,6 +107,35 @@ def test_dry_run_reports_natural_four_lora_counts(
     }
 
 
+def test_debug_dry_run_keeps_empty_kinds_as_initialized_smoke_stages(
+    tmp_path: Path,
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    dataset = tmp_path / "dataset"
+    _write_dataset(dataset)
+    manifest_path = dataset / "dataset_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["source_context"] = {"task_scope": "debug"}
+    for kind in ("sel", "write", "maint"):
+        manifest["artifacts"][f"datasets/{kind}.jsonl"]["line_count"] = 0
+    _write_json(manifest_path, manifest)
+    monkeypatch.setattr(
+        train_opd_lora_suite,
+        "audit_dataset",
+        lambda path: _passing_audit(),
+    )
+
+    assert train_opd_lora_suite.main(
+        _argv(dataset, tmp_path / "output", "--debug", "--dry-run")
+    ) == 0
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["debug"] is True
+    assert summary["empty_kinds"] == ["sel", "write", "maint"]
+    assert summary["training_order"][:3] == ["maint", "sel", "write"]
+
+
 def test_suite_trains_four_independent_outputs(
     tmp_path: Path,
     monkeypatch: Any,

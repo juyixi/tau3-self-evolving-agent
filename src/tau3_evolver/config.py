@@ -36,7 +36,7 @@ class Tau2Config(_ConfigModel):
 
 
 class ModelConfig(_ConfigModel):
-    base_model: Literal["Qwen/Qwen3.5-9B"]
+    base_model: str
     serving_base_url: str = "http://127.0.0.1:8000/v1"
     served_model_name: str = "Qwen/Qwen3.5-9B"
     max_context_tokens: Literal[131072] = 131072
@@ -57,6 +57,13 @@ class ModelConfig(_ConfigModel):
     def api_key_env_must_be_valid(cls, value: str) -> str:
         if not _ENVIRONMENT_VARIABLE_NAME.fullmatch(value):
             raise ValueError("api_key_env must be a valid environment variable name")
+        return value
+
+    @field_validator("base_model")
+    @classmethod
+    def base_model_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("base_model must not be empty")
         return value
 
 

@@ -720,6 +720,27 @@ Slow Loop 属于离线训练操作，不由在线任务执行入口自动触发�
 - 使用者在确认数据范围和质量后，再单独启动数据构建、审计与 Slow Loop
   训练。
 
+这里的手动启动边界只约束离线的 Dataset/Audit/LoRA 训练，不等同于 Memory
+Maintenance 的触发方式。`memory.maintenance_period` 表示在线 train 任务累计到一定
+数量时，对 Memory 仓库执行一次整理并记录 Maintainer 证据；它不负责启动 Slow
+Loop，也不能触发权重训练。
+
+### Slow Loop 调试模式
+
+开发期允许显式使用 `tau3 slow-loop build --debug` 消费 `debug train` 制品，但必须
+保持以下隔离：
+
+- 只有显式 `--debug` 才接受 `execution.task_scope=debug` 的 Source Run；正式构建仍
+  拒绝 debug 制品。
+- Debug Dataset 继续引用 `<benchmark>-debug` Memory namespace，并在
+  `source_context.task_scope` 中记录 `debug`，不能混入正式 Dataset。
+- `tau3 slow-loop train --debug` 只能消费上述 Debug Dataset。某类样本为零时，不
+  伪造训练样本；该阶段加载原始基座、创建零影响 LoRA 并发布
+  `step-00000000` checkpoint，明确记录 `debug_initialized_without_examples=true`。
+- 有真实样本的阶段仍执行正常的生成、OPD loss、反向传播和优化步骤。Debug Bundle
+  只用于验证数据、审计、模型加载、训练编排与四类 checkpoint 发布链路，不得作为
+  正式训练产物或评测模型使用。
+
 这一边界将在线经验采集与离线权重更新解耦：在线入口决定任务如何执行以及
 是否积累 Memory 经验，手动 Slow Loop 决定何时将已积累的数据内化到模型
 权重中。

@@ -138,6 +138,11 @@ V(m) = tier_prior(m) * confidence(usage_count) * A(m)
 - Teacher 与 Student 对齐到同一段 Student response token prefix；
 - 基座参数冻结，只更新 PEFT LoRA；损失为 `KL(teacher || student)`。
 
+链路联调可显式使用 `tau3 slow-loop build --debug` 和
+`tau3 slow-loop train --debug` 消费隔离的 Debug Train 制品。Debug 数据不足时，空
+类别只发布带明确标记的零影响初始化 Adapter，非空类别仍执行真实 OPD 优化；这类
+Bundle 仅证明流程可运行，不能当作正式训练结果。
+
 ```yaml
 use_peft: true
 lora_r: 32

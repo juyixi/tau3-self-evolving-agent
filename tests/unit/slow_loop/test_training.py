@@ -272,6 +272,7 @@ def _request(
     kind: str = "sel",
     resume_from: Path | None = None,
     loaded_adapter_path: Path | None = None,
+    allow_empty_debug: bool = False,
 ) -> TrainingRequest:
     return TrainingRequest(
         dataset_dir=dataset,
@@ -281,6 +282,7 @@ def _request(
         kind=kind,
         resume_from=resume_from,
         loaded_adapter_path=loaded_adapter_path,
+        allow_empty_debug=allow_empty_debug,
     )
 
 
@@ -350,6 +352,38 @@ def test_online_generation_trains_one_kind_without_oversampling(tmp_path: Path) 
         assert call["top_p"] == 0.8
     assert model.training is True
     assert all(row["response_ids"] for row in generations)
+
+
+def test_debug_empty_kind_publishes_zero_impact_checkpoint_without_optimizer_step(
+    tmp_path: Path,
+) -> None:
+    _write_dataset(tmp_path / "dataset", {})
+    model = ToyPolicy()
+    saver = ToyCheckpointSaver()
+    optimizers = OptimizerFactory()
+
+    result = OPDTrainer(
+        model,
+        ToyTokenizer(),
+        _config(num_train_epochs=1),
+        RolloutConfig(),
+        checkpoint_saver=saver,
+        optimizer_factory=optimizers,
+    ).train(
+        _request(
+            tmp_path / "dataset",
+            tmp_path / "output",
+            kind="maint",
+            allow_empty_debug=True,
+        )
+    )
+
+    assert result.completed_examples == 0
+    assert result.optimizer_steps == 0
+    assert result.latest_checkpoint.name == "step-00000000"
+    assert result.manifest["debug_initialized_without_examples"] is True
+    assert optimizers.optimizers[0].step_count == 0
+    assert saver.calls
 
 
 def test_generation_caps_new_tokens_and_left_truncates_to_context(tmp_path: Path) -> None:

@@ -48,6 +48,7 @@ class TrainingRequest:
     kind: str
     resume_from: Path | None = None
     loaded_adapter_path: Path | None = None
+    allow_empty_debug: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +153,7 @@ class OPDTrainer:
             kind=request.kind,
             seed=self.training_config.seed,
         )
-        if not schedule:
+        if not schedule and not request.allow_empty_debug:
             raise ValueError(f"Stage 5 dataset contains no {request.kind} OPD examples")
         schedule_fingerprint = _schedule_fingerprint(schedule, dataset_manifest)
 
@@ -207,6 +208,33 @@ class OPDTrainer:
                         "status": "complete",
                     },
                 )
+
+        if not schedule:
+            latest_checkpoint, checkpoint_manifest = self._save_checkpoint(
+                output_dir,
+                optimizer,
+                request=request,
+                dataset_manifest=dataset_manifest,
+                source_lineage=source_lineage,
+                completed_examples=0,
+                optimizer_steps=0,
+                total_examples=0,
+                schedule_fingerprint=schedule_fingerprint,
+            )
+            training_manifest = {
+                **checkpoint_manifest,
+                "debug_initialized_without_examples": True,
+                "latest_checkpoint": latest_checkpoint.relative_to(output_dir).as_posix(),
+                "status": "complete",
+            }
+            _atomic_write_json(output_dir / "training_manifest.json", training_manifest)
+            return TrainingResult(
+                output_dir=output_dir,
+                latest_checkpoint=latest_checkpoint,
+                completed_examples=0,
+                optimizer_steps=0,
+                manifest=training_manifest,
+            )
 
         self.model.train()
         effective_batch_size = (

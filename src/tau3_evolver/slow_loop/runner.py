@@ -32,6 +32,11 @@ def _build(argv: Sequence[str]) -> int:
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
     parser.add_argument("--output-root", type=Path, default=Path("runs"))
     parser.add_argument("--project-root", type=Path)
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Accept debug-train sources and mark the dataset as debug-only.",
+    )
     args = parser.parse_args(list(argv))
     result = build_opd_dataset(
         DatasetBuildRequest(
@@ -40,6 +45,7 @@ def _build(argv: Sequence[str]) -> int:
             output_root=args.output_root,
             config_path=args.config,
             project_root=args.project_root,
+            debug=args.debug,
         )
     )
     _print_json(

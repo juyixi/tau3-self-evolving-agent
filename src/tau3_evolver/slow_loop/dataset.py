@@ -46,6 +46,7 @@ class DatasetBuildRequest:
     output_root: Path
     config_path: Path
     project_root: Path | None = None
+    debug: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,16 +136,15 @@ def _materialize(request: DatasetBuildRequest) -> _MaterializedDataset:
     prepared = benchmark_registry.resolve(benchmark).prepare(
         config, ExecutionMode.TRAIN
     )
-    memory_root = training_memory_root(
-        prepared.default_memory_namespace, root=project
-    )
     source_set = load_source_runs(
         source_paths,
         benchmark=prepared.name,
         official_train_task_ids=prepared.task_ids,
         split_hash=prepared.split_hash,
         project_root=project,
+        task_scope="debug" if request.debug else "full",
     )
+    memory_root = training_memory_root(source_set.memory_namespace, root=project)
     ledger = build_evidence(source_set, memory_root=memory_root)
 
     scores = compute_memory_scores(
@@ -217,6 +217,7 @@ def _materialize(request: DatasetBuildRequest) -> _MaterializedDataset:
         build_code_revision=_git_revision(project),
         source_context={
             "benchmark": prepared.name,
+            "task_scope": source_set.task_scope,
             "runtime_origin": {
                 "source_root": str(prepared.runtime_origin.source_root),
                 "package_version": prepared.runtime_origin.package_version,
