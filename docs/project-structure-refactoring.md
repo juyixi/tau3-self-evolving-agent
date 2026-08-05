@@ -729,6 +729,12 @@ Maintenance 的触发方式。`memory.maintenance_period` 表示在线 train 任
 数量时，对 Memory 仓库执行一次整理并记录 Maintainer 证据；它不负责启动 Slow
 Loop，也不能触发权重训练。
 
+当前重构实现还有一个需要单独决策的缺口：`execution.runner` 尚未重新接入
+`run_due_maintenance`，因此 `memory.maintenance_period` 目前只是未生效的遗留配置，
+在线 train 不会产生 Maintainer 证据。Slow Loop 的手动边界不受影响；正式恢复
+`maint` 数据前，需要另行确定 Memory Maintenance 是保留在线周期触发，还是也改为
+显式手动触发，不能以默认周期暗中启动 Slow Loop。
+
 ### Slow Loop 调试模式
 
 开发期允许显式使用 `tau3 slow-loop build --debug` 消费 `debug train` 制品，但必须
