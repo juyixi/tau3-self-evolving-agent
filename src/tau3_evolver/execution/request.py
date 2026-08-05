@@ -29,6 +29,7 @@ class ExecutionRequest(BaseModel):
 
     benchmark: BenchmarkName
     mode: ExecutionMode
+    debug: bool = False
     memory_enabled: bool
     memory_source: str | None = None
     memory_snapshot: Path | None = None
@@ -58,7 +59,8 @@ class ExecutionRequest(BaseModel):
             self.mode is ExecutionMode.TRAIN
             and self.memory_enabled
             and self.memory_source is not None
-            and self.memory_source != self.benchmark.value
+            and self.memory_source
+            != self.destination_memory_namespace(self.benchmark.value)
             and self.memory_snapshot is None
         ):
             raise ValueError(
@@ -87,12 +89,20 @@ class ExecutionRequest(BaseModel):
     def resolved_memory_source(self, default_namespace: str) -> str | None:
         if not self.memory_enabled:
             return None
+        return self.memory_source or self.destination_memory_namespace(
+            default_namespace
+        )
+
+    def destination_memory_namespace(self, default_namespace: str) -> str:
         self._validate_slug(default_namespace, field="default_memory_namespace")
-        return self.memory_source or default_namespace
+        return f"{default_namespace}-debug" if self.debug else default_namespace
 
     def is_cross_domain_memory(self, default_namespace: str) -> bool:
         source = self.resolved_memory_source(default_namespace)
-        return source is not None and source != default_namespace
+        return (
+            source is not None
+            and source != self.destination_memory_namespace(default_namespace)
+        )
 
     @staticmethod
     def _validate_slug(value: str, *, field: str) -> None:

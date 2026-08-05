@@ -139,6 +139,7 @@ def test_run_domain_receives_registered_tau3_factory_and_official_task_set(
     assert received_config[0].domain == "airline"
     assert received_config[0].task_split_name == "test"
     assert received_config[0].task_ids == ["a", "b"]
+    assert received_config[0].max_concurrency == 2
     assert len(created_agents) == 2
     assert created_agents[0] is not created_agents[1]
     assert created_agents[0]._public_tools is not created_agents[1]._public_tools

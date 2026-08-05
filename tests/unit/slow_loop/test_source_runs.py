@@ -12,7 +12,13 @@ from tau3_evolver.slow_loop.evidence import build_evidence
 from tau3_evolver.slow_loop.source_runs import load_source_runs
 
 
-def _source_run(root: Path, *, benchmark: str = "retail", run_id: str = "run-1") -> Path:
+def _source_run(
+    root: Path,
+    *,
+    benchmark: str = "retail",
+    run_id: str = "run-1",
+    task_scope: str = "full",
+) -> Path:
     memory = MemoryRepository(training_memory_root(benchmark, root=root))
     input_snapshot = memory.snapshot().memory_snapshot_id
     output_snapshot = memory.snapshot().memory_snapshot_id
@@ -81,6 +87,7 @@ def _source_run(root: Path, *, benchmark: str = "retail", run_id: str = "run-1")
                 "mode": "train",
                 "split": "train",
                 "split_hash": "split-hash",
+                "task_scope": task_scope,
                 "planned_task_count": 1,
             },
             "runtime": {
@@ -159,6 +166,19 @@ def test_rejects_legacy_or_extra_run_artifacts(tmp_path: Path) -> None:
     (run / "results.json").write_text("{}\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="exactly run.json and episodes.jsonl"):
+        load_source_runs(
+            (run,),
+            benchmark="retail",
+            official_train_task_ids=("1",),
+            split_hash="split-hash",
+            project_root=tmp_path,
+        )
+
+
+def test_rejects_debug_run_as_slow_loop_source(tmp_path: Path) -> None:
+    run = _source_run(tmp_path, task_scope="debug")
+
+    with pytest.raises(ValueError, match="debug runs cannot be used"):
         load_source_runs(
             (run,),
             benchmark="retail",

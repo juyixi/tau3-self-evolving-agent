@@ -8,7 +8,7 @@ from typing import Any
 
 from tau3_evolver.artifacts.jsonl import JsonlWriter, iter_jsonl_objects
 from tau3_evolver.artifacts.run import episode_artifact_metadata, write_run_record
-from tau3_evolver.benchmarks import benchmark_registry
+from tau3_evolver.benchmarks import PreparedBenchmark, benchmark_registry
 from tau3_evolver.config import ProjectConfig, load_config
 from tau3_evolver.execution.batch import run_batch
 from tau3_evolver.execution.request import ExecutionRequest
@@ -29,6 +29,7 @@ def execute(request: ExecutionRequest) -> BatchResult:
     prepared = benchmark_registry.resolve(request.benchmark.value).prepare(
         config, request.mode
     )
+    prepared = _select_execution_tasks(prepared, request=request, config=config)
     run_dir = (request.output_root / request.run_id).resolve()
     if run_dir.exists():
         raise FileExistsError(f"run output already exists: {run_dir}")
@@ -69,6 +70,7 @@ def execute(request: ExecutionRequest) -> BatchResult:
                 "mode": request.mode.value,
                 "split": prepared.split_name,
                 "split_hash": prepared.split_hash,
+                "task_scope": "debug" if request.debug else "full",
                 "planned_task_count": len(prepared.task_ids),
             },
             "runtime": {
@@ -88,6 +90,7 @@ def execute(request: ExecutionRequest) -> BatchResult:
                 "enabled": request.memory_enabled,
                 "generation": memory.generation,
                 "source_namespace": memory.source_namespace,
+                "destination_namespace": memory.destination_namespace,
                 "input_snapshot_id": result.input_memory_snapshot_id,
                 "output_snapshot_id": result.output_memory_snapshot_id,
                 "cross_domain": request.is_cross_domain_memory(
@@ -103,6 +106,23 @@ def execute(request: ExecutionRequest) -> BatchResult:
         },
     )
     return result
+
+
+def _select_execution_tasks(
+    prepared: PreparedBenchmark,
+    *,
+    request: ExecutionRequest,
+    config: ProjectConfig,
+) -> PreparedBenchmark:
+    if request.debug:
+        if config.execution.max_concurrency < 2:
+            raise ValueError(
+                "debug runs require execution.max_concurrency to be at least 2"
+            )
+        if len(prepared.task_ids) < 2:
+            raise ValueError("debug runs require at least two benchmark tasks")
+        return prepared.first_tasks(config.execution.max_concurrency)
+    return prepared
 
 
 def _policy(config: ProjectConfig) -> OpenAICompatibleFastLoopPolicy:

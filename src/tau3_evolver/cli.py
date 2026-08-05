@@ -16,6 +16,13 @@ def build_parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="Run one benchmark task set.")
     run.add_argument("--benchmark", choices=("retail", "airline"), required=True)
     run.add_argument("--mode", choices=("train", "test"), required=True)
+    run.add_argument(
+        "--debug",
+        action="store_true",
+        help=(
+            "Run a deterministic split subset sized to execution.max_concurrency."
+        ),
+    )
     memory = run.add_mutually_exclusive_group(required=True)
     memory.add_argument("--memory", dest="memory_enabled", action="store_true")
     memory.add_argument("--no-memory", dest="memory_enabled", action="store_false")
@@ -45,6 +52,7 @@ def parse_execution_request(argv: Sequence[str]) -> ExecutionRequest:
         {
             "benchmark": namespace.benchmark,
             "mode": namespace.mode,
+            "debug": namespace.debug,
             "memory_enabled": namespace.memory_enabled,
             "memory_source": namespace.memory_source,
             "memory_snapshot": namespace.memory_snapshot,
@@ -66,6 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {
                     "benchmark": namespace.benchmark,
                     "mode": namespace.mode,
+                    "debug": namespace.debug,
                     "memory_enabled": namespace.memory_enabled,
                     "memory_source": namespace.memory_source,
                     "memory_snapshot": namespace.memory_snapshot,

@@ -33,6 +33,44 @@ def test_run_cli_builds_typed_request_without_task_or_iteration_fields() -> None
     assert not hasattr(request, "iteration")
 
 
+def test_run_cli_accepts_debug_test_subset() -> None:
+    request = parse_execution_request(
+        [
+            "run",
+            "--benchmark",
+            "retail",
+            "--mode",
+            "test",
+            "--debug",
+            "--no-memory",
+            "--run-id",
+            "debug-1",
+        ]
+    )
+
+    assert request.debug
+
+
+def test_run_cli_accepts_debug_train_subset() -> None:
+    request = parse_execution_request(
+        [
+            "run",
+            "--benchmark",
+            "airline",
+            "--mode",
+            "train",
+            "--debug",
+            "--memory",
+            "--run-id",
+            "debug-train-1",
+        ]
+    )
+
+    assert request.debug
+    assert request.capabilities.can_write_memory
+    assert request.resolved_memory_source("airline") == "airline-debug"
+
+
 @pytest.mark.parametrize("argument", ("--task-id", "--iteration", "--all-tasks"))
 def test_run_cli_does_not_publish_legacy_selection_arguments(argument: str) -> None:
     with pytest.raises(SystemExit):

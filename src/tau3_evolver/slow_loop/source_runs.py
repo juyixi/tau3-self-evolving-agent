@@ -195,6 +195,8 @@ def _validate_run(
         raise ValueError(f"source run benchmark must be {benchmark}: {path}")
     if execution.get("mode") != "train" or execution.get("split") != "train":
         raise ValueError(f"source run must be a train execution: {path}")
+    if execution.get("task_scope", "full") != "full":
+        raise ValueError(f"debug runs cannot be used as Slow Loop sources: {path}")
     if execution.get("split_hash") != split_hash:
         raise ValueError(f"source run split hash does not match benchmark: {path}")
     if run.get("status") != "completed":

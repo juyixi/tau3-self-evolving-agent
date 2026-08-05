@@ -87,6 +87,7 @@ tau3 slow-loop ...
 | 执行语义 | `--mode train\|test` | 决定是否允许积累经验 |
 | Memory | `--memory / --no-memory`、`--memory-source` | 决定是否使用 Memory 及其读取来源 |
 | Benchmark | `--benchmark retail\|airline` | 选择要执行的 Benchmark 任务类别 |
+| 调试 | `--debug` | 运行一个可并发的小任务子集；train 经验写入独立 Debug Memory |
 | 测试输入 | `--memory-snapshot`、`--checkpoint` | 测试时使用的冻结产物 |
 | 基础配置 | `--config`、少量 `--set` | 加载配置并执行显式覆盖 |
 | 运行输出 | `--run-id`、`--output-root` | 标识和保存本次执行 |
@@ -101,6 +102,14 @@ tau3 run --benchmark airline --mode test --memory \
   --memory-source retail \
   --memory-snapshot S1 \
   --checkpoint checkpoints/opd \
+  --config configs/default.yaml
+
+tau3 run --benchmark retail --mode test --debug --no-memory \
+  --run-id retail-debug \
+  --config configs/default.yaml
+
+tau3 run --benchmark retail --mode train --debug --memory \
+  --run-id retail-debug-train \
   --config configs/default.yaml
 ```
 
@@ -126,6 +135,21 @@ tau3 run --benchmark airline --mode test --memory \
 任务目录、任务 ID 集合和执行顺序由对应 Benchmark 的任务目录组件统一解析，
 不由 CLI 调用者逐项传递。单个任务 ID 只作为 Benchmark 内部数据和运行产物中
 的任务身份存在，不再构成公开执行入口的参数。
+
+为开发期连通性和并发验证，统一入口额外提供 `--debug` 开关，但不重新开放按
+任务 ID 选择。Debug 按当前 mode 对应官方 split 的稳定顺序取前
+`execution.max_concurrency` 个任务（默认 3 个），并仍通过同一个 `run_domain`
+批量执行路径运行。`execution.max_concurrency` 小于 2 时拒绝启动，以保证该模式
+确实覆盖并发调度。
+
+Debug 可以搭配 `train` 或 `test`。搭配 `train --memory` 时允许积累经验，但默认
+Memory namespace 改为 `<benchmark>-debug`，例如 `retail-debug` 和
+`airline-debug`，读写均与正式 Memory 隔离。如果显式读取其他 namespace，仍需
+提供冻结 Snapshot。搭配 `test` 时继续遵守测试只读规则。
+
+Debug Run 不代表完整 Benchmark 指标，也不能作为 Slow Loop 数据源；`run.json`
+的 `execution.task_scope` 记录为 `debug`，并记录实际 Memory 读写 namespace。
+未指定 `--debug` 时仍执行完整 split，并记录为 `full`。
 
 `benchmark` 同时是任务类型和任务执行环境的运行时解析键。执行入口收到该
 参数后，必须通过统一的 Benchmark Registry 得到完整的 Benchmark 定义，而不

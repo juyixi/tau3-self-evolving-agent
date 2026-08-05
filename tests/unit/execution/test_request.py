@@ -65,3 +65,24 @@ def test_default_memory_source_comes_from_benchmark_definition() -> None:
 def test_cross_domain_training_requires_frozen_source_snapshot() -> None:
     with pytest.raises(ValidationError, match="cross-domain training"):
         _request(benchmark="airline", memory_source="retail")
+
+
+def test_debug_train_uses_isolated_default_memory_namespace() -> None:
+    request = _request(debug=True)
+
+    assert request.resolved_memory_source("retail") == "retail-debug"
+    assert request.destination_memory_namespace("retail") == "retail-debug"
+    assert not request.is_cross_domain_memory("retail")
+    assert request.capabilities.can_write_memory
+
+
+def test_debug_test_run_is_read_only() -> None:
+    request = _request(mode="test", memory_enabled=False, debug=True)
+
+    assert request.debug
+    assert not request.capabilities.can_write_memory
+
+
+def test_debug_train_requires_snapshot_for_non_debug_memory_source() -> None:
+    with pytest.raises(ValidationError, match="cross-domain training"):
+        _request(debug=True, memory_source="retail")

@@ -16,6 +16,7 @@ class ResolvedMemory:
     source: ReadOnlyMemoryRepository | None
     destination: MemoryRepository | None
     source_namespace: str | None
+    destination_namespace: str | None
     input_snapshot_id: str | None
     generation: int
 
@@ -27,19 +28,22 @@ def resolve_memory(
     root: Path | None = None,
 ) -> ResolvedMemory:
     if not request.memory_enabled:
-        return ResolvedMemory(None, None, None, None, 0)
+        return ResolvedMemory(None, None, None, None, None, 0)
 
     workspace = (root or project_root()).resolve()
     source_namespace = request.resolved_memory_source(
         prepared.default_memory_namespace
     )
     assert source_namespace is not None
+    destination_namespace = request.destination_memory_namespace(
+        prepared.default_memory_namespace
+    )
     destination: MemoryRepository | None = None
     generation = 0
     if request.mode is ExecutionMode.TRAIN:
         destination = MemoryRepository(
             training_memory_root(
-                prepared.default_memory_namespace,
+                destination_namespace,
                 root=workspace,
             )
         )
@@ -51,7 +55,7 @@ def resolve_memory(
             namespace=source_namespace,
             root=workspace,
         )
-    elif destination is not None and source_namespace == prepared.default_memory_namespace:
+    elif destination is not None and source_namespace == destination_namespace:
         snapshot_path = destination.snapshot().path
     else:
         raise ValueError("the selected Memory source requires a frozen snapshot")
@@ -61,6 +65,9 @@ def resolve_memory(
         source=source,
         destination=destination,
         source_namespace=source_namespace,
+        destination_namespace=(
+            destination_namespace if destination is not None else None
+        ),
         input_snapshot_id=source.memory_snapshot_id,
         generation=generation,
     )

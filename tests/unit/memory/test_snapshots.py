@@ -39,6 +39,7 @@ def test_no_memory_does_not_create_memory_directories(tmp_path: Path) -> None:
 
     assert resolved.source is None
     assert resolved.destination is None
+    assert resolved.destination_namespace is None
     assert not (tmp_path / "history").exists()
 
 
@@ -62,6 +63,28 @@ def test_same_domain_training_freezes_s0_and_opens_local_destination(
     assert resolved.generation == 1
 
 
+def test_debug_training_reads_and_writes_isolated_memory(
+    tmp_path: Path,
+) -> None:
+    request = ExecutionRequest(
+        benchmark="retail",
+        mode="train",
+        debug=True,
+        memory_enabled=True,
+        run_id="debug-1",
+    )
+
+    resolved = resolve_memory(request, _prepared(), root=tmp_path)
+
+    debug_root = training_memory_root("retail-debug", root=tmp_path)
+    assert resolved.source is not None
+    assert resolved.destination is not None
+    assert resolved.source_namespace == "retail-debug"
+    assert resolved.destination_namespace == "retail-debug"
+    assert resolved.destination.root == debug_root
+    assert not training_memory_root("retail", root=tmp_path).exists()
+
+
 def test_cross_domain_test_uses_foreign_snapshot_without_destination(
     tmp_path: Path,
 ) -> None:
@@ -82,4 +105,5 @@ def test_cross_domain_test_uses_foreign_snapshot_without_destination(
     assert resolved.source is not None
     assert resolved.source.root == snapshot.path
     assert resolved.destination is None
+    assert resolved.destination_namespace is None
     assert not training_memory_root("airline", root=tmp_path).exists()

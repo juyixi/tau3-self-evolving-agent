@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import tau3_evolver.execution.runner as runner
 from tau3_evolver.agent.policy import EpisodeResult
-from tau3_evolver.benchmarks.types import RuntimeOrigin
+from tau3_evolver.benchmarks.types import PreparedBenchmark, RuntimeOrigin
+from tau3_evolver.config import load_config
 from tau3_evolver.execution.request import ExecutionRequest
 from tau3_evolver.execution.results import BatchResult
 
@@ -39,6 +40,7 @@ def test_execute_publishes_only_run_and_episode_artifacts(
             source=None,
             destination=None,
             source_namespace=None,
+            destination_namespace=None,
             input_snapshot_id=None,
             generation=0,
         ),
@@ -98,4 +100,44 @@ def test_execute_publishes_only_run_and_episode_artifacts(
     run_record = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert run_record["artifacts"]["episodes"]["rows"] == 1
     assert run_record["summary"]["metrics"]["pass_rate"] == 1.0
+    assert run_record["execution"]["task_scope"] == "full"
+    assert run_record["memory"]["destination_namespace"] is None
     assert "failures" not in run_record
+
+
+def test_debug_selects_one_concurrency_sized_stable_batch() -> None:
+    tasks = tuple(SimpleNamespace(id=f"task-{index}") for index in range(5))
+    prepared = PreparedBenchmark(
+        name="retail",
+        task_type=SimpleNamespace,
+        task_catalog=tasks,
+        task_ids=tuple(task.id for task in tasks),
+        split_name="train",
+        split_hash="s" * 64,
+        environment_factory=lambda: None,
+        runtime=None,
+        run_domain=lambda config: config,
+        text_run_config_type=dict,
+        registry=object(),
+        runtime_origin=RuntimeOrigin(Path("tau2"), None, None),
+        default_memory_namespace="retail",
+        task_group="retail",
+    )
+    request = ExecutionRequest(
+        benchmark="retail",
+        mode="train",
+        debug=True,
+        memory_enabled=False,
+        run_id="debug-1",
+    )
+    config = load_config(PROJECT_ROOT / "configs" / "default.yaml")
+
+    selected = runner._select_execution_tasks(
+        prepared,
+        request=request,
+        config=config,
+    )
+
+    assert selected.task_ids == ("task-0", "task-1", "task-2")
+    assert selected.task_catalog == tasks[:3]
+    assert selected.split_hash == prepared.split_hash
