@@ -381,9 +381,8 @@ def _maintenance_fixture():
     maintenance = MaintenanceEvidence(
         maintenance_id="run-a:maintenance-round-1",
         run_id="run-a",
-        source_event_start=9,
-        source_event_end=11,
-        source_event_sha256="f" * 64,
+        source_record_index=1,
+        source_record_sha256="f" * 64,
         memory_generation=3,
         maintenance_round=1,
         trigger_task_index=30,

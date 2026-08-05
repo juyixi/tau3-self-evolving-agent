@@ -95,7 +95,7 @@ class MemoryConfig(_ConfigModel):
     retrieve_top_k: int = 50
     teacher_memory_cap: int = 20
     score_threshold: float = 0.01
-    maintenance_period: int = 30
+    maintenance_period: int = Field(default=30, ge=1)
     maintenance_tip_capacity: int = Field(default=200, ge=1)
     maintenance_similarity_threshold: float = Field(default=0.92, ge=-1.0, le=1.0)
     maintenance_priority_pair_limit: int = Field(default=24, ge=0, le=50)

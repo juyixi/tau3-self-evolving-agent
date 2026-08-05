@@ -52,9 +52,9 @@ tau3 run --mode train -> Memory Snapshot + episodes.jsonl
 ```
 
 每次在线运行只发布两个正式制品：`run.json` 保存运行级配置、lineage、Snapshot、
-聚合指标和制品哈希；`episodes.jsonl` 每个任务一行，保存标准化轨迹、终局评估及
-Memory 检索、选择和写入证据。Tau2 原始 Simulation、独立 Events、Results 和
-Evaluation 文件不重复发布。
+自动 Maintenance 的压缩记录、聚合指标和制品哈希；`episodes.jsonl` 每个任务一行，
+保存标准化轨迹、终局评估及 Memory 检索、选择和写入证据。Tau2 原始 Simulation、
+独立 Events、Results 和 Evaluation 文件不重复发布。
 
 ## Fast Loop：让经验可积累、可检索、可治理
 
@@ -100,8 +100,8 @@ E_t = (task, candidates, selected memories, trajectory, reward, memory delta)
 
 Slow Loop 以 `run.json + episodes.jsonl` 作为唯一 Source Run 契约。Loader 先校验
 Episode 文件哈希、Train Split、模型与 Memory Snapshot lineage，再把每个任务行直接
-转换为 `EpisodeEvidence`，不再从多条生命周期事件拼装任务，也不再依赖独立的
-Results 文件。
+转换为 `EpisodeEvidence`，并把 `run.json` 中的压缩 Maintenance 记录转换为
+`MaintenanceEvidence`；不再从独立事件流拼装生命周期，也不再依赖 Results 文件。
 
 OPD Dataset 先在临时目录构建，Audit 会重新检查来源、Schema、哈希、Snapshot、
 Attribution 和样本可重建性。只有审计通过的数据集才会被原子发布；训练启动前还会

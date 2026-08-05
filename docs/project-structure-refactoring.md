@@ -635,7 +635,9 @@ runs/<run-id>/
 
 `run.json` 是唯一的运行级记录，负责保存本次运行的输入、解析后的配置、
 Benchmark 与 Runtime lineage、模型与 Checkpoint、Memory 来源、输入与输出
-Snapshot、完成状态、任务数量、聚合指标以及 `episodes.jsonl` 的 SHA-256。
+Snapshot、自动 Maintenance 的压缩记录、完成状态、任务数量、聚合指标以及
+`episodes.jsonl` 的 SHA-256。Maintenance 记录只保存维护轮次、触发任务计数、维护前
+Snapshot、受检公开诊断、规范化命令和提交结果，不重新发布完整生命周期事件。
 它不保存逐任务轨迹、逐任务失败详情或完整 Tau2 Simulation。
 
 `episodes.jsonl` 是唯一的任务级记录，每个 Benchmark 任务恰好占一行。成功行保存
@@ -735,9 +737,12 @@ Slow Loop 始终由管理员手动启动。管理员根据经验积累程度决�
 Audit，并将经验内化为模型权重，Fast Loop 的维护周期不得自动启动任何 Slow Loop
 操作。
 
-当前重构实现仍有一个明确缺口：`execution.runner` 尚未重新接入
-`run_due_maintenance`，因此在线 train 暂时不会产生 Maintainer 证据。后续修复应把
-自动触发恢复在 Fast Loop 内部，不能为 Slow Loop 增加周期计数或后台调度器。
+当前实现已经在成功的 train+memory Batch 边界重新接入 `run_due_maintenance`：经验
+候选先统一提交，随后按仓库累计完成任务数判断维护周期，并按轮次顺序执行当前边界
+前所有尚未完成的 Maintenance，最后再发布输出 Snapshot。维护记录压缩写入
+`run.json`，可由手动 Slow Loop 校验并转换为 Maintainer Evidence；test、关闭
+Memory 或任务 Batch 失败时不执行 Maintenance。
+该自动化只属于 Fast Loop，不为 Slow Loop 增加周期计数或后台调度器。
 
 ### Slow Loop 调试模式
 

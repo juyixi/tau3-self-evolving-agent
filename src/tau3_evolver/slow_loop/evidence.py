@@ -10,6 +10,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from tau3_evolver.agent.decisions import MaintenanceDecision
+from tau3_evolver.agent.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
+from tau3_evolver.artifacts.maintenance import maintenance_record_sha256
+from tau3_evolver.memory.operations import DeleteCommand, LookupCommand, MergeCommand
 from tau3_evolver.memory.paths import training_memory_root
 from tau3_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_evolver.memory.tier_contracts import (
@@ -140,9 +144,8 @@ class MaintenanceEvidence(_EvidenceModel):
     evidence_schema_version: Literal[1] = 1
     maintenance_id: str
     run_id: str
-    source_event_start: int = Field(ge=1)
-    source_event_end: int = Field(ge=1)
-    source_event_sha256: str
+    source_record_index: int = Field(ge=1)
+    source_record_sha256: str
     memory_generation: int = Field(ge=0)
     maintenance_round: int = Field(ge=1)
     trigger_task_index: int = Field(ge=1)
@@ -183,6 +186,7 @@ def build_evidence(
 
     snapshots: dict[tuple[Path, str], ReadOnlyMemoryRepository] = {}
     episodes: list[EpisodeEvidence] = []
+    maintenance: list[MaintenanceEvidence] = []
     for source_run in source_runs.runs:
         local_task_ids: list[str] = []
         for row_number, row in enumerate(source_run.episodes, start=1):
@@ -200,6 +204,27 @@ def build_evidence(
             raise ValueError(f"evidence episode count mismatch for run {source_run.run_id}")
         if tuple(local_task_ids) != source_run.task_ids:
             raise ValueError(f"evidence task order mismatch for run {source_run.run_id}")
+        local_maintenance_rounds: list[int] = []
+        for record_index, record in enumerate(
+            source_run.maintenance_records,
+            start=1,
+        ):
+            item = _build_maintenance_record(
+                source_run,
+                record_index,
+                record,
+                prior_episode_ids=tuple(item.episode_id for item in episodes),
+                memory_root=memory_root,
+                snapshots=snapshots,
+            )
+            maintenance.append(item)
+            local_maintenance_rounds.append(item.maintenance_round)
+        if tuple(local_maintenance_rounds) != tuple(
+            source_run.summary["maintenance_rounds_executed"]
+        ):
+            raise ValueError(
+                f"evidence maintenance rounds mismatch for run {source_run.run_id}"
+            )
 
     return EvidenceLedger(
         memory_generation=source_runs.memory_generation,
@@ -210,7 +235,131 @@ def build_evidence(
         memory_namespace=source_runs.memory_namespace,
         source_run_ids=tuple(run.run_id for run in source_runs.runs),
         episodes=tuple(episodes),
-        maintenance=(),
+        maintenance=tuple(maintenance),
+    )
+
+
+def _build_maintenance_record(
+    source_run: SourceRun,
+    record_index: int,
+    record: Mapping[str, Any],
+    *,
+    prior_episode_ids: tuple[str, ...],
+    memory_root: Path,
+    snapshots: dict[tuple[Path, str], ReadOnlyMemoryRepository],
+) -> MaintenanceEvidence:
+    record_hash = _nonblank(record, "record_sha256", "maintenance record")
+    if not _SHA256.fullmatch(record_hash) or record_hash != maintenance_record_sha256(
+        record
+    ):
+        raise ValueError("maintenance record hash mismatch")
+    maintenance_round = record.get("maintenance_round")
+    trigger_task_index = record.get("trigger_task_index")
+    period = record.get("period")
+    expected_trigger = source_run.summary["completed_train_tasks_after"]
+    if type(maintenance_round) is not int or maintenance_round <= 0:
+        raise ValueError("maintenance round must be positive")
+    if trigger_task_index != expected_trigger:
+        raise ValueError("maintenance trigger task index mismatch")
+    if type(period) is not int or period <= 0:
+        raise ValueError("maintenance period is invalid")
+    if maintenance_round > trigger_task_index // period:
+        raise ValueError("maintenance round does not match trigger task index")
+
+    snapshot_id = _nonblank(record, "memory_snapshot_id", "maintenance record")
+    snapshot = _snapshot(memory_root, snapshot_id, snapshots)
+    diagnostics = record.get("diagnostics")
+    if not isinstance(diagnostics, Mapping) or set(diagnostics) != {
+        "trajectory",
+        "tip",
+        "skill",
+        "tool",
+    }:
+        raise ValueError("maintenance diagnostics must contain exactly four tiers")
+    public_repository: list[PublicMemoryEvidence] = []
+    repository_state: list[MaintenanceMemoryEvidence] = []
+    for tier in MemoryTier:
+        tier_payload = diagnostics[tier.value]
+        if not isinstance(tier_payload, Mapping):
+            raise ValueError("maintenance tier diagnostics must be an object")
+        items = _list_of_mappings(tier_payload.get("items"), "maintenance items")
+        for raw in items:
+            public = PublicMemoryEvidence.model_validate(raw)
+            if public.tier != tier:
+                raise ValueError(f"maintenance public tier mismatch: {public.id}")
+            memory_item = snapshot.get(public.id)
+            if memory_item is None:
+                raise ValueError(
+                    f"maintenance memory missing from snapshot: {public.id}"
+                )
+            content_matches = public.content == memory_item.content or (
+                0 < len(public.content) <= MAX_DIAGNOSTIC_CONTENT_CHARS
+                and memory_item.content.startswith(public.content)
+            )
+            if (
+                memory_item.tier != public.tier
+                or not content_matches
+                or memory_item.version != public.version
+                or memory_item.status != public.status
+            ):
+                raise ValueError(f"maintenance public memory mismatch: {public.id}")
+            public_repository.append(public)
+            repository_state.append(
+                MaintenanceMemoryEvidence(
+                    id=memory_item.id,
+                    tier=memory_item.tier,
+                    content=memory_item.content,
+                    version=memory_item.version,
+                    status=memory_item.status,
+                    usage_count=memory_item.usage_count,
+                    success_count=memory_item.success_count,
+                    last_used=memory_item.last_used,
+                    embedding=memory_item.embedding,
+                    embedding_model_revision=memory_item.embedding_model_revision,
+                )
+            )
+
+    commands = _list_of_mappings(record.get("commands"), "maintenance commands")
+    try:
+        decision = MaintenanceDecision.model_validate({"commands": commands})
+    except ValueError as error:
+        raise ValueError("maintenance commands are invalid") from error
+    expected_looked_up, expected_created, expected_updated = _maintenance_result_ids(
+        snapshot,
+        decision,
+        maintenance_round=maintenance_round,
+    )
+    looked_up_ids = _string_tuple(record.get("looked_up_ids"), "looked_up_ids")
+    created_ids = _string_tuple(record.get("created_ids"), "created_ids")
+    updated_ids = _string_tuple(record.get("updated_ids"), "updated_ids")
+    if (
+        looked_up_ids != expected_looked_up
+        or created_ids != expected_created
+        or updated_ids != expected_updated
+    ):
+        raise ValueError("maintenance commit result does not match proposed commands")
+
+    return MaintenanceEvidence(
+        maintenance_id=(
+            f"{source_run.run_id}:maintenance-round-{maintenance_round}"
+        ),
+        run_id=source_run.run_id,
+        source_record_index=record_index,
+        source_record_sha256=record_hash,
+        memory_generation=source_run.run["memory"]["generation"],
+        maintenance_round=maintenance_round,
+        trigger_task_index=trigger_task_index,
+        period=period,
+        memory_snapshot_id=snapshot_id,
+        prior_episode_ids=prior_episode_ids,
+        public_repository=tuple(public_repository),
+        repository_state=tuple(repository_state),
+        commands=tuple(
+            command.model_dump(mode="json") for command in decision.commands
+        ),
+        looked_up_ids=looked_up_ids,
+        created_ids=created_ids,
+        updated_ids=updated_ids,
     )
 
 
@@ -524,6 +673,88 @@ def _runtime_step_text(value: Any) -> str | None:
     """Reproduce the runtime payload's normalize, bound, then revalidate order."""
     normalized = str(value).strip()[:500].strip()
     return normalized or None
+
+
+def _maintenance_result_ids(
+    snapshot: ReadOnlyMemoryRepository,
+    decision: MaintenanceDecision,
+    *,
+    maintenance_round: int,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    has_lookup = any(
+        isinstance(command, LookupCommand) for command in decision.commands
+    )
+    has_write = any(
+        not isinstance(command, LookupCommand) for command in decision.commands
+    )
+    if has_lookup and has_write:
+        raise ValueError("maintenance lookup commands cannot be mixed with writes")
+    state = {
+        item.id: [item.tier, item.status]
+        for item in snapshot.list(status=None)
+    }
+    looked_up: list[str] = []
+    created: list[str] = []
+    updated: list[str] = []
+    for command in decision.commands:
+        if isinstance(command, LookupCommand):
+            for memory_id in command.memory_ids:
+                tier_status = state.get(memory_id)
+                if tier_status is None or tier_status[1] != MemoryStatus.ACTIVE:
+                    raise ValueError(
+                        f"maintenance lookup references inactive Memory: {memory_id}"
+                    )
+                looked_up.append(memory_id)
+        elif isinstance(command, DeleteCommand):
+            if command.updated_round != maintenance_round:
+                raise ValueError("maintenance command round mismatch")
+            for memory_id in command.memory_ids:
+                tier_status = state.get(memory_id)
+                if tier_status is None or tier_status[1] != MemoryStatus.ACTIVE:
+                    raise ValueError(
+                        f"maintenance delete references inactive Memory: {memory_id}"
+                    )
+                tier_status[1] = MemoryStatus.RETIRED
+                _append_once(updated, memory_id)
+        elif isinstance(command, MergeCommand):
+            if command.updated_round != maintenance_round:
+                raise ValueError("maintenance command round mismatch")
+            sources: list[list[Any]] = []
+            for memory_id in command.source_ids:
+                tier_status = state.get(memory_id)
+                if tier_status is None or tier_status[1] != MemoryStatus.ACTIVE:
+                    raise ValueError(
+                        f"maintenance merge references inactive Memory: {memory_id}"
+                    )
+                sources.append(tier_status)
+            tiers = {source[0] for source in sources}
+            if len(tiers) != 1:
+                raise ValueError("maintenance merge crosses Memory tiers")
+            tier = next(iter(tiers))
+            target_id = stable_memory_id(tier, command.content)
+            if target_id in state:
+                raise ValueError(
+                    f"maintenance merge target already exists: {target_id}"
+                )
+            state[target_id] = [tier, MemoryStatus.ACTIVE]
+            created.append(target_id)
+            for memory_id, source in zip(
+                command.source_ids,
+                sources,
+                strict=True,
+            ):
+                source[1] = MemoryStatus.RETIRED
+                _append_once(updated, memory_id)
+        else:
+            raise TypeError(
+                f"unsupported maintenance command: {type(command).__name__}"
+            )
+    return tuple(looked_up), tuple(created), tuple(updated)
+
+
+def _append_once(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
 
 
 def _snapshot(

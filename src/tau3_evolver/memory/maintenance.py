@@ -216,6 +216,7 @@ def run_due_maintenance(
     tip_capacity: int = 240,
     similarity_threshold: float = 0.92,
     priority_pair_limit: int = 24,
+    maintenance_round: int | None = None,
 ) -> MaintenanceResult:
     if type(completed_train_tasks) is not int or completed_train_tasks < 0:
         raise ValueError("completed_train_tasks must be a non-negative integer")
@@ -223,6 +224,15 @@ def run_due_maintenance(
         raise ValueError("period must be a positive integer")
     if context.split != "train" or context.mode != "train":
         raise ValueError("maintenance requires train split and train mode")
+    latest_round = completed_train_tasks // period
+    if maintenance_round is None:
+        maintenance_round = latest_round
+    elif (
+        type(maintenance_round) is not int
+        or maintenance_round <= 0
+        or maintenance_round > latest_round
+    ):
+        raise ValueError("maintenance_round must be due at the current task count")
     return _run_due_maintenance(
         completed_tasks=completed_train_tasks,
         period=period,
@@ -233,7 +243,38 @@ def run_due_maintenance(
         tip_capacity=tip_capacity,
         similarity_threshold=similarity_threshold,
         priority_pair_limit=priority_pair_limit,
+        maintenance_round=maintenance_round,
     )
+
+
+def due_maintenance_rounds(
+    *,
+    completed_train_tasks: int,
+    period: int,
+    repository: MemoryRepository,
+) -> tuple[int, ...]:
+    """Return every overdue round in execution order at a Batch boundary."""
+    if type(completed_train_tasks) is not int or completed_train_tasks < 0:
+        raise ValueError("completed_train_tasks must be a non-negative integer")
+    if type(period) is not int or period <= 0:
+        raise ValueError("period must be a positive integer")
+    if not isinstance(repository, MemoryRepository) or repository.is_read_only:
+        raise TypeError("maintenance requires a mutable MemoryRepository")
+    latest_round = completed_train_tasks // period
+    if latest_round == 0:
+        return ()
+    scheduler_lock = reentrant_process_lock(
+        repository.root,
+        namespace=_LOCK_NAMESPACE,
+    )
+    with scheduler_lock:
+        state = _load_state(repository.root / _STATE_FILENAME, latest_round)
+        completed = set(state.completed_rounds)
+        return tuple(
+            round_number
+            for round_number in range(1, latest_round + 1)
+            if round_number not in completed
+        )
 
 
 def _run_due_maintenance(
@@ -247,11 +288,11 @@ def _run_due_maintenance(
     tip_capacity: int = 240,
     similarity_threshold: float = 0.92,
     priority_pair_limit: int = 24,
+    maintenance_round: int,
 ) -> MaintenanceResult:
     if not isinstance(repository, MemoryRepository) or repository.is_read_only:
         raise TypeError("maintenance requires a mutable MemoryRepository")
 
-    maintenance_round = completed_tasks // period
     state_path = repository.root / _STATE_FILENAME
     scheduler_lock = reentrant_process_lock(
         repository.root,

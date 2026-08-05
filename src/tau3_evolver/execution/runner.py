@@ -70,7 +70,7 @@ def execute(request: ExecutionRequest) -> BatchResult:
         run_dir / "run.json",
         {
             "run_id": request.run_id,
-            "status": "failed" if result.failures else "completed",
+            "status": "completed" if result.successful else "failed",
             "execution": {
                 "benchmark": prepared.name,
                 "mode": request.mode.value,
@@ -101,6 +101,11 @@ def execute(request: ExecutionRequest) -> BatchResult:
                 "output_snapshot_id": result.output_memory_snapshot_id,
                 "cross_domain": request.is_cross_domain_memory(
                     prepared.default_memory_namespace
+                ),
+                "maintenance": (
+                    asdict(result.maintenance)
+                    if result.maintenance is not None
+                    else None
                 ),
             },
             "config": config.model_dump(mode="json"),

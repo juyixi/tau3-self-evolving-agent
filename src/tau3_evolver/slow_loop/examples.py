@@ -378,7 +378,7 @@ def build_maintenance_examples(
             "maintenance_round": maintenance.maintenance_round,
             "trigger_task_index": maintenance.trigger_task_index,
             "memory_snapshot_id": maintenance.memory_snapshot_id,
-            "source_event_sha256": maintenance.source_event_sha256,
+            "source_record_sha256": maintenance.source_record_sha256,
             "sample_unit": "maintenance_round",
         }
         examples.append(

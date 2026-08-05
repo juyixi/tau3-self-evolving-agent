@@ -9,6 +9,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
+from tau3_evolver.artifacts.maintenance import (
+    MAINTENANCE_RECORD_SCHEMA_VERSION,
+    maintenance_record_sha256,
+)
 from tau3_evolver.artifacts.jsonl import iter_jsonl_objects
 from tau3_evolver.memory.paths import training_memory_root
 
@@ -62,6 +66,15 @@ class SourceRun:
             episode for episode in self.episodes if episode["status"] == "failed"
         )
         memory = self.run["memory"]
+        maintenance = memory.get("maintenance")
+        if isinstance(maintenance, Mapping):
+            records = maintenance.get("records", ())
+            completed_before = maintenance["completed_train_tasks_before"]
+            completed_after = maintenance["completed_train_tasks_after"]
+        else:
+            records = ()
+            completed_before = self.task_offset
+            completed_after = self.task_offset + len(self.episodes)
         return MappingProxyType(
             {
                 "episode_count": len(completed),
@@ -72,11 +85,20 @@ class SourceRun:
                 "total_terminal_reward": sum(
                     float(item["outcome"]["final_reward"]) for item in completed
                 ),
-                "maintenance_rounds_executed": (),
-                "completed_train_tasks_before": self.task_offset,
-                "completed_train_tasks_after": self.task_offset + len(self.episodes),
+                "maintenance_rounds_executed": tuple(
+                    record["maintenance_round"] for record in records
+                ),
+                "completed_train_tasks_before": completed_before,
+                "completed_train_tasks_after": completed_after,
             }
         )
+
+    @property
+    def maintenance_records(self) -> tuple[Mapping[str, Any], ...]:
+        maintenance = self.run["memory"].get("maintenance")
+        if not isinstance(maintenance, Mapping):
+            return ()
+        return tuple(maintenance.get("records", ()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +279,7 @@ def _validate_run(
         source_namespace != destination_namespace
     ):
         raise ValueError(f"source run cross-domain flag is inconsistent: {path}")
+    _validate_maintenance(memory, episode_count=len(episodes), path=path)
 
     _validate_episode_artifact(run, episodes, episodes_path=episodes_path)
     task_ids = [episode.get("task_id") for episode in episodes]
@@ -353,6 +376,79 @@ def _validate_snapshots(run: Mapping[str, Any], *, project_root: Path) -> None:
     output_root = training_memory_root(output_namespace, root=project_root)
     _require_snapshot(input_root, memory["input_snapshot_id"])
     _require_snapshot(output_root, memory["output_snapshot_id"])
+    maintenance = memory.get("maintenance")
+    if isinstance(maintenance, Mapping):
+        for record in maintenance.get("records", ()):
+            _require_snapshot(output_root, record["memory_snapshot_id"])
+
+
+def _validate_maintenance(
+    memory: Mapping[str, Any],
+    *,
+    episode_count: int,
+    path: Path,
+) -> None:
+    maintenance = memory.get("maintenance")
+    if maintenance is None:
+        return
+    if not isinstance(maintenance, Mapping) or set(maintenance) != {
+        "period",
+        "completed_train_tasks_before",
+        "completed_train_tasks_after",
+        "records",
+        "failures",
+    }:
+        raise ValueError(f"source maintenance summary is invalid: {path}")
+    period = maintenance.get("period")
+    before = maintenance.get("completed_train_tasks_before")
+    after = maintenance.get("completed_train_tasks_after")
+    records = maintenance.get("records")
+    failures = maintenance.get("failures")
+    if type(period) is not int or period <= 0:
+        raise ValueError(f"source maintenance period is invalid: {path}")
+    if (
+        not _is_nonnegative_int(before)
+        or not _is_nonnegative_int(after)
+        or after - before != episode_count
+    ):
+        raise ValueError(f"source maintenance task range is invalid: {path}")
+    if not isinstance(records, list) or not isinstance(failures, list):
+        raise ValueError(f"source maintenance records are invalid: {path}")
+    if failures:
+        raise ValueError(f"completed source run contains maintenance failures: {path}")
+
+    rounds: list[int] = []
+    for record in records:
+        if not isinstance(record, Mapping) or set(record) != {
+            "schema_version",
+            "maintenance_round",
+            "trigger_task_index",
+            "period",
+            "memory_snapshot_id",
+            "diagnostics",
+            "commands",
+            "looked_up_ids",
+            "created_ids",
+            "updated_ids",
+            "record_sha256",
+        }:
+            raise ValueError(f"source maintenance record is invalid: {path}")
+        round_number = record.get("maintenance_round")
+        trigger = record.get("trigger_task_index")
+        if (
+            record.get("schema_version") != MAINTENANCE_RECORD_SCHEMA_VERSION
+            or type(round_number) is not int
+            or round_number <= 0
+            or type(trigger) is not int
+            or trigger != after
+            or record.get("period") != period
+            or round_number > trigger // period
+            or record.get("record_sha256") != maintenance_record_sha256(record)
+        ):
+            raise ValueError(f"source maintenance provenance is invalid: {path}")
+        rounds.append(round_number)
+    if rounds != sorted(set(rounds)):
+        raise ValueError(f"source maintenance rounds are invalid: {path}")
 
 
 def _validate_run_set(runs: tuple[SourceRun, ...]) -> None:

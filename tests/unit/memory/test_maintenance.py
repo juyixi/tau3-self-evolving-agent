@@ -15,6 +15,7 @@ from tau3_evolver.memory.maintenance import (
     _bind_command_round,
     MaintenanceState,
     bounded_diagnostics,
+    due_maintenance_rounds,
     run_due_maintenance,
 )
 from tau3_evolver.agent.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
@@ -197,6 +198,34 @@ def _seed(repository: MemoryRepository):
 
 def _state_payload(repository: MemoryRepository) -> dict[str, Any]:
     return json.loads((repository.root / "maintenance_state.json").read_text("utf-8"))
+
+
+def test_lists_and_executes_every_overdue_round_at_one_batch_boundary(
+    tmp_path: Path,
+) -> None:
+    repository = MemoryRepository(tmp_path / "memory")
+
+    assert due_maintenance_rounds(
+        completed_train_tasks=95,
+        period=30,
+        repository=repository,
+    ) == (1, 2, 3)
+
+    result = run_due_maintenance(
+        completed_train_tasks=95,
+        period=30,
+        repository=repository,
+        policy=ScriptedPolicy(['{"commands":[]}']),
+        context=_context(EventCollector()),
+        maintenance_round=1,
+    )
+
+    assert result.maintenance_round == 1
+    assert due_maintenance_rounds(
+        completed_train_tasks=95,
+        period=30,
+        repository=repository,
+    ) == (2, 3)
 
 
 @pytest.mark.parametrize("completed_train_tasks", range(30))

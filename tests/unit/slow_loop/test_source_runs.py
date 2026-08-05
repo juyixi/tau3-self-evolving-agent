@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from tau3_evolver.artifacts.jsonl import JsonlWriter
+from tau3_evolver.artifacts.maintenance import build_completed_maintenance
 from tau3_evolver.artifacts.run import episode_artifact_metadata, write_run_record
 from tau3_evolver.memory.paths import training_memory_root
 from tau3_evolver.memory.repository import MemoryRepository
@@ -18,11 +19,52 @@ def _source_run(
     benchmark: str = "retail",
     run_id: str = "run-1",
     task_scope: str = "full",
+    with_maintenance: bool = False,
 ) -> Path:
     namespace = f"{benchmark}-debug" if task_scope == "debug" else benchmark
     memory = MemoryRepository(training_memory_root(namespace, root=root))
     input_snapshot = memory.snapshot().memory_snapshot_id
     output_snapshot = memory.snapshot().memory_snapshot_id
+    maintenance = None
+    if with_maintenance:
+        common = {
+            "task_id": "maintenance-round-1",
+            "memory_snapshot_id": output_snapshot,
+            "maintenance_round": 1,
+        }
+        record = build_completed_maintenance(
+            (
+                {
+                    **common,
+                    "event_type": "MaintenanceStarted",
+                    "completed_train_tasks": 1,
+                    "period": 1,
+                    "diagnostics": {
+                        tier: {"items": []}
+                        for tier in ("trajectory", "tip", "skill", "tool")
+                    },
+                },
+                {
+                    **common,
+                    "event_type": "MaintenanceProposed",
+                    "commands": [],
+                },
+                {
+                    **common,
+                    "event_type": "MaintenanceCommitted",
+                    "looked_up_ids": [],
+                    "created_ids": [],
+                    "updated_ids": [],
+                },
+            )
+        )
+        maintenance = {
+            "period": 1,
+            "completed_train_tasks_before": 0,
+            "completed_train_tasks_after": 1,
+            "records": [record],
+            "failures": [],
+        }
     run = root / "runs" / run_id
     run.mkdir(parents=True)
     episodes = run / "episodes.jsonl"
@@ -108,6 +150,7 @@ def _source_run(
                 "input_snapshot_id": input_snapshot,
                 "output_snapshot_id": output_snapshot,
                 "cross_domain": False,
+                "maintenance": maintenance,
             },
             "config": {},
             "summary": {
@@ -149,6 +192,29 @@ def test_loads_generic_two_file_source_run(tmp_path: Path, benchmark: str) -> No
     )
     assert evidence.episodes[0].source_episode_row == 1
     assert len(evidence.episodes[0].source_episode_sha256) == 64
+
+
+def test_builds_maintainer_evidence_from_compressed_run_record(
+    tmp_path: Path,
+) -> None:
+    run = _source_run(tmp_path, with_maintenance=True)
+    loaded = load_source_runs(
+        (run,),
+        benchmark="retail",
+        official_train_task_ids=("1",),
+        split_hash="split-hash",
+        project_root=tmp_path,
+    )
+
+    evidence = build_evidence(
+        loaded,
+        memory_root=training_memory_root("retail", root=tmp_path),
+    )
+
+    assert loaded.runs[0].summary["maintenance_rounds_executed"] == (1,)
+    assert len(evidence.maintenance) == 1
+    assert evidence.maintenance[0].source_record_index == 1
+    assert evidence.maintenance[0].trigger_task_index == 1
 
 
 def test_rejects_source_for_a_different_benchmark(tmp_path: Path) -> None:

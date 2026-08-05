@@ -10,6 +10,7 @@ import uuid
 
 from tau3_evolver.agent.factory import create_tau3_agent_factory
 from tau3_evolver.agent.lifecycle import PendingEpisode, finalize_simulation
+from tau3_evolver.artifacts.maintenance import build_completed_maintenance
 from tau3_evolver.artifacts.episodes import (
     build_completed_episode,
     build_failed_episode,
@@ -18,9 +19,18 @@ from tau3_evolver.benchmarks.types import PreparedBenchmark
 from tau3_evolver.config import ProjectConfig
 from tau3_evolver.execution.events import BufferedEventWriter, EventWriter, ExecutionContext
 from tau3_evolver.execution.request import ExecutionRequest
-from tau3_evolver.execution.results import BatchFailure, BatchResult
+from tau3_evolver.execution.results import (
+    BatchFailure,
+    BatchResult,
+    MaintenanceBatchResult,
+    MaintenanceFailure,
+)
 from tau3_evolver.agent.policy import FastLoopConfig, FastLoopPolicy
-from tau3_evolver.memory.batches import commit_batch_state
+from tau3_evolver.memory.batches import commit_batch_state, load_batch_state
+from tau3_evolver.memory.maintenance import (
+    due_maintenance_rounds,
+    run_due_maintenance,
+)
 from tau3_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_evolver.memory.repository import MemoryRepository
 from tau3_evolver.memory.retrieval import Retriever
@@ -163,7 +173,14 @@ def run_batch(
         pending.append((episode, buffer))
 
     output_snapshot_id: str | None = None
+    maintenance_batch: MaintenanceBatchResult | None = None
     if failures and destination_repository is not None:
+        batch_state = load_batch_state(destination_repository.root)
+        maintenance_batch = MaintenanceBatchResult(
+            period=project_config.memory.maintenance_period,
+            completed_train_tasks_before=batch_state.completed_tasks,
+            completed_train_tasks_after=batch_state.completed_tasks,
+        )
         for episode, buffer in pending:
             buffer.append(
                 _context(
@@ -184,6 +201,7 @@ def run_batch(
                 )
             )
     elif destination_repository is not None:
+        batch_state = load_batch_state(destination_repository.root)
         commits = commit_pending_experience(
             destination_repository,
             [episode for episode, _ in pending],
@@ -217,6 +235,59 @@ def run_batch(
                 ),
                 buffer,
             )
+        completed_train_tasks = batch_state.completed_tasks + len(pending)
+        maintenance_records: list[Mapping[str, Any]] = []
+        maintenance_failures: list[MaintenanceFailure] = []
+        if request.capabilities.can_run_maintenance:
+            due_rounds = due_maintenance_rounds(
+                completed_train_tasks=completed_train_tasks,
+                period=project_config.memory.maintenance_period,
+                repository=destination_repository,
+            )
+            for maintenance_round in due_rounds:
+                maintenance_buffer = BufferedEventWriter()
+                maintenance_snapshot = destination_repository.snapshot()
+                maintenance_context = _context(
+                    prepared=prepared,
+                    request=request,
+                    source_namespace=source_namespace,
+                    input_memory_snapshot_id=maintenance_snapshot.memory_snapshot_id,
+                    cross_domain=cross_domain,
+                    memory_generation=memory_generation,
+                    seed=project_config.execution.seed,
+                    writer=maintenance_buffer,
+                    project_config=project_config,
+                )
+                try:
+                    maintenance = run_due_maintenance(
+                        completed_train_tasks=completed_train_tasks,
+                        period=project_config.memory.maintenance_period,
+                        repository=destination_repository,
+                        policy=policy,
+                        context=maintenance_context,
+                        tip_capacity=fast_loop_config.maintenance_tip_capacity,
+                        similarity_threshold=(
+                            fast_loop_config.maintenance_similarity_threshold
+                        ),
+                        priority_pair_limit=(
+                            fast_loop_config.maintenance_priority_pair_limit
+                        ),
+                        maintenance_round=maintenance_round,
+                    )
+                    if maintenance.executed:
+                        maintenance_records.append(
+                            build_completed_maintenance(maintenance_buffer.events)
+                        )
+                except Exception as error:
+                    maintenance_failures.append(
+                        MaintenanceFailure(
+                            maintenance_round=maintenance_round,
+                            trigger_task_index=completed_train_tasks,
+                            error_type=type(error).__name__,
+                        )
+                    )
+                    break
+
         snapshot = destination_repository.snapshot()
         output_snapshot_id = snapshot.memory_snapshot_id
         commit_batch_state(
@@ -224,6 +295,13 @@ def run_batch(
             expected_generation=memory_generation,
             completed_tasks=len(pending),
             snapshot_id=output_snapshot_id,
+        )
+        maintenance_batch = MaintenanceBatchResult(
+            period=project_config.memory.maintenance_period,
+            completed_train_tasks_before=batch_state.completed_tasks,
+            completed_train_tasks_after=completed_train_tasks,
+            records=tuple(maintenance_records),
+            failures=tuple(maintenance_failures),
         )
 
     if episode_writer is not None:
@@ -250,6 +328,7 @@ def run_batch(
         failures=tuple(failures),
         input_memory_snapshot_id=input_memory_snapshot_id,
         output_memory_snapshot_id=output_snapshot_id,
+        maintenance=maintenance_batch,
     )
 
 
