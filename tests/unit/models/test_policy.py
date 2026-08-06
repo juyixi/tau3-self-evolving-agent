@@ -7,14 +7,14 @@ from typing import Any
 import pytest
 
 from tau3_evolver.models import openai_compatible
-from tau3_evolver.agent.decisions import (
+from tau3_evolver.fast_loop.contracts import (
     ActionDecision,
     MaintenanceDecision,
     SelectionDecision,
     WriteDecision,
     parse_decision,
 )
-from tau3_evolver.agent.prompts import (
+from tau3_evolver.fast_loop.prompts import (
     LifecyclePrompt,
     build_action_prompt,
     build_maintenance_prompt,
@@ -24,8 +24,8 @@ from tau3_evolver.agent.prompts import (
 from tau3_evolver.models.openai_compatible import (
     OpenAICompatibleFastLoopPolicy,
     OpenAICompatibleHttpClient,
-    OpenAICompatibleQwenPolicy,
 )
+from tau3_evolver.benchmarks.tau2.baseline_policy import OpenAICompatibleQwenPolicy
 from tau3_evolver.models.policy import DecisionRequest, DecisionResponse
 from tests.support.policy import ScriptedPolicy
 
@@ -458,7 +458,7 @@ def test_fast_loop_action_converts_valid_assistant_text_to_canonical_action_json
     assert response.raw_output == '{"action":"I can help with that."}'
 
 
-def test_fast_loop_malformed_action_is_returned_invalid_for_runner_repair() -> None:
+def test_fast_loop_preserves_action_for_benchmark_adapter_validation() -> None:
     malformed = '{"name":"find_order","arguments":"order_id=123"}'
     client = FakeClient(_completion(malformed))
     policy = OpenAICompatibleFastLoopPolicy(
@@ -470,13 +470,12 @@ def test_fast_loop_malformed_action_is_returned_invalid_for_runner_repair() -> N
     response = policy.generate(_lifecycle_prompts()["action"])
     parsed = parse_decision(response.raw_output, ActionDecision)
 
-    assert json.loads(response.raw_output) == {"invalid_action_output": malformed}
-    assert parsed.decision is None
-    assert parsed.error is not None
+    assert json.loads(response.raw_output) == {"action": malformed}
+    assert parsed.decision == ActionDecision(action=malformed)
     assert len(client.calls) == 1
 
 
-def test_fast_loop_codec_failure_cannot_bypass_repair_with_action_decision_shell() -> None:
+def test_fast_loop_does_not_interpret_benchmark_specific_action_syntax() -> None:
     nested_invalid_action = _canonical(
         {"action": _canonical({"name": "unknown", "arguments": {}})}
     )
@@ -488,10 +487,10 @@ def test_fast_loop_codec_failure_cannot_bypass_repair_with_action_decision_shell
 
     response = policy.generate(_lifecycle_prompts()["action"])
 
-    assert json.loads(response.raw_output) == {
-        "invalid_action_output": nested_invalid_action
-    }
-    assert parse_decision(response.raw_output, ActionDecision).decision is None
+    assert json.loads(response.raw_output) == {"action": nested_invalid_action}
+    assert parse_decision(response.raw_output, ActionDecision).decision == (
+        ActionDecision(action=nested_invalid_action)
+    )
 
 
 @pytest.mark.parametrize(

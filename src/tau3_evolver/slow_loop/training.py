@@ -16,7 +16,7 @@ import torch
 from torch import Tensor, nn
 
 from tau3_evolver.config import RolloutConfig, TrainingConfig
-from tau3_evolver.artifacts.jsonl import JsonlWriter, iter_jsonl_objects
+from tau3_evolver.persistence.jsonl import JsonlWriter, iter_jsonl_objects
 from tau3_evolver.models.lora import save_adapter_checkpoint
 from tau3_evolver.slow_loop.alignment import (
     AlignedOPDBatch,

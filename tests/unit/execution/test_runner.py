@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import tau3_evolver.execution.runner as runner
-from tau3_evolver.agent.policy import EpisodeResult
+from tau3_evolver.fast_loop.contracts import EpisodeResult
 from tau3_evolver.benchmarks.types import PreparedBenchmark, RuntimeOrigin
 from tau3_evolver.config import load_config
 from tau3_evolver.execution.request import ExecutionRequest
@@ -30,7 +30,10 @@ def test_execute_publishes_only_run_and_episode_artifacts(
         runtime_origin=RuntimeOrigin(Path("tau2"), "0.1", "c" * 40),
         default_memory_namespace="retail",
     )
-    definition = SimpleNamespace(prepare=lambda _config, _mode: prepared)
+    definition = SimpleNamespace(
+        credential_requirements=lambda _config: (),
+        prepare=lambda _config, _mode: prepared,
+    )
     monkeypatch.setattr(
         runner.benchmark_registry,
         "resolve",
@@ -114,7 +117,7 @@ def test_execute_rejects_missing_online_credentials_before_benchmark_prepare(
 ) -> None:
     prepared = False
 
-    def resolve_benchmark(_benchmark: str):
+    def prepare_benchmark(_config, _mode):
         nonlocal prepared
         prepared = True
         raise AssertionError("benchmark preparation must not start")
@@ -125,7 +128,16 @@ def test_execute_rejects_missing_online_credentials_before_benchmark_prepare(
         "load_project_environment",
         lambda: SimpleNamespace(path=tmp_path / ".env", loaded_names=()),
     )
-    monkeypatch.setattr(runner.benchmark_registry, "resolve", resolve_benchmark)
+    monkeypatch.setattr(
+        runner.benchmark_registry,
+        "resolve",
+        lambda _benchmark: SimpleNamespace(
+            credential_requirements=lambda config: (
+                (config.tau2.user_api_key_env, "test benchmark"),
+            ),
+            prepare=prepare_benchmark,
+        ),
+    )
     request = ExecutionRequest(
         benchmark="retail",
         mode="train",
@@ -146,19 +158,13 @@ def test_debug_selects_one_concurrency_sized_stable_batch() -> None:
     tasks = tuple(SimpleNamespace(id=f"task-{index}") for index in range(5))
     prepared = PreparedBenchmark(
         name="retail",
-        task_type=SimpleNamespace,
-        task_catalog=tasks,
         task_ids=tuple(task.id for task in tasks),
         split_name="train",
         split_hash="s" * 64,
-        environment_factory=lambda: None,
-        runtime=None,
-        run_domain=lambda config: config,
-        text_run_config_type=dict,
-        registry=object(),
         runtime_origin=RuntimeOrigin(Path("tau2"), None, None),
         default_memory_namespace="retail",
         task_group="retail",
+        executor=SimpleNamespace(),
     )
     request = ExecutionRequest(
         benchmark="retail",
@@ -176,5 +182,5 @@ def test_debug_selects_one_concurrency_sized_stable_batch() -> None:
     )
 
     assert selected.task_ids == ("task-0", "task-1", "task-2")
-    assert selected.task_catalog == tasks[:3]
     assert selected.split_hash == prepared.split_hash
+    assert selected.executor is prepared.executor

@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any
 
-from tau3_evolver.artifacts.sanitize import sanitize_artifact_data
+from tau3_evolver.security.redaction import redact_public_data
 
 
 MAINTENANCE_RECORD_SCHEMA_VERSION = 1
@@ -41,7 +41,7 @@ def build_completed_maintenance(
     if not isinstance(snapshot_id, str) or not snapshot_id:
         raise ValueError("maintenance snapshot ID must be non-blank")
 
-    record = sanitize_artifact_data(
+    record = redact_public_data(
         {
             "schema_version": MAINTENANCE_RECORD_SCHEMA_VERSION,
             "maintenance_round": maintenance_round,

@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from tau3_evolver.agent.policy import EpisodeResult
+from tau3_evolver.fast_loop.contracts import EpisodeResult
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from tau3_evolver.benchmarks import benchmark_registry
 from tau3_evolver.cli import parse_execution_request
 
 
@@ -25,7 +26,7 @@ def test_run_cli_builds_typed_request_without_task_or_iteration_fields() -> None
         ]
     )
 
-    assert request.benchmark.value == "airline"
+    assert request.benchmark == "airline"
     assert request.mode.value == "test"
     assert request.memory_source == "retail"
     assert request.memory_snapshot == Path("snapshots/s1")
@@ -69,6 +70,24 @@ def test_run_cli_accepts_debug_train_subset() -> None:
     assert request.debug
     assert request.capabilities.can_write_memory
     assert request.resolved_memory_source("airline") == "airline-debug"
+
+
+@pytest.mark.parametrize("benchmark", benchmark_registry.names())
+def test_run_cli_accepts_every_registered_benchmark(benchmark: str) -> None:
+    request = parse_execution_request(
+        [
+            "run",
+            "--benchmark",
+            benchmark,
+            "--mode",
+            "train",
+            "--no-memory",
+            "--run-id",
+            f"{benchmark}-run",
+        ]
+    )
+
+    assert request.benchmark == benchmark
 
 
 @pytest.mark.parametrize("argument", ("--task-id", "--iteration", "--all-tasks"))

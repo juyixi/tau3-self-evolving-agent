@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-import tempfile
 from typing import Iterable
 
-from tau3_evolver.artifacts.jsonl import _fsync_directory
 from tau3_evolver.memory.types import MemoryItem, MemoryTier, stable_memory_id
+from tau3_evolver.persistence.atomic import write_bytes_atomic
 
 
 MEMORY_SCHEMA_VERSION = 1
@@ -74,20 +72,3 @@ def serialize_tier(tier: MemoryTier, items: Iterable[MemoryItem]) -> bytes:
     except (TypeError, ValueError) as error:
         raise TypeError("memory store must be JSON serializable") from error
     return f"{text}\n".encode("utf-8")
-
-
-def write_bytes_atomic(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent, delete=False) as destination:
-            temporary_path = Path(destination.name)
-            destination.write(content)
-            destination.flush()
-            os.fsync(destination.fileno())
-        os.replace(temporary_path, path)
-        temporary_path = None
-        _fsync_directory(path.parent)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)

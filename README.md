@@ -224,9 +224,9 @@ Airline 的端到端接入与实验协议维护在 [`airline` 分支](https://gi
 
 | 模块 | 职责 |
 | --- | --- |
-| `src/tau3_evolver/agent/` | Tau3 Agent、工具 Schema、决策和任务生命周期 |
+| `src/tau3_evolver/fast_loop/` | Selection、Decision、Write、Maintenance 与共享 Prompt/Contract |
 | `src/tau3_evolver/artifacts/` | `run.json`、`episodes.jsonl` 与凭证清理 |
-| `src/tau3_evolver/benchmarks/` | Retail / Airline 静态定义、Registry 与 Tau2 Runtime |
+| `src/tau3_evolver/benchmarks/` | 静态定义、Registry、Executor 与 Tau2 Agent Adapter |
 | `src/tau3_evolver/execution/` | 类型化请求、权限、`run_domain` 批量执行与两文件落盘 |
 | `src/tau3_evolver/memory/` | 四层 Memory、Embedding、MMR 检索、Snapshot 与原子写入 |
 | `src/tau3_evolver/evaluation/` | 运行级指标和受控实验对比 |

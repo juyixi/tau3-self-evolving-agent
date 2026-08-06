@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from tau3_evolver.artifacts.jsonl import iter_jsonl_objects
+from tau3_evolver.persistence.jsonl import iter_jsonl_objects
 from tau3_evolver.slow_loop.attribution import MemoryScore, compute_memory_scores
 from tau3_evolver.slow_loop.evidence import (
     EpisodeEvidence,

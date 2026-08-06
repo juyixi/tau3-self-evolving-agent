@@ -8,8 +8,9 @@ from threading import Event
 
 import pytest
 
-from tau3_evolver.artifacts.jsonl import JsonlWriter
-from tau3_evolver.memory.embeddings import CachedEmbeddingProvider, JsonEmbeddingCache
+from tau3_evolver.persistence.jsonl import JsonlWriter
+from tau3_evolver.models.embeddings import CachedEmbeddingProvider
+from tau3_evolver.persistence.embedding_cache import JsonEmbeddingCache
 from tau3_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_evolver.memory.repository import MemoryRepository
 from tau3_evolver.memory.retrieval import Retriever

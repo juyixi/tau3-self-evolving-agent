@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from tau3_evolver.benchmarks import benchmark_registry
 from tau3_evolver.execution.request import ExecutionRequest
 
 
@@ -14,7 +15,11 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     run = commands.add_parser("run", help="Run one benchmark task set.")
-    run.add_argument("--benchmark", choices=("retail", "airline"), required=True)
+    run.add_argument(
+        "--benchmark",
+        choices=benchmark_registry.names(),
+        required=True,
+    )
     run.add_argument("--mode", choices=("train", "test"), required=True)
     run.add_argument(
         "--debug",
@@ -29,7 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--memory-source")
     run.add_argument("--memory-snapshot", type=Path)
     run.add_argument("--checkpoint", type=Path)
-    run.add_argument("--config", dest="config_path", type=Path, default=Path("configs/default.yaml"))
+    run.add_argument(
+        "--config",
+        dest="config_path",
+        type=Path,
+        default=Path("configs/default.yaml"),
+    )
     run.add_argument("--set", dest="overrides", action="append", default=[])
     run.add_argument("--run-id", required=True)
     run.add_argument("--output-root", type=Path, default=Path("runs"))

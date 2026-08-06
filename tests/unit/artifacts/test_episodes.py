@@ -1,6 +1,8 @@
-from tau3_evolver.agent.policy import EpisodeResult
+from tau3_evolver.artifacts.contracts import (
+    CompletedEpisodeProjection,
+    FailedEpisodeProjection,
+)
 from tau3_evolver.artifacts.episodes import build_completed_episode, build_failed_episode
-from tau3_evolver.execution.results import BatchFailure
 
 
 def test_collapses_internal_events_without_repeating_selected_candidate() -> None:
@@ -75,13 +77,11 @@ def test_collapses_internal_events_without_repeating_selected_candidate() -> Non
             "replayed_memory_ids": [],
         },
     ]
-    result = EpisodeResult(
+    result = CompletedEpisodeProjection(
         task_id="task-1",
         final_reward=1.0,
         steps=1,
         terminal_evaluation={"reward": 1.0},
-        selected_memory_ids=("tip-1",),
-        written_memory_ids=("tip-2",),
         truncated=False,
     )
 
@@ -96,7 +96,7 @@ def test_collapses_internal_events_without_repeating_selected_candidate() -> Non
 
 def test_failure_is_one_bounded_episode_row() -> None:
     row = build_failed_episode(
-        BatchFailure("task-1", "run_domain", "Timeout"),
+        FailedEpisodeProjection("task-1", "run_domain", "Timeout"),
         task_group="retail",
         seed=3,
     )

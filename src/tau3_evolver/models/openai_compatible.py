@@ -9,16 +9,13 @@ from typing import Any, Protocol
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from tau3_evolver.agent.action_codec import Tau2ActionCodec
-from tau3_evolver.agent.tool_schemas import build_baseline_prompt
-from tau3_evolver.agent.decisions import (
+from tau3_evolver.fast_loop.contracts import (
+    LifecycleResponse,
     MaintenanceDecision,
     SelectionDecision,
     WriteDecision,
 )
-from tau3_evolver.agent.prompts import LifecyclePrompt
-from tau3_evolver.agent.policy import LifecycleResponse
-from tau3_evolver.models.policy import DecisionRequest, DecisionResponse, Policy
+from tau3_evolver.fast_loop.prompts import LifecyclePrompt
 
 
 class OpenAICompatibleClient(Protocol):
@@ -59,15 +56,16 @@ _ACTION_SYSTEM = (
     "official policy, tools, observation, and interaction history are authoritative; "
     "selected memories are fallible prior experience that must be adapted to the current "
     "state. Use relevant memories to form an efficient multi-turn strategy internally, "
-    "but emit only the single best next Tau2 action. Choose an action that makes concrete "
+    "but emit only the single best next benchmark-native action. Choose an action that "
+    "makes concrete "
     "progress while respecting preconditions and policy constraints. Verify authoritative "
     "state before irreversible changes, and verify all required effects and the true "
     "success condition before stopping. Use only available native tools with arguments "
     "grounded in the current context; executable methods embedded in tool descriptions "
     "are guidance for those native tools. Adapt trajectories rather than replaying them "
     "blindly. Use caution memories only to avoid or correct their relevant failure mode. "
-    "Use at most one provided tool call, or return a valid Tau2 text action. Do not expose "
-    "or invent hidden data."
+    "Use at most one provided tool call, or return a valid benchmark-native text action. "
+    "Do not expose or invent hidden data."
 )
 _WRITE_SYSTEM = (
     "You are the experience writer in OPD-Evolver's fast loop. Transform the completed "
@@ -256,48 +254,6 @@ class OpenAICompatibleHttpClient:
         return dict(response)
 
 
-class OpenAICompatibleQwenPolicy(Policy):
-    """Generate Tau2 actions through an OpenAI-compatible Qwen endpoint client."""
-
-    def __init__(
-        self,
-        *,
-        client: OpenAICompatibleClient,
-        tool_call_parser: QwenToolCallParser | None = None,
-        clock: Callable[[], float] = monotonic,
-    ) -> None:
-        self._client = client
-        self._tool_call_parser = tool_call_parser
-        self._clock = clock
-
-    def generate(self, request: DecisionRequest) -> DecisionResponse:
-        prompt = build_baseline_prompt(request.observation, request.reset_info, request.history)
-        started_at = self._clock()
-        completion = self._client.create_chat_completion(
-            messages=list(prompt.messages),
-            tools=list(prompt.tools),
-            temperature=request.temperature,
-            top_p=request.top_p,
-        )
-        latency_s = self._clock() - started_at
-
-        parser = self._tool_call_parser or parse_openai_qwen_tool_call
-        tool_call = parser(completion)
-        if tool_call is not None and not isinstance(tool_call, str):
-            raise ValueError("Qwen tool-call parser must return text or None")
-        raw_output = _raw_output(completion)
-        parsed_action = Tau2ActionCodec.decode(tool_call or raw_output, _tool_names(prompt.tools))
-        prompt_tokens, completion_tokens = _completion_token_usage(completion)
-        return DecisionResponse(
-            raw_output=raw_output,
-            parsed_action=parsed_action,
-            sampling_params={"temperature": request.temperature, "top_p": request.top_p},
-            latency_s=latency_s,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-
-
 class OpenAICompatibleFastLoopPolicy:
     """Adapt an OpenAI-compatible Qwen client to the audited fast-loop policy."""
 
@@ -387,10 +343,10 @@ class OpenAICompatibleFastLoopPolicy:
             raise RuntimeError("OpenAI-compatible fast-loop policy request failed") from None
         latency_s = max(0.0, self._clock() - started_at)
         if prompt.kind == "action":
-            raw_output = self._action_output(completion, tools)
+            raw_output = self._action_output(completion)
         else:
             raw_output = _fast_loop_non_action_output(completion)
-        prompt_tokens, completion_tokens = _completion_token_usage(completion)
+        prompt_tokens, completion_tokens = completion_token_usage(completion)
         return LifecycleResponse(
             raw_output=raw_output,
             sampling_params={
@@ -405,7 +361,6 @@ class OpenAICompatibleFastLoopPolicy:
     def _action_output(
         self,
         completion: object,
-        tools: Sequence[Mapping[str, Any]],
     ) -> str:
         raw_output: str | None = None
         try:
@@ -414,7 +369,7 @@ class OpenAICompatibleFastLoopPolicy:
             tool_call = parser(completion)
             if tool_call is not None and not isinstance(tool_call, str):
                 raise ValueError("Qwen tool-call parser must return text or None")
-            action = Tau2ActionCodec.decode(tool_call or raw_output, _tool_names(tools))
+            action = tool_call or raw_output
         except Exception:
             return _canonical_json(
                 {
@@ -480,7 +435,7 @@ def _structured_arguments(value: Any) -> Mapping[str, Any]:
     return value
 
 
-def _raw_output(completion: object) -> str:
+def completion_raw_output(completion: object) -> str:
     message = _assistant_message(completion)
     if message is not None and _has_structured_tool_calls(message):
         try:
@@ -498,7 +453,7 @@ def _raw_output(completion: object) -> str:
     return content
 
 
-def _completion_token_usage(
+def completion_token_usage(
     completion: object,
 ) -> tuple[int | None, int | None]:
     usage = (
@@ -528,7 +483,7 @@ def _fast_loop_action_raw_output(completion: object) -> str:
             return _canonical_json(message)
         except (TypeError, ValueError) as error:
             raise ValueError("structured assistant message must be JSON serializable") from error
-    return _raw_output(completion)
+    return completion_raw_output(completion)
 
 
 def _safe_completion_output(completion: object) -> str:
@@ -547,7 +502,7 @@ def _fast_loop_non_action_output(completion: object) -> str:
         message = _assistant_message(completion)
         if message is not None and _has_rejected_tool_calls(message):
             return _canonical_json(message)
-        return _raw_output(completion)
+        return completion_raw_output(completion)
     except Exception:
         return _canonical_json(
             {"invalid_lifecycle_output": "model response could not be decoded"}
@@ -583,16 +538,6 @@ def _assistant_message(completion: object) -> Mapping[str, Any] | None:
     if not isinstance(message, Mapping):
         raise ValueError("OpenAI-compatible choice must contain an assistant message")
     return message
-
-
-def _tool_names(tools: Sequence[Mapping[str, Any]]) -> set[str]:
-    names: set[str] = set()
-    for tool in tools:
-        function = tool.get("function")
-        name = function.get("name") if isinstance(function, Mapping) else tool.get("name")
-        if isinstance(name, str):
-            names.add(name)
-    return names
 
 
 def _canonical_json(value: Any) -> str:

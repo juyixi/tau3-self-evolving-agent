@@ -1,6 +1,5 @@
 """Four-tier JSON memory storage and retrieval."""
 
-from tau3_evolver.memory.embeddings import build_embedding_provider
 from tau3_evolver.memory.factory import open_training_memory
 from tau3_evolver.memory.repository import MemoryRepository
 from tau3_evolver.memory.read_only import ReadOnlyMemoryRepository
@@ -20,6 +19,5 @@ __all__ = [
     "MemorySnapshot",
     "MemoryStatus",
     "MemoryTier",
-    "build_embedding_provider",
     "open_training_memory",
 ]

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from tau3_evolver.benchmarks import benchmark_registry
 from tau3_evolver.config import load_config
 from tau3_evolver.execution.environment import (
     OnlineCredentialError,
@@ -61,10 +62,13 @@ def test_rejects_ambiguous_env_without_echoing_its_value(tmp_path: Path) -> None
 
 def test_preflight_covers_user_and_nl_assertion_consumers() -> None:
     config = load_config(PROJECT_ROOT / "configs" / "default.yaml")
+    requirements = benchmark_registry.resolve("retail").credential_requirements(
+        config
+    )
 
     with pytest.raises(OnlineCredentialError) as error:
         preflight_online_credentials(
-            config,
+            requirements,
             environ={},
             env_path=PROJECT_ROOT / ".env",
         )
@@ -75,6 +79,6 @@ def test_preflight_covers_user_and_nl_assertion_consumers() -> None:
     assert "Tau2 NL assertion evaluator" in message
 
     preflight_online_credentials(
-        config,
+        requirements,
         environ={"DEEPSEEK_API_KEY": "literal-test-secret"},
     )

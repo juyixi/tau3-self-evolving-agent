@@ -3,13 +3,15 @@ from types import SimpleNamespace
 from typing import Any
 
 import tau3_evolver.execution.batch as batch_module
-from tau3_evolver.agent.lifecycle import PendingEpisode
+import tau3_evolver.benchmarks.tau2.executor as tau2_executor_module
+from tau3_evolver.fast_loop.contracts import EpisodeResult, PendingEpisode
+from tau3_evolver.fast_loop.settings import FastLoopConfig
+from tau3_evolver.benchmarks.tau2.executor import Tau2BenchmarkExecutor
 from tau3_evolver.benchmarks.types import PreparedBenchmark, RuntimeOrigin
 from tau3_evolver.config import load_config
 from tau3_evolver.execution import ExecutionRequest
-from tau3_evolver.agent.policy import EpisodeResult, FastLoopConfig
-from tau3_evolver.memory.batches import load_batch_state
-from tau3_evolver.memory.maintenance import MaintenanceResult
+from tau3_evolver.execution.memory_state import load_memory_state
+from tau3_evolver.fast_loop.maintenance import MaintenanceResult
 from tau3_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_evolver.memory.repository import MemoryRepository
 
@@ -87,20 +89,23 @@ def test_run_domain_receives_registered_tau3_factory_and_official_task_set(
     )
     prepared = PreparedBenchmark(
         name="airline",
-        task_type=SimpleNamespace,
-        task_catalog=(SimpleNamespace(id="a"), SimpleNamespace(id="b")),
         task_ids=("a", "b"),
         split_name="test",
         split_hash="split-hash",
-        environment_factory=lambda: None,
-        runtime=runtime,
-        run_domain=run_domain,
-        text_run_config_type=_TextConfig,
-        registry=registry,
         runtime_origin=RuntimeOrigin(Path("tau2"), "1", "commit"),
         default_memory_namespace="airline",
         task_group="airline",
-        evaluator_binding=received_evaluator_config.append,
+        executor=Tau2BenchmarkExecutor(
+            benchmark_name="airline",
+            split_name="test",
+            runtime=SimpleNamespace(
+                **runtime.__dict__,
+                registry=registry,
+                run_domain=run_domain,
+                text_run_config_type=_TextConfig,
+            ),
+            evaluator_binding=received_evaluator_config.append,
+        ),
     )
     request = ExecutionRequest(
         benchmark="airline",
@@ -125,7 +130,11 @@ def test_run_domain_receives_registered_tau3_factory_and_official_task_set(
             proposals=(),
         )
 
-    monkeypatch.setattr(batch_module, "finalize_simulation", finalize_simulation)
+    monkeypatch.setattr(
+        tau2_executor_module,
+        "finalize_simulation",
+        finalize_simulation,
+    )
     result = batch_module.run_batch(
         prepared=prepared,
         request=request,
@@ -179,19 +188,22 @@ def test_successful_train_batch_runs_due_maintenance_before_output_snapshot(
     )
     prepared = PreparedBenchmark(
         name="retail",
-        task_type=SimpleNamespace,
-        task_catalog=(SimpleNamespace(id="a"), SimpleNamespace(id="b")),
         task_ids=("a", "b"),
         split_name="train",
         split_hash="split-hash",
-        environment_factory=lambda: None,
-        runtime=runtime,
-        run_domain=run_domain,
-        text_run_config_type=_TextConfig,
-        registry=registry,
         runtime_origin=RuntimeOrigin(Path("tau2"), "1", "commit"),
         default_memory_namespace="retail",
         task_group="retail",
+        executor=Tau2BenchmarkExecutor(
+            benchmark_name="retail",
+            split_name="train",
+            runtime=SimpleNamespace(
+                **runtime.__dict__,
+                registry=registry,
+                run_domain=run_domain,
+                text_run_config_type=_TextConfig,
+            ),
+        ),
     )
     request = ExecutionRequest(
         benchmark="retail",
@@ -261,7 +273,11 @@ def test_successful_train_batch_runs_due_maintenance_before_output_snapshot(
         )
         return MaintenanceResult(due=True, executed=True, maintenance_round=1)
 
-    monkeypatch.setattr(batch_module, "finalize_simulation", finalize_simulation)
+    monkeypatch.setattr(
+        tau2_executor_module,
+        "finalize_simulation",
+        finalize_simulation,
+    )
     monkeypatch.setattr(batch_module, "run_due_maintenance", run_due_maintenance)
     monkeypatch.setattr(
         batch_module,
@@ -316,4 +332,4 @@ def test_successful_train_batch_runs_due_maintenance_before_output_snapshot(
     assert failed.maintenance is not None
     assert failed.maintenance.failures[0].maintenance_round == 2
     assert failed.maintenance.failures[0].error_type == "RuntimeError"
-    assert load_batch_state(destination.root).completed_tasks == 4
+    assert load_memory_state(destination.root).completed_tasks == 4

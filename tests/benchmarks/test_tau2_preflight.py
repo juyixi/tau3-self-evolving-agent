@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
     os.environ.get("RUN_TAU2_INTEGRATION") != "1",
     reason="set RUN_TAU2_INTEGRATION=1 to run benchmark preflight",
 )
-@pytest.mark.parametrize("benchmark", ("retail", "airline"))
+@pytest.mark.parametrize("benchmark", benchmark_registry.names())
 def test_real_tau2_benchmark_preflight(benchmark: str) -> None:
     config = load_config(PROJECT_ROOT / "configs" / "default.yaml")
     config = config.model_copy(

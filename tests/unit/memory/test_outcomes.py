@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from tau3_evolver.fast_loop.outcomes import classify_episode_memory
 from tau3_evolver.memory.outcomes import (
     MemoryOutcomeClass,
     MemoryPolarity,
-    classify_episode_memory,
     memory_outcome_labels,
 )
 from tau3_evolver.memory.types import MemoryItem, MemoryTier

@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from tau3_evolver.agent.decisions import (
+from tau3_evolver.fast_loop.contracts import (
     WriteDecision,
     maintenance_command_schemas,
 )

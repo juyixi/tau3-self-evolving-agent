@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from tau3_evolver.artifacts.jsonl import JsonlWriter
 from tau3_evolver.artifacts.run import episode_artifact_metadata, write_run_record
-from tau3_evolver.artifacts.sanitize import sanitize_artifact_data
+from tau3_evolver.persistence.jsonl import JsonlWriter
+from tau3_evolver.security.redaction import redact_public_data
 
 
 def test_writes_immutable_run_record_with_sanitized_config(tmp_path: Path) -> None:
@@ -47,6 +47,6 @@ def test_episode_metadata_binds_path_bytes_rows_and_hash(tmp_path: Path) -> None
 
 
 def test_sanitizes_credential_bearing_urls() -> None:
-    assert sanitize_artifact_data(
+    assert redact_public_data(
         {"endpoint": "https://user:secret@example.test/v1?token=x"}
     ) == {"endpoint": "[REDACTED]"}

@@ -3,11 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import math
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from tau3_evolver.artifacts.jsonl import JsonlWriter
 from tau3_evolver.memory.embeddings import EmbeddingProvider, validate_embedding
 from tau3_evolver.memory.outcomes import is_retrieval_eligible
 from tau3_evolver.memory.repository import MemoryRepository
@@ -27,12 +26,18 @@ class MemoryCandidate(BaseModel):
     item: MemoryItem
 
 
+class RetrievalRecordSink(Protocol):
+    """Narrow optional sink for retrieval diagnostics."""
+
+    def append(self, record: dict[str, Any]) -> None: ...
+
+
 class Retriever:
     def __init__(
         self,
         provider: EmbeddingProvider,
         *,
-        candidate_writer: JsonlWriter | None = None,
+        candidate_writer: RetrievalRecordSink | None = None,
     ) -> None:
         self.provider = provider
         self.candidate_writer = candidate_writer

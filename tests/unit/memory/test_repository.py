@@ -12,6 +12,7 @@ import pytest
 from tau3_evolver.memory.repository import MemoryRepository
 from tau3_evolver.memory.types import MEMORY_TIERS, MemoryStatus, MemoryTier
 import tau3_evolver.memory.json_store as json_store
+import tau3_evolver.persistence.atomic as atomic
 
 
 def _add_memory_in_process(
@@ -346,7 +347,7 @@ def test_atomic_replace_failure_preserves_previous_store(
     def fail_replace(_source: str | Path, _target: str | Path) -> None:
         raise OSError("simulated replace failure")
 
-    monkeypatch.setattr(json_store.os, "replace", fail_replace)
+    monkeypatch.setattr(atomic.os, "replace", fail_replace)
 
     with pytest.raises(OSError, match="simulated replace failure"):
         repository.add(

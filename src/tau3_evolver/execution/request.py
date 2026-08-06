@@ -1,25 +1,15 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from pathlib import Path
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from tau3_evolver.execution.capabilities import ExecutionCapabilities
+from tau3_evolver.execution_mode import ExecutionMode
 
 
 _SAFE_SLUG = re.compile(r"^[a-z0-9_-]+$")
-
-
-class BenchmarkName(StrEnum):
-    RETAIL = "retail"
-    AIRLINE = "airline"
-
-
-class ExecutionMode(StrEnum):
-    TRAIN = "train"
-    TEST = "test"
 
 
 class ExecutionRequest(BaseModel):
@@ -27,7 +17,7 @@ class ExecutionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    benchmark: BenchmarkName
+    benchmark: str
     mode: ExecutionMode
     debug: bool = False
     memory_enabled: bool
@@ -38,6 +28,12 @@ class ExecutionRequest(BaseModel):
     overrides: tuple[str, ...] = ()
     run_id: str
     output_root: Path = Path("runs")
+
+    @field_validator("benchmark")
+    @classmethod
+    def benchmark_must_be_a_safe_registry_name(cls, value: str) -> str:
+        cls._validate_slug(value, field="benchmark")
+        return value
 
     @model_validator(mode="after")
     def validate_execution_combination(self) -> "ExecutionRequest":
@@ -55,17 +51,6 @@ class ExecutionRequest(BaseModel):
             and self.memory_snapshot is None
         ):
             raise ValueError("test mode with memory requires a frozen memory_snapshot")
-        if (
-            self.mode is ExecutionMode.TRAIN
-            and self.memory_enabled
-            and self.memory_source is not None
-            and self.memory_source
-            != self.destination_memory_namespace(self.benchmark.value)
-            and self.memory_snapshot is None
-        ):
-            raise ValueError(
-                "cross-domain training requires an explicit frozen memory_snapshot"
-            )
         return self
 
     @property
@@ -77,13 +62,7 @@ class ExecutionRequest(BaseModel):
             can_run_maintenance=is_train and self.memory_enabled,
             can_use_train_split=is_train,
             can_use_test_split=not is_train,
-            source_memory_read_only=(
-                not is_train
-                or (
-                    self.memory_source is not None
-                    and self.memory_source != self.benchmark.value
-                )
-            ),
+            source_memory_read_only=self.memory_enabled,
         )
 
     def resolved_memory_source(self, default_namespace: str) -> str | None:

@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from tau3_evolver.agent.lifecycle import PendingEpisode
+from tau3_evolver.fast_loop.contracts import PendingEpisode
 from tau3_evolver.execution.batch import commit_pending_experience
-from tau3_evolver.agent.policy import EpisodeResult
+from tau3_evolver.fast_loop.contracts import EpisodeResult
 from tau3_evolver.memory.repository import MemoryRepository
 from tau3_evolver.memory.types import MemoryTier, stable_memory_id
 

@@ -6,12 +6,12 @@ from pathlib import Path
 import pytest
 
 from tau3_evolver.config import MemoryConfig
-from tau3_evolver.memory.embeddings import (
+from tau3_evolver.models.embeddings import (
     CachedEmbeddingProvider,
-    JsonEmbeddingCache,
     LocalQwenEmbeddingProvider,
     build_embedding_provider,
 )
+from tau3_evolver.persistence.embedding_cache import JsonEmbeddingCache
 
 
 class CountingProvider:

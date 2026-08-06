@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tau3_evolver.memory.paths import (
+from tau3_evolver.persistence.layout import (
     evaluation_quarantine_root,
     project_root,
     training_memory_root,

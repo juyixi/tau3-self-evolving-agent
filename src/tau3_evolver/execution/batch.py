@@ -2,18 +2,22 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path
-import tempfile
-import threading
 from typing import Any
-import uuid
 
-from tau3_evolver.agent.factory import create_tau3_agent_factory
-from tau3_evolver.agent.lifecycle import PendingEpisode, finalize_simulation
+from tau3_evolver.fast_loop.contracts import FastLoopPolicy, PendingEpisode
+from tau3_evolver.fast_loop.settings import FastLoopConfig
 from tau3_evolver.artifacts.maintenance import build_completed_maintenance
+from tau3_evolver.artifacts.contracts import (
+    CompletedEpisodeProjection,
+    FailedEpisodeProjection,
+)
 from tau3_evolver.artifacts.episodes import (
     build_completed_episode,
     build_failed_episode,
+)
+from tau3_evolver.benchmarks.executor import (
+    BenchmarkAgentSpec,
+    BenchmarkExecutionRequest,
 )
 from tau3_evolver.benchmarks.types import PreparedBenchmark
 from tau3_evolver.config import ProjectConfig
@@ -25,18 +29,14 @@ from tau3_evolver.execution.results import (
     MaintenanceBatchResult,
     MaintenanceFailure,
 )
-from tau3_evolver.agent.policy import FastLoopConfig, FastLoopPolicy
-from tau3_evolver.memory.batches import commit_batch_state, load_batch_state
-from tau3_evolver.memory.maintenance import (
+from tau3_evolver.execution.memory_state import commit_memory_state, load_memory_state
+from tau3_evolver.fast_loop.maintenance import (
     due_maintenance_rounds,
     run_due_maintenance,
 )
 from tau3_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_evolver.memory.repository import MemoryRepository
 from tau3_evolver.memory.retrieval import Retriever
-
-
-_REGISTRY_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,117 +65,55 @@ def run_batch(
     cross_domain = request.is_cross_domain_memory(
         prepared.default_memory_namespace
     )
-    factory = create_tau3_agent_factory(
-        runtime=_runtime_view(prepared),
-        benchmark=prepared.name,
-        policy=policy,
-        repository=repository,
-        retriever=retriever,
-        config=fast_loop_config,
-        memory_source_namespace=source_namespace,
-        cross_domain_memory=cross_domain,
-    )
-    agent_name = f"tau3_agent_{uuid.uuid4().hex}"
-    with _REGISTRY_LOCK:
-        if prepared.evaluator_binding is not None:
-            prepared.evaluator_binding(project_config.evaluation.nl_assertions)
-        prepared.registry.register_agent_factory(factory, agent_name)
-        try:
-            with tempfile.TemporaryDirectory(prefix="tau3-evolver-tau2-") as working:
-                tau2_results = prepared.run_domain(
-                    prepared.text_run_config_type(
-                        domain=prepared.name,
-                        task_set_name=prepared.name,
-                        task_split_name=prepared.split_name,
-                        task_ids=list(prepared.task_ids),
-                        agent=agent_name,
-                        llm_agent=project_config.model.base_model,
-                        llm_args_agent={},
-                        user="user_simulator",
-                        llm_user=project_config.tau2.user_llm,
-                        llm_args_user=dict(project_config.tau2.user_llm_args),
-                        num_trials=1,
-                        max_steps=max(4, project_config.rollout.max_episode_steps * 4),
-                        max_errors=10,
-                        save_to=str((Path(working) / "tau2").resolve()),
-                        max_concurrency=min(
-                            project_config.execution.max_concurrency,
-                            len(prepared.task_ids),
-                        ),
-                        seed=project_config.execution.seed,
-                        log_level="WARNING",
-                        max_retries=2,
-                        retry_delay=1.0,
-                        auto_resume=False,
-                        hallucination_retries=0,
-                        enforce_communication_protocol=True,
-                    )
-                )
-        finally:
-            prepared.registry._agent_factories.pop(agent_name, None)
-
-    simulations = {str(item.task_id): item for item in tau2_results.simulations}
-    missing = set(prepared.task_ids) - set(simulations)
-    if missing:
-        raise RuntimeError(f"Tau2 run_domain omitted task results: {sorted(missing)}")
-
-    pending: list[tuple[PendingEpisode, BufferedEventWriter]] = []
-    failures: list[BatchFailure] = []
-    failure_seeds: dict[str, int] = {}
-    for task_id in prepared.task_ids:
-        simulation = simulations[task_id]
-        seed = int(
-            simulation.seed
-            if getattr(simulation, "seed", None) is not None
-            else project_config.execution.seed
-        )
-        if _is_infrastructure_failure(simulation):
-            failures.append(
-                BatchFailure(
-                    task_id=task_id,
-                    stage="run_domain",
-                    error_type=_simulation_error_type(simulation),
-                )
-            )
-            failure_seeds[task_id] = seed
-            continue
-        buffer = BufferedEventWriter()
-        context = _context(
-            prepared=prepared,
-            request=request,
-            source_namespace=source_namespace,
-            input_memory_snapshot_id=input_memory_snapshot_id,
-            cross_domain=cross_domain,
-            memory_generation=memory_generation,
-            seed=seed,
-            writer=buffer,
+    execution = prepared.executor.execute(
+        BenchmarkExecutionRequest(
+            task_ids=prepared.task_ids,
             project_config=project_config,
-        )
-        try:
-            episode = finalize_simulation(
-                runtime=_runtime_view(prepared),
-                simulation=simulation,
+            agent=BenchmarkAgentSpec(
                 policy=policy,
+                repository=repository,
+                retriever=retriever,
                 config=fast_loop_config,
-                context=context,
+                memory_source_namespace=source_namespace,
+                cross_domain_memory=cross_domain,
                 propose_experience=request.capabilities.can_write_memory,
-            )
-        except Exception as error:
-            failures.append(
-                BatchFailure(
-                    task_id=task_id,
-                    stage="finalize",
-                    error_type=type(error).__name__,
-                )
-            )
-            failure_seeds[task_id] = seed
-            continue
-        pending.append((episode, buffer))
+            ),
+            context_factory=lambda seed, writer: _context(
+                prepared=prepared,
+                request=request,
+                source_namespace=source_namespace,
+                input_memory_snapshot_id=input_memory_snapshot_id,
+                cross_domain=cross_domain,
+                memory_generation=memory_generation,
+                seed=seed,
+                writer=writer,
+                project_config=project_config,
+            ),
+        )
+    )
+    pending: list[tuple[PendingEpisode, BufferedEventWriter]] = [
+        (
+            item.episode,
+            BufferedEventWriter(events=list(item.events)),
+        )
+        for item in execution.episodes
+    ]
+    failures = [
+        BatchFailure(
+            task_id=failure.task_id,
+            stage=failure.stage,
+            error_type=failure.error_type,
+        )
+        for failure in execution.failures
+    ]
+    failure_seeds = {
+        failure.task_id: failure.seed for failure in execution.failures
+    }
 
     output_snapshot_id: str | None = None
     maintenance_batch: MaintenanceBatchResult | None = None
     if failures and destination_repository is not None:
-        batch_state = load_batch_state(destination_repository.root)
+        batch_state = load_memory_state(destination_repository.root)
         maintenance_batch = MaintenanceBatchResult(
             period=project_config.memory.maintenance_period,
             completed_train_tasks_before=batch_state.completed_tasks,
@@ -201,7 +139,7 @@ def run_batch(
                 )
             )
     elif destination_repository is not None:
-        batch_state = load_batch_state(destination_repository.root)
+        batch_state = load_memory_state(destination_repository.root)
         commits = commit_pending_experience(
             destination_repository,
             [episode for episode, _ in pending],
@@ -290,7 +228,7 @@ def run_batch(
 
         snapshot = destination_repository.snapshot()
         output_snapshot_id = snapshot.memory_snapshot_id
-        commit_batch_state(
+        commit_memory_state(
             destination_repository.root,
             expected_generation=memory_generation,
             completed_tasks=len(pending),
@@ -313,12 +251,36 @@ def run_batch(
             if task_id in completed:
                 episode, buffer = completed[task_id]
                 episode_writer.append(
-                    build_completed_episode(episode.result, buffer.events)
+                    build_completed_episode(
+                        CompletedEpisodeProjection(
+                            task_id=episode.result.task_id,
+                            final_reward=episode.result.final_reward,
+                            steps=episode.result.steps,
+                            terminal_evaluation=episode.result.terminal_evaluation,
+                            truncated=episode.result.truncated,
+                            project_truncated=episode.result.project_truncated,
+                            parse_error_count=episode.result.parse_error_count,
+                            response_parse_error_count=(
+                                episode.result.response_parse_error_count
+                            ),
+                            response_count=episode.result.response_count,
+                            agent_prompt_tokens=episode.result.agent_prompt_tokens,
+                            agent_completion_tokens=(
+                                episode.result.agent_completion_tokens
+                            ),
+                        ),
+                        buffer.events,
+                    )
                 )
             else:
+                failure = failed[task_id]
                 episode_writer.append(
                     build_failed_episode(
-                        failed[task_id],
+                        FailedEpisodeProjection(
+                            task_id=failure.task_id,
+                            stage=failure.stage,
+                            error_type=failure.error_type,
+                        ),
                         task_group=prepared.task_group,
                         seed=failure_seeds[task_id],
                     )
@@ -448,23 +410,3 @@ def _context(
         event_writer=writer,
         default_task_group=prepared.task_group,
     )
-
-
-def _runtime_view(prepared: PreparedBenchmark) -> Any:
-    runtime = prepared.runtime
-    if runtime is None:
-        raise RuntimeError("PreparedBenchmark has no bound Tau2 runtime")
-    return runtime
-
-
-def _is_infrastructure_failure(simulation: Any) -> bool:
-    reason = getattr(getattr(simulation, "termination_reason", None), "value", None)
-    reason = str(reason or getattr(simulation, "termination_reason", ""))
-    return reason == "infrastructure_error" or simulation.reward_info is None
-
-
-def _simulation_error_type(simulation: Any) -> str:
-    info = getattr(simulation, "info", None)
-    if isinstance(info, Mapping) and isinstance(info.get("error_type"), str):
-        return info["error_type"]
-    return "InfrastructureError"

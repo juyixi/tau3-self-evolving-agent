@@ -30,9 +30,11 @@ class BenchmarkRegistry:
 
 
 def _default_registry() -> BenchmarkRegistry:
-    from tau3_evolver.benchmarks.tau2.definitions import AIRLINE, RETAIL
+    from tau3_evolver.benchmarks.tau2.definitions import (
+        TAU2_BENCHMARK_DEFINITIONS,
+    )
 
-    return BenchmarkRegistry((RETAIL, AIRLINE))
+    return BenchmarkRegistry(TAU2_BENCHMARK_DEFINITIONS)
 
 
 benchmark_registry = _default_registry()

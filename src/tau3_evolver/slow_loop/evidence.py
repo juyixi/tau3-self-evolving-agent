@@ -10,11 +10,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from tau3_evolver.agent.decisions import MaintenanceDecision
-from tau3_evolver.agent.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
+from tau3_evolver.fast_loop.contracts import MaintenanceDecision
+from tau3_evolver.fast_loop.prompts import MAX_DIAGNOSTIC_CONTENT_CHARS
 from tau3_evolver.artifacts.maintenance import maintenance_record_sha256
 from tau3_evolver.memory.operations import DeleteCommand, LookupCommand, MergeCommand
-from tau3_evolver.memory.paths import training_memory_root
+from tau3_evolver.persistence.layout import training_memory_root
 from tau3_evolver.memory.read_only import ReadOnlyMemoryRepository
 from tau3_evolver.memory.tier_contracts import (
     TIER_SCHEMA_VERSION,

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from tau3_evolver.artifacts.jsonl import JsonlWriter, iter_jsonl_objects
-import tau3_evolver.artifacts.jsonl as jsonl
+from tau3_evolver.persistence.jsonl import JsonlWriter, iter_jsonl_objects
+import tau3_evolver.persistence.jsonl as jsonl
 
 
 def test_appends_one_canonical_json_object_per_durable_line(tmp_path: Path) -> None:
@@ -36,7 +36,7 @@ def test_best_effort_syncs_the_parent_directory_after_an_append(
     monkeypatch, tmp_path: Path
 ) -> None:
     synced: list[Path] = []
-    monkeypatch.setattr(jsonl, "_fsync_directory", synced.append)
+    monkeypatch.setattr(jsonl, "fsync_directory", synced.append)
 
     JsonlWriter(tmp_path / "events.jsonl").append({"event_type": "EpisodeStarted"})
 

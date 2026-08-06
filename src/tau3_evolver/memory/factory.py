@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tau3_evolver.memory.paths import training_memory_root
 from tau3_evolver.memory.repository import MemoryRepository
+from tau3_evolver.persistence.layout import training_memory_root
 
 
 def open_training_memory(

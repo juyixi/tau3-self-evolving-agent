@@ -1,1 +1,1 @@
-"""Evaluation integrations for the retail evolver."""
+"""Benchmark-independent evaluation and reporting utilities."""

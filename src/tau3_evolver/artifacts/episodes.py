@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from tau3_evolver.agent.policy import EpisodeResult
-from tau3_evolver.execution.results import BatchFailure
-from tau3_evolver.artifacts.sanitize import sanitize_artifact_data
+from tau3_evolver.artifacts.contracts import (
+    CompletedEpisodeProjection,
+    FailedEpisodeProjection,
+)
+from tau3_evolver.security.redaction import redact_public_data
 
 
 EPISODE_SCHEMA_VERSION = 1
@@ -31,7 +33,7 @@ _RUN_CONTEXT_FIELDS = frozenset(
 
 
 def build_completed_episode(
-    result: EpisodeResult,
+    result: CompletedEpisodeProjection,
     events: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Collapse one internal lifecycle into the canonical task-level artifact."""
@@ -98,16 +100,16 @@ def build_completed_episode(
         },
         "memory": memory,
     }
-    return sanitize_artifact_data(record)
+    return redact_public_data(record)
 
 
 def build_failed_episode(
-    failure: BatchFailure,
+    failure: FailedEpisodeProjection,
     *,
     task_group: str,
     seed: int,
 ) -> dict[str, Any]:
-    return sanitize_artifact_data(
+    return redact_public_data(
         {
             "schema_version": EPISODE_SCHEMA_VERSION,
             "task_id": failure.task_id,

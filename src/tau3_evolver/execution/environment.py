@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from ast import literal_eval
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Iterable, Mapping, MutableMapping
 from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
 
-from tau3_evolver.config import ProjectConfig
-from tau3_evolver.memory.paths import project_root
+from tau3_evolver.persistence.layout import project_root
 
 
 _ENVIRONMENT_VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -46,20 +45,13 @@ def load_project_environment(
 
 
 def preflight_online_credentials(
-    config: ProjectConfig,
+    requirements: Iterable[tuple[str, str]],
     *,
     environ: Mapping[str, str] | None = None,
     env_path: Path | None = None,
 ) -> None:
-    """Fail before Benchmark preparation when online evaluator credentials are absent."""
+    """Validate credential requirements declared by the selected Benchmark."""
     environment = os.environ if environ is None else environ
-    requirements = (
-        (config.tau2.user_api_key_env, "Tau2 user simulator"),
-        (
-            config.evaluation.nl_assertions.api_key_env,
-            "Tau2 NL assertion evaluator",
-        ),
-    )
     consumers_by_name: dict[str, list[str]] = {}
     for name, consumer in requirements:
         consumers_by_name.setdefault(name, []).append(consumer)

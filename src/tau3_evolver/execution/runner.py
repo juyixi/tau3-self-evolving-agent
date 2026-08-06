@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-from tau3_evolver.artifacts.jsonl import JsonlWriter, iter_jsonl_objects
 from tau3_evolver.artifacts.run import episode_artifact_metadata, write_run_record
 from tau3_evolver.benchmarks import PreparedBenchmark, benchmark_registry
 from tau3_evolver.config import ProjectConfig, load_config
@@ -18,23 +17,26 @@ from tau3_evolver.execution.environment import (
 from tau3_evolver.execution.request import ExecutionRequest
 from tau3_evolver.execution.results import BatchResult
 from tau3_evolver.evaluation.metrics import compute_reward_metrics
-from tau3_evolver.agent.policy import FastLoopConfig
-from tau3_evolver.memory.embeddings import build_embedding_provider
+from tau3_evolver.fast_loop.settings import FastLoopConfig
 from tau3_evolver.memory.retrieval import Retriever
-from tau3_evolver.memory.snapshots import resolve_memory
+from tau3_evolver.execution.memory_resolution import resolve_memory
 from tau3_evolver.models.openai_compatible import (
     OpenAICompatibleFastLoopPolicy,
     OpenAICompatibleHttpClient,
 )
+from tau3_evolver.models.embeddings import build_embedding_provider
+from tau3_evolver.persistence.jsonl import JsonlWriter, iter_jsonl_objects
 
 
 def execute(request: ExecutionRequest) -> BatchResult:
     environment = load_project_environment()
     config = load_config(request.config_path, request.overrides)
-    preflight_online_credentials(config, env_path=environment.path)
-    prepared = benchmark_registry.resolve(request.benchmark.value).prepare(
-        config, request.mode
+    definition = benchmark_registry.resolve(request.benchmark)
+    preflight_online_credentials(
+        definition.credential_requirements(config),
+        env_path=environment.path,
     )
+    prepared = definition.prepare(config, request.mode)
     prepared = _select_execution_tasks(prepared, request=request, config=config)
     run_dir = (request.output_root / request.run_id).resolve()
     if run_dir.exists():

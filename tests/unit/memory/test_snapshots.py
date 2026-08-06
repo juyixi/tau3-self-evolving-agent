@@ -1,29 +1,24 @@
 from pathlib import Path
 
+import pytest
+
 from tau3_evolver.benchmarks.types import PreparedBenchmark, RuntimeOrigin
 from tau3_evolver.execution import ExecutionRequest
-from tau3_evolver.memory.paths import training_memory_root
+from tau3_evolver.execution.memory_resolution import resolve_memory
 from tau3_evolver.memory.repository import MemoryRepository
-from tau3_evolver.memory.snapshots import resolve_memory
+from tau3_evolver.persistence.layout import training_memory_root
 
 
 def _prepared(name: str = "retail") -> PreparedBenchmark:
-    task = object()
     return PreparedBenchmark(
         name=name,
-        task_type=object,
-        task_catalog=(task,),
         task_ids=("1",),
         split_name="train",
         split_hash="hash",
-        environment_factory=lambda: None,
-        runtime=None,
-        run_domain=lambda config: config,
-        text_run_config_type=dict,
-        registry=object(),
         runtime_origin=RuntimeOrigin(Path("tau2"), None, None),
         default_memory_namespace=name,
         task_group=name,
+        executor=object(),
     )
 
 
@@ -107,3 +102,18 @@ def test_cross_domain_test_uses_foreign_snapshot_without_destination(
     assert resolved.destination is None
     assert resolved.destination_namespace is None
     assert not training_memory_root("airline", root=tmp_path).exists()
+
+
+def test_cross_domain_training_requires_a_frozen_source_snapshot(
+    tmp_path: Path,
+) -> None:
+    request = ExecutionRequest(
+        benchmark="airline",
+        mode="train",
+        memory_enabled=True,
+        memory_source="retail",
+        run_id="run-1",
+    )
+
+    with pytest.raises(ValueError, match="requires a frozen snapshot"):
+        resolve_memory(request, _prepared("airline"), root=tmp_path)

@@ -8,7 +8,7 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class DecisionRequest:
-    """Everything a rollout policy needs to make one Tau2 decision."""
+    """Everything a legacy rollout policy needs for one benchmark decision."""
 
     observation: str
     reset_info: Mapping[str, Any]
@@ -30,7 +30,7 @@ class DecisionResponse:
 
 
 class Policy(ABC):
-    """Generate one action from a Tau2 observation and reset contract."""
+    """Generate one action from a benchmark observation and reset contract."""
 
     @abstractmethod
     def generate(self, request: DecisionRequest) -> DecisionResponse:

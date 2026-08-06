@@ -4,11 +4,12 @@ from dataclasses import dataclass
 import hashlib
 import json
 
+from tau3_evolver.benchmarks.tau2.executor import Tau2BenchmarkExecutor
 from tau3_evolver.benchmarks.tau2.runtime import Tau2Runtime
+from tau3_evolver.benchmarks.tau2.assertions import bind_tau2_nl_assertions
 from tau3_evolver.benchmarks.types import PreparedBenchmark, RuntimeOrigin
 from tau3_evolver.config import ProjectConfig
-from tau3_evolver.evaluation.tau2_nl_assertions import bind_tau2_nl_assertions
-from tau3_evolver.execution.request import ExecutionMode
+from tau3_evolver.execution_mode import ExecutionMode
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +21,18 @@ class Tau2BenchmarkDefinition:
     task_group: str
     train_split: str = "train"
     test_split: str = "test"
+
+    def credential_requirements(
+        self,
+        config: ProjectConfig,
+    ) -> tuple[tuple[str, str], ...]:
+        return (
+            (config.tau2.user_api_key_env, "Tau2 user simulator"),
+            (
+                config.evaluation.nl_assertions.api_key_env,
+                "Tau2 NL assertion evaluator",
+            ),
+        )
 
     def prepare(
         self, config: ProjectConfig, mode: ExecutionMode
@@ -36,6 +49,19 @@ class Tau2BenchmarkDefinition:
                 f"Tau2 benchmark {self.name!r} has no {split_name!r} task split"
             )
         tasks = tuple(task_loader(split_name))
+        if not tasks:
+            raise RuntimeError(
+                f"Tau2 benchmark {self.name!r} has an empty {split_name!r} split"
+            )
+        if not all(isinstance(task, runtime.task_type) for task in tasks):
+            raise TypeError(
+                f"Tau2 benchmark {self.name!r} returned an unexpected task type"
+            )
+        environment_factory = runtime.registry.get_env_constructor(self.name)
+        if not callable(environment_factory):
+            raise RuntimeError(
+                f"Tau2 benchmark {self.name!r} has no environment constructor"
+            )
         task_ids = tuple(str(task.id) for task in tasks)
         expected_ids = tuple(str(task_id) for task_id in split_catalog[split_name])
         if task_ids != expected_ids:
@@ -48,16 +74,9 @@ class Tau2BenchmarkDefinition:
         ).hexdigest()
         return PreparedBenchmark(
             name=self.name,
-            task_type=runtime.task_type,
-            task_catalog=tasks,
             task_ids=task_ids,
             split_name=split_name,
             split_hash=split_hash,
-            environment_factory=runtime.registry.get_env_constructor(self.name),
-            runtime=runtime,
-            run_domain=runtime.run_domain,
-            text_run_config_type=runtime.text_run_config_type,
-            registry=runtime.registry,
             runtime_origin=RuntimeOrigin(
                 source_root=runtime.source_root,
                 package_version=runtime.package_version,
@@ -65,7 +84,12 @@ class Tau2BenchmarkDefinition:
             ),
             default_memory_namespace=self.default_memory_namespace,
             task_group=self.task_group,
-            evaluator_binding=bind_tau2_nl_assertions,
+            executor=Tau2BenchmarkExecutor(
+                benchmark_name=self.name,
+                split_name=split_name,
+                runtime=runtime,
+                evaluator_binding=bind_tau2_nl_assertions,
+            ),
         )
 
 
@@ -80,3 +104,5 @@ AIRLINE = Tau2BenchmarkDefinition(
     default_memory_namespace="airline",
     task_group="airline",
 )
+
+TAU2_BENCHMARK_DEFINITIONS = (RETAIL, AIRLINE)

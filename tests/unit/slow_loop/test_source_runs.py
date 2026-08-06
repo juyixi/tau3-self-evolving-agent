@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from tau3_evolver.artifacts.jsonl import JsonlWriter
+from tau3_evolver.persistence.jsonl import JsonlWriter
 from tau3_evolver.artifacts.maintenance import build_completed_maintenance
 from tau3_evolver.artifacts.run import episode_artifact_metadata, write_run_record
-from tau3_evolver.memory.paths import training_memory_root
 from tau3_evolver.memory.repository import MemoryRepository
+from tau3_evolver.persistence.layout import training_memory_root
 from tau3_evolver.slow_loop.evidence import build_evidence
 from tau3_evolver.slow_loop.source_runs import load_source_runs
 

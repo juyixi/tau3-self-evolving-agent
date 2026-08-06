@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
+from tau3_evolver.benchmarks.executor import BenchmarkExecutor
 from tau3_evolver.config import ProjectConfig
-from tau3_evolver.execution.request import ExecutionMode
+from tau3_evolver.execution_mode import ExecutionMode
 
 
 class BenchmarkDefinition(Protocol):
@@ -14,6 +14,11 @@ class BenchmarkDefinition(Protocol):
 
     name: str
     default_memory_namespace: str
+
+    def credential_requirements(
+        self,
+        config: ProjectConfig,
+    ) -> tuple[tuple[str, str], ...]: ...
 
     def prepare(
         self, config: ProjectConfig, mode: ExecutionMode
@@ -29,33 +34,22 @@ class RuntimeOrigin:
 
 @dataclass(frozen=True, slots=True)
 class PreparedBenchmark:
-    """Runtime-loaded benchmark data consumed by the generic executor."""
+    """Public metadata plus one opaque benchmark-specific executor."""
 
     name: str
-    task_type: type[Any]
-    task_catalog: tuple[Any, ...]
     task_ids: tuple[str, ...]
     split_name: str
     split_hash: str
-    environment_factory: Callable[..., Any]
-    runtime: Any
-    run_domain: Callable[[Any], Any]
-    text_run_config_type: type[Any]
-    registry: Any
     runtime_origin: RuntimeOrigin
     default_memory_namespace: str
     task_group: str
-    evaluator_binding: Callable[..., Any] | None = None
+    executor: BenchmarkExecutor
 
     def __post_init__(self) -> None:
-        if not self.task_catalog:
-            raise ValueError("prepared benchmark task catalog must not be empty")
-        if len(self.task_catalog) != len(self.task_ids):
-            raise ValueError("task_catalog and task_ids must have the same length")
+        if not self.task_ids:
+            raise ValueError("prepared benchmark task IDs must not be empty")
         if len(set(self.task_ids)) != len(self.task_ids):
             raise ValueError("prepared benchmark contains duplicate task IDs")
-        if not all(isinstance(task, self.task_type) for task in self.task_catalog):
-            raise TypeError("prepared benchmark contains an unexpected task type")
 
     def first_tasks(self, count: int) -> "PreparedBenchmark":
         """Return a stable task prefix while retaining the official split identity."""
@@ -65,6 +59,5 @@ class PreparedBenchmark:
             return self
         return replace(
             self,
-            task_catalog=self.task_catalog[:count],
             task_ids=self.task_ids[:count],
         )

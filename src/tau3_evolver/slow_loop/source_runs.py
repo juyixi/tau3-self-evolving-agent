@@ -13,8 +13,8 @@ from tau3_evolver.artifacts.maintenance import (
     MAINTENANCE_RECORD_SCHEMA_VERSION,
     maintenance_record_sha256,
 )
-from tau3_evolver.artifacts.jsonl import iter_jsonl_objects
-from tau3_evolver.memory.paths import training_memory_root
+from tau3_evolver.persistence.jsonl import iter_jsonl_objects
+from tau3_evolver.persistence.layout import training_memory_root
 
 
 ZERO_IMPACT_ADAPTER_REVISION = "zero-impact-init-v1"

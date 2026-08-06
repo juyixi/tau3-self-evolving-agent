@@ -9,9 +9,7 @@ import shutil
 import tempfile
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
-from tau3_evolver.artifacts.jsonl import _fsync_directory
 from tau3_evolver.memory.json_store import JsonTierStore, serialize_tier
-from tau3_evolver.memory.locking import reentrant_process_lock
 from tau3_evolver.memory.types import (
     MEMORY_TIERS,
     MemoryItem,
@@ -20,6 +18,8 @@ from tau3_evolver.memory.types import (
     MemoryTier,
     stable_memory_id,
 )
+from tau3_evolver.persistence.atomic import fsync_directory
+from tau3_evolver.persistence.locking import reentrant_process_lock
 
 
 class MemoryRepository:
@@ -276,9 +276,9 @@ class MemoryRepository:
                     destination.write(content)
                     destination.flush()
                     os.fsync(destination.fileno())
-            _fsync_directory(temporary)
+            fsync_directory(temporary)
             os.replace(temporary, path)
-            _fsync_directory(path.parent)
+            fsync_directory(path.parent)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)

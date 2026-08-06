@@ -167,20 +167,22 @@ Benchmark 接入采用“静态定义 + 准备后运行对象”的两层结构�
 
 ```text
 benchmark name
-task type / task schema loader
-task catalog loader
-train / test split resolver
-environment adapter / environment factory builder
 default Memory namespace
+task group
+train / test split definition
+online credential requirements
+prepare(config, mode) -> PreparedBenchmark
 ```
 
-如果评估或 Slow Loop 存在 Benchmark 专属语义，静态定义还可以提供 evaluator
-binder 和 task group resolver，避免这些领域判断重新散落到通用流程中。
+`BenchmarkDefinition` 是 Benchmark 注册信息的唯一事实来源。默认 Registry、CLI
+的合法选项、请求解析后的定义查找和运行前凭据需求都由静态定义集合派生。除定义
+文件外，生产代码不得再次声明 Benchmark 名称列表，也不得通过枚举、`Literal` 或
+`if benchmark == ...` 复制注册信息。
 
-Tau2 的自然语言断言评估属于上述 evaluator binder：`Tau2BenchmarkDefinition`
-将绑定器交给 `PreparedBenchmark`，通用执行器在 `run_domain` 启动前把项目的
-`evaluation.nl_assertions` 配置绑定到当前 Tau2 Runtime。这样任务主体、用户模拟器
-和终局断言评估统一受项目配置管理，不会回退到 Tau2 内置的 OpenAI 默认模型。
+如果评估、任务解析或运行时存在 Benchmark 专属语义，应由静态定义创建对应的
+`BenchmarkExecutor`，避免这些领域判断重新散落到通用流程中。Tau2 的自然语言
+断言绑定由 `Tau2BenchmarkExecutor` 在 `run_domain` 启动前完成；通用执行层既不
+接触 Tau2 Runtime，也不感知断言实现。
 
 静态定义不包含：
 
@@ -196,17 +198,17 @@ OPD 训练状态
 
 #### PreparedBenchmark：准备后的运行对象
 
-`PreparedBenchmark` 由静态定义结合本次配置和 `mode` 解析生成，保存本次运行
-真正需要使用的、已经导入和解析完成的对象：
+`PreparedBenchmark` 由静态定义结合本次配置和 `mode` 解析生成。它只公开通用
+运行元数据和一个遵守公共协议的不透明执行器，不公开 Benchmark 的加载、注册、
+环境创建和执行细节：
 
 ```text
 benchmark name
-imported task type / task schema
-resolved task catalog and split
-environment factory
+resolved task IDs
+split name / split hash
 resolved external runtime origin
-evaluator binding（如适用）
 default Memory namespace and task group
+executor: BenchmarkExecutor
 ```
 
 目标边界如下：
@@ -216,11 +218,14 @@ BenchmarkRegistry.resolve(name)
   -> BenchmarkDefinition
   -> definition.prepare(config, mode)
   -> PreparedBenchmark
-  -> 通用任务执行器
+       -> executor.execute(BenchmarkExecutionRequest)
+       -> BenchmarkExecutionResult
 ```
 
-通用任务执行器只依赖 `PreparedBenchmark`，不再自行导入 Benchmark 包、定位任务
-文件或判断 Retail/Airline。
+通用执行层只依赖 `BenchmarkExecutor` 的请求和结果协议，不再自行导入 Benchmark
+包、定位任务文件或判断 Retail/Airline。每一类 Benchmark 负责创建自己的执行器；
+共享同一运行协议的 Retail 与 Airline 各自持有一个 `Tau2BenchmarkExecutor` 实例，
+但复用同一个实现。
 
 #### Retail 与 Airline 共用 Tau2 基础协议
 
@@ -338,6 +343,8 @@ Preflight 测试不属于生产包，不被 `tau3 run` 调用，不参与生产�
 
 ```text
 PreparedBenchmark
+  -> BenchmarkExecutor
+  -> Tau2BenchmarkExecutor
   -> Tau2 run_domain
   -> 为每个任务创建独立 Environment
   -> Environment 提供原生 Tools 和 Domain Policy
@@ -346,9 +353,10 @@ PreparedBenchmark
   -> 汇总轨迹、结果和经验变更
 ```
 
-`PreparedBenchmark` 负责提供当前 Benchmark 对应的 `run_domain` Runtime、任务
-Split 和 Agent 注册能力。通用执行器不再直接构造 `Tau2RetailEnv` 或其他 Gym
-环境适配器。
+`PreparedBenchmark` 只负责公开任务 ID、Split 身份、运行来源和通用 Executor。
+`Tau2BenchmarkExecutor` 独占 `run_domain` Runtime、Agent 注册、`TextRunConfig`
+构造、结果归一化和 Tau2 断言绑定。通用执行层不再直接构造 Tau2 环境适配器，
+也不访问 Tau2 Registry。
 
 Gym 接入不再属于生产主流程。现有 Gym Adapter 是否在迁移期保留为测试工具，
 在制定实施计划时单独确认；它不能继续与 `run_domain` 形成两个并列的生产执行
@@ -763,3 +771,504 @@ Memory 或任务 Batch 失败时不执行 Maintenance。
 这一边界将在线经验采集与离线权重更新解耦：在线入口决定任务如何执行以及
 是否积累 Memory 经验，手动 Slow Loop 决定何时将已积累的数据内化到模型
 权重中。
+
+## `src` 包边界审计
+
+### 记录性质
+
+本节记录 2026-08-06 对当前 `src/tau3_evolver` 实现进行的结构审计。这里首先描述
+当前代码的真实依赖关系，再记录建议的目标边界。除前文已经确认的设计决策外，本节
+中的目录移动、模块合并和删除候选仍属于待确认方案，不表示已经完成实现。
+
+当前代码已经具备统一入口、Benchmark 两层定义、`run_domain` 批量执行、两文件在线
+制品、自动 Memory Maintenance 和手动 Slow Loop 等主能力，但包名层面的分组尚未
+形成真正的分层。依赖图中以下七个包互相可达，实际构成一个大型循环依赖区域：
+
+```text
+agent
+artifacts
+benchmarks
+evaluation
+execution
+memory
+models
+```
+
+这意味着这些包目前不是可以独立理解和替换的层。修改其中一个包的协议，往往会反向
+影响多个名义上的下层包。后续重构的重点不应是简单增加目录，而应先确定概念的唯一
+所有者，并建立单向依赖。
+
+目标依赖方向为：
+
+```text
+CLI / Config
+     |
+     v
+Execution Application Layer -------------------- Slow Loop
+     |                                               |
+     +--> Benchmark Adapter                          +--> Artifact Contracts
+     +--> Fast Loop                                  +--> Fast Loop Contracts
+     +--> Inference                                  +--> Memory Schema
+     +--> Memory                                     +--> Offline Modeling
+     +--> Artifact Projection
+```
+
+底层 Memory、Artifact Schema 和 Fast Loop Contract 不得反向依赖执行入口或具体
+Tau2 Runtime。Slow Loop 可以消费在线制品和 Fast Loop 协议，但在线 Fast Loop 不得
+依赖 Slow Loop。
+
+### Benchmark 与 Execution 边界
+
+`BenchmarkDefinition + PreparedBenchmark + BenchmarkExecutor` 边界已在本轮
+Benchmark 重构中落地。
+
+审计时发现并已处理的问题：
+
+- 已删除 `execution.request.BenchmarkName`，请求使用经过安全校验的字符串。
+- CLI 的 `--benchmark` choices 直接读取 `benchmark_registry.names()`。
+- 默认 Registry 只从静态 `BenchmarkDefinition` 集合创建；新增 Benchmark 不再修改
+  请求类型和通用执行流程。
+- `PreparedBenchmark` 已收紧为通用元数据和 `BenchmarkExecutor`，不再公开 Tau2
+  Runtime、Registry、环境工厂或 evaluator binder。
+- Tau2 Agent Factory 注册与注销、`TextRunConfig`、`run_domain`、断言绑定、
+  Simulation 收尾和结果归一化已全部迁入 `benchmarks/tau2/`。
+- `execution.batch` 只消费标准化的 `BenchmarkExecutionResult`，不再导入 Tau2。
+
+目标边界如下：
+
+```text
+BenchmarkRegistry.resolve(name)
+  -> BenchmarkDefinition
+  -> PreparedBenchmark
+       name
+       split_name / split_hash
+       task_ids
+       default_memory_namespace
+       task_group
+       runtime_origin
+       executor: BenchmarkExecutor
+```
+
+`BenchmarkExecutor` 对通用执行层暴露稳定的批量执行协议。Tau2 Registry 注册、
+`TextRunConfig` 构造、`run_domain` 调用、Agent Factory 注销和 Tau2 Result 归一化
+全部封装在 `benchmarks/tau2/` 内部。通用 `execution` 不再访问 Tau2 Registry 或
+Runtime 的具体类型和私有属性。
+
+`ExecutionRequest.benchmark` 应使用经过安全校验的字符串，CLI 的合法 Benchmark
+集合由 Registry 提供。请求模型只表达调用者选择，Benchmark 是否存在由 Registry
+统一验证。
+
+本轮之后的新增约束是：生产代码中的 Benchmark 名称只能出现在对应静态定义中；
+面向用户的名称集合和运行时行为都必须从 Registry 解析，不允许建立第二份映射表。
+
+### Fast Loop 领域包（已建立）
+
+原顶层 `agent/` 已取消，Benchmark 无关的在线经验循环正式收敛为：
+
+```text
+fast_loop/
+  contracts.py
+  settings.py
+  prompts.py
+  selection.py
+  decision.py
+  writing.py
+  maintenance.py
+  context.py
+  tools.py
+```
+
+当前边界为：
+
+- `contracts.py` 保存 Decision、Policy Protocol、Lifecycle Response 和 Episode Result
+  等在线、离线共同使用的稳定协议。
+- `settings.py` 保存 Fast Loop 运行视图；`selection.py`、`decision.py`、`writing.py`
+  和 `maintenance.py` 各自拥有明确的服务边界。
+- `prompts.py` 是在线执行与 Slow Loop 数据共同使用的 Prompt 契约。
+- `context.py` 通过窄协议隔离 ExecutionContext，`tools.py` 提供通用 Tool Schema
+  复制和规范化。
+- Slow Loop 单向依赖 Fast Loop 的 Contract 和 Prompt，保证训练数据与在线推理使用
+  同一协议。
+- Fast Loop 可以调用 Memory Repository 和 Operations，但 Memory 不得反向导入
+  Fast Loop。
+
+### Fast Loop 与 Tau2 Adapter 的边界
+
+当前目录关系为：
+
+```text
+fast_loop/（Benchmark 无关）
+  contracts.py
+  settings.py
+  context.py
+  prompts.py
+  selection.py
+  decision.py
+  writing.py
+  maintenance.py
+  tools.py
+
+benchmarks/tau2/（Tau2 专属）
+  agent.py
+  action_codec.py
+  actions.py
+  agent_state.py
+  episodes.py
+  tool_schemas.py
+  executor.py
+  assertions.py
+```
+
+Tau2 Half Duplex Agent、Message、ToolCall、Agent State、Simulation、Action Codec 和
+Registry 私有 API 现在只允许出现在 `benchmarks/tau2/`。在线 Fast Loop Policy
+只负责生成通用 `ActionDecision`；Tau2 工具名、
+参数格式和停止动作的校验由 Tau2 Agent Adapter 完成，并继续使用统一的修复流程。
+
+Tau2 Agent 与 Episode Adapter 通过 `fast_loop.selection`、`fast_loop.decision` 和
+`fast_loop.writing` 的公开函数复用公共流程，不再跨包导入以下划线开头的私有实现。
+项目中不再保留顶层 `agent/` 兼容包，防止新代码继续写入旧边界。
+
+`actions.py` 与 `action_codec.py` 还分别实现 Tool Action 的解析和校验。后续应由一个
+结构化 Action Codec 同时完成清理、解析、工具名校验和 Tau2 Message 转换，避免两套
+解析规则发生偏差。
+
+### Memory 包的目标纯度
+
+Memory 包只负责 Memory 数据模型、仓储、检索和原子领域操作。本轮已经完成执行期
+职责与通用基础设施的迁移；Memory Schema 的内部拆分仍作为后续独立重构处理。
+
+#### 执行期 Memory 解析
+
+原 `memory/snapshots.py` 处理的是“本次执行选择哪个 Memory Namespace 和 Snapshot”，
+而不是 Snapshot 数据结构本身，现已移动为：
+
+```text
+execution/memory_resolution.py
+```
+
+Memory 包只提供创建、打开和校验 Snapshot 的原语。Memory generation、已提交批次、
+已完成任务数等运行进度也已从 `memory/batches.py` 移入
+`execution/memory_state.py`，原文件不再保留。
+
+#### 自动 Maintenance
+
+自动 Maintenance 的编排、Prompt、模型决策、修复和事件记录已经移动到
+`fast_loop/maintenance.py`。Episode 是否允许生成 Memory 的判定也已经移动到
+`fast_loop/outcomes.py`。Memory 只提供 Lookup、Merge、Delete、Repository 和检索资格
+等领域能力。
+
+#### Memory Schema 循环
+
+`memory/types.py` 在 Pydantic Validator 中反向导入 `memory/tier_contracts.py`，而
+`tier_contracts.py` 又导入 `MemoryTier`。建议整理为：
+
+```text
+memory/schema/
+  base.py
+  tiers.py
+  item.py
+```
+
+- `base.py`：MemoryTier、MemoryStatus 和稳定 ID。
+- `tiers.py`：Tip、Skill、Tool、Trajectory Payload Contract。
+- `item.py`：MemoryItem、MemorySnapshot 及组合校验。
+
+#### 通用持久化能力
+
+原实现中 `memory/json_store.py` 从 `artifacts/jsonl.py` 导入私有
+`_fsync_directory`，而 `artifacts/run.py` 又从 `memory/json_store.py` 导入原子写入
+函数，形成双向依赖。
+
+原子写入、目录 fsync、文件锁和 JSONL 读写现已统一归属：
+
+```text
+persistence/
+  atomic.py
+  jsonl.py
+  locking.py
+  layout.py
+  embedding_cache.py
+```
+
+Memory 与 Artifacts 不再相互导入。项目路径布局从 `memory/paths.py` 移入
+`persistence/layout.py`；Embedding 缓存移入 `persistence/embedding_cache.py`；具体
+Qwen Embedding 实现和配置工厂移入 `models/embeddings.py`。Memory 只保留
+`EmbeddingProvider` 与向量校验契约。不建立没有明确边界的 `common.py` 或 `utils.py`。
+
+### Artifact Contract 与投影边界
+
+原 `artifacts/episodes.py` 直接导入 `fast_loop.contracts.EpisodeResult` 和
+`execution.results.BatchFailure`。本轮已建立 `artifacts/contracts.py`，由 Artifacts
+定义 `CompletedEpisodeProjection` 和 `FailedEpisodeProjection`，Execution 负责把内部
+结果显式映射成投影输入。Artifacts 不再导入 Execution、Fast Loop 或 Memory。
+
+Run、Episode 和 Maintenance 制品输出目前仍主要通过 `dict[str, Any]` 表达。Slow Loop
+因此需要在 `source_runs.py`、`evidence.py` 和 `audit.py` 中重复手动校验字段。
+
+后续类型化输出的目标结构仍为：
+
+```text
+artifacts/
+  schemas.py
+  readers.py
+  writers.py
+  hashing.py
+```
+
+Artifact 包拥有带 Schema Version 的不可变类型，例如 `RunArtifact`、
+`EpisodeArtifact` 和 `MaintenanceArtifact`，但不导入 Agent 或 Execution 的具体结果
+类型。执行层负责把内部结果投影为 Artifact Schema，再交给 Writer 发布。
+
+Credential 和 URL 脱敏不属于制品投影专属能力，原 `artifacts/sanitize.py` 已移动为
+`security/redaction.py`。Benchmark、Fast Loop 和 Artifacts 共同依赖该公共安全边界。
+
+`execution/events.py` 当前只保存运行期间的内存生命周期事件，不再发布旧的
+`events.jsonl`。为避免它与旧正式制品混淆，建议改名为 `execution/trace.py`，并明确
+它只是构建 `run.json + episodes.jsonl` 的内部临时证据。
+
+Slow Loop Dataset 当前的 `evidence/episodes.jsonl` 同时包含 Episode Evidence 和
+Maintenance Evidence，文件名不能准确表达内容。后续应选择以下一种形式：
+
+```text
+evidence/episodes.jsonl
+evidence/maintenance.jsonl
+```
+
+或统一改名为 `evidence/records.jsonl`。在正式迁移前需先确认是分文件还是统一记录流。
+
+### 在线推理与离线模型边界
+
+当前 `models/` 混合三类职责：
+
+```text
+openai_compatible.py  在线 HTTP Client 和 Fast Loop Policy
+policy.py             旧通用 Policy 接口
+qwen35.py             离线模型和 Tokenizer 加载
+lora.py               LoRA 构造、校验和 Checkpoint 发布
+```
+
+`models/openai_compatible.py` 当前仍同时包含 HTTP Transport、
+`OpenAICompatibleFastLoopPolicy`、OpenAI-compatible ToolCall 解析和多个输出规范化
+函数，边界仍然偏宽。旧 `OpenAICompatibleQwenPolicy` 已移到
+`benchmarks/tau2/baseline_policy.py`，通用模型模块不再导入 Tau2。
+
+建议拆分为：
+
+```text
+inference/
+  openai_client.py
+  fast_loop_policy.py
+
+modeling/
+  qwen35.py
+  lora.py
+```
+
+旧 `models.policy.Policy`、`DecisionRequest`、`DecisionResponse` 和 Tau2 下的
+`OpenAICompatibleQwenPolicy` 当前没有接入在线主链路，主要由兼容测试使用。它们属于
+删除候选，但需要先确认是否仍承担外部 Python API 兼容责任。
+
+当前在线入口的 `--checkpoint` 只写入 Run Lineage 和内部 Trace，没有参与 Endpoint、
+Served Model 或 Adapter 的实际选择。因此传入该参数不会切换在线权重。后续必须二选一：
+
+- 将它接入明确的在线 Adapter/Model 选择协议；或
+- 从 `tau3 run` 删除该参数，改由真实模型服务配置记录 Model Revision。
+
+在该语义明确前，不应把 `--checkpoint` 描述为能够加载权重的执行参数。
+
+### Slow Loop 内部结构
+
+当前 `slow_loop/` 同时包含数据构建、独立 Audit、单 Adapter 训练和四 Adapter Suite，
+总代码规模已经明显超过其他单一包。建议拆为两个子域：
+
+```text
+slow_loop/
+  data/
+    source_runs.py
+    evidence.py
+    attribution.py
+    examples.py
+    audit.py
+    builder.py
+
+  training/
+    suite.py
+    worker.py
+    trainer.py
+    alignment.py
+    loss.py
+    opd_step.py
+```
+
+当前调用关系是：
+
+```text
+slow_loop.runner
+  -> training_suite
+      -> subprocess: train_command
+          -> training.OPDTrainer
+```
+
+四个 LoRA 使用独立子进程有利于分阶段释放模型和显存，该进程隔离可以保留；但
+`train_command` 实际是内部 Worker，`training` 实际是 Trainer，`training_suite` 才是
+公开的 `tau3 slow-loop train` 服务。重命名后应明确只有 Suite 是用户入口。
+
+Audit 中部分哈希、规范化和重算逻辑与 Dataset Builder 重复，是为了避免生产器和
+校验器共享同一个错误实现，不应为了形式上的 DRY 全部合并。只抽取纯 I/O 原语，
+关键审计判断保持独立。
+
+### Evaluation 的职责拆分
+
+当前 `evaluation/` 中三个文件属于不同层：
+
+| 当前文件 | 实际职责 | 建议归属 |
+| --- | --- | --- |
+| `metrics.py` | BatchResult 指标汇总 | `reporting/metrics.py` |
+| `comparisons.py` | 多个 Run 报告比较 | `reporting/comparisons.py` |
+| `tau2_nl_assertions.py` | Tau2 Runtime 断言绑定 | `benchmarks/tau2/assertions.py` |
+
+`comparisons.py` 当前只被测试调用，没有接入执行主链路；它是可复用报告能力，不是在线
+Evaluation 阶段。拆分完成后可以取消含义过宽的顶层 `evaluation/` 包。
+
+### CLI 与配置的重复边界
+
+当前只有一个发布命令 `tau3`，但参数解析分散在：
+
+```text
+cli.py
+slow_loop/runner.py
+slow_loop/training_suite.py
+slow_loop/train_command.py
+```
+
+`cli.py` 对 Slow Loop 只解析 `action + REMAINDER`，再由下层模块重新解析参数。后续应
+选择统一方案：由顶层 CLI 构建完整 Subparser，或由各命令模块向顶层注册 Parser；
+无论采用哪一种，解析后的 `argparse.Namespace` 都不得进入服务层，每个公开操作都应
+转换为独立的 Pydantic/Dataclass Request。
+
+`config.MemoryConfig` 已经定义 Fast Loop Memory 参数，`fast_loop.settings.FastLoopConfig`
+又复制一套相同字段，并出现真实默认值不一致：
+
+```text
+MemoryConfig.maintenance_tip_capacity = 200
+FastLoopConfig.maintenance_tip_capacity = 240
+```
+
+正式入口手动复制配置，因此当前主链路使用 200；直接构造 FastLoopConfig 的测试或
+其他调用路径会使用 240。后续只保留一个配置事实来源，运行时视图不得重新声明另一组
+默认值。
+
+### 尚未接入主链路的实现候选
+
+以下实现不是立即删除项，但当前没有主链路消费者，应在迁移时逐一确认：
+
+- `evaluation.comparisons.compare_reports`：只有测试调用。
+- `memory.factory.open_training_memory`：只有测试和包导出调用。
+- `models.policy` 与 `OpenAICompatibleQwenPolicy`：只有兼容测试调用。
+- `load_qwen35_processor`：当前是 Tokenizer 兼容别名。
+
+判断标准不是“测试是否覆盖”，而是该接口是否仍属于目标架构的正式能力。如果只是旧
+实现的兼容测试，应连同测试一起移除；如果是正式 Python API，则应移动到明确的包并
+写入公开契约。
+
+### 建议的目标目录草案
+
+在上述边界全部确认后，`src/tau3_evolver` 的目标结构建议为：
+
+```text
+tau3_evolver/
+  cli.py
+  config.py
+
+  execution/
+    request.py
+    capabilities.py
+    runner.py
+    batch.py
+    memory_resolution.py
+    trace.py
+
+  benchmarks/
+    contracts.py
+    registry.py
+    tau2/
+      definition.py
+      runtime.py
+      executor.py
+      agent_adapter.py
+      episode_adapter.py
+      assertions.py
+
+  fast_loop/
+    contracts.py
+    settings.py
+    prompts.py
+    selection.py
+    decision.py
+    writing.py
+    maintenance.py
+
+  memory/
+    schema/
+    repository.py
+    storage.py
+    retrieval.py
+    embeddings.py
+    operations.py
+
+  inference/
+    openai_client.py
+    fast_loop_policy.py
+
+  modeling/
+    qwen35.py
+    lora.py
+
+  artifacts/
+    schemas.py
+    readers.py
+    writers.py
+    hashing.py
+
+  persistence/
+    atomic.py
+    jsonl.py
+
+  reporting/
+    metrics.py
+    comparisons.py
+
+  slow_loop/
+    data/
+    training/
+
+  serving/
+    vllm.py
+```
+
+该草案不要求机械地为每个文件建立一个目录。实施时应根据稳定协议和代码规模决定是否
+合并小文件，但必须遵守以下依赖规则：
+
+1. `execution` 是应用编排层，可以依赖其他领域；其他领域不得反向依赖它。
+2. Tau2 特定类型和私有 Registry API 只能出现在 `benchmarks/tau2/`。
+3. `fast_loop` 拥有 Selection、Action、Write、Maintenance 的协议和流程。
+4. `memory` 不得导入 Agent、Execution、Artifact Builder 或在线模型实现。
+5. `artifacts` 拥有制品 Schema 和 I/O，不导入具体执行结果类型。
+6. `slow_loop` 只消费已发布 Artifact、Fast Loop Contract 和 Memory Schema，不参与
+   在线执行。
+7. 在线 HTTP 推理与离线 Qwen/LoRA 模型加载分离。
+8. 通用原子 I/O 有明确的 `persistence` 所有者，不建立无边界的 Utils 包。
+
+### 后续确认与实施顺序
+
+建议按以下顺序继续澄清，确认一层后再制定文件迁移计划：
+
+1. ~~正式建立 `fast_loop`，确认当前 `agent` 是取消还是只保留通用 Controller。~~
+   本轮已完成：取消顶层 `agent`，公共能力按 Fast Loop 阶段拆分。
+2. ~~收紧 `PreparedBenchmark`，通过 `BenchmarkExecutor` 封装全部 Tau2 执行细节。~~
+   本轮已完成；后续新增 Benchmark 必须沿用该协议。
+3. 让 Memory 回归纯领域，并将执行期 Snapshot 解析移出。自动 Maintenance 编排
+   已迁入 `fast_loop/maintenance.py`。
+4. 建立类型化 Artifact Contract，确认内部 Trace 和 Slow Loop Evidence 的文件边界。
+5. 拆分在线 Inference、离线 Modeling、Reporting 和 Slow Loop 子域。
+6. 最后处理未接入主链路的兼容接口和历史测试，避免过早删除仍需迁移的数据契约。

@@ -15,8 +15,8 @@ import uuid
 from tau3_evolver.benchmarks import benchmark_registry
 from tau3_evolver.config import load_config
 from tau3_evolver.execution.request import ExecutionMode
-from tau3_evolver.memory.paths import project_root as default_project_root
-from tau3_evolver.memory.paths import training_memory_root
+from tau3_evolver.persistence.layout import project_root as default_project_root
+from tau3_evolver.persistence.layout import training_memory_root
 from tau3_evolver.slow_loop.attribution import MemoryScore, compute_memory_scores
 from tau3_evolver.slow_loop.audit import audit_dataset
 from tau3_evolver.slow_loop.evidence import EvidenceLedger, build_evidence

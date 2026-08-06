@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
+
+from tau3_evolver.fast_loop.context import EventWriter
 
 
 SCHEMA_VERSION = 3
-
-
-class EventWriter(Protocol):
-    def append(self, event: dict[str, Any]) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
